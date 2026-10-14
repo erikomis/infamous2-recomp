@@ -86,12 +86,14 @@ Teclado (enquanto o controle físico não é testado):
 | I J K L | analógico direito |
 
 Para testes sem janela: `tools/capture.sh <nome> <segundos>` salva um PNG do
-frame a cada 10 s, `PAD_SCRIPT="95:0x4000"` aperta ✕ aos 95 s e
-`PAD_STICK="lx,ly,rx,ry,de,até;..."` segura os analógicos num intervalo
-(0–255, 128 = centro). Foi assim que o tutorial foi jogado: `PAD_SCRIPT`
-com ✕ aos 95 e 110 s para o menu, o analógico direito em cada direção por
-10 s a partir dos 470 s, depois o esquerdo, e R1 (`0x0800`), L1 (`0x0400`),
-R2 (`0x0200`) e ✕ a partir dos 655 s.
+frame a cada 10 s, `PAD_SCRIPT="95:0x4000"` aperta ✕ aos 95 s
+(`760:0x0400:400` segura L1 por 400 s) e `PAD_STICK="lx,ly,rx,ry,de,até;..."`
+segura os analógicos num intervalo (0–255, 128 = centro). Foi assim que o
+tutorial foi jogado: ✕ aos 95 e 110 s para o menu, o analógico direito em
+cada direção por 10 s a partir dos 470 s, depois o esquerdo, o esquerdo
+para a frente a partir dos 640 s ("Head towards the disturbance") e L1
+segurado com toques de R1 (`0x0800`) no portão do píer ("Hold L1 to aim").
+`tools/play_prologue.sh [nome] [segundos]` faz tudo isso num comando só.
 
 ## Correções feitas aqui
 

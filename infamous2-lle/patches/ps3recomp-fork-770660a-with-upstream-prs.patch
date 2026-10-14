@@ -438,10 +438,57 @@ index d403baf..76c5505 100644
 +
  #endif /* PS3RECOMP_CELL_GEM_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 621d53e..0169b8b 100644
+index 621d53e..322ef3b 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
-@@ -817,20 +817,32 @@ skip_inject: ;
+@@ -730,9 +730,12 @@ skip_inject: ;
+      * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
+      * (DIGITAL2 << 8) | DIGITAL1: START 0x0008, UP 0x0010, DOWN 0x0040,
+      * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
++     * An optional third field, "<sec>:<mask>:<hold>", keeps the button down
++     * for <hold> seconds of wall clock instead of one press: inFAMOUS 2's
++     * "Hold L1 to aim" wants L1 down while the R1 presses after it happen.
+      * Legit input simulation on the same footing as PAD_AUTOPRESS/PAD_STICK. */
+     { static int s_sc = -1;
+-      static struct { double t; unsigned mask; } ev[32]; static int n_ev = 0;
++      static struct { double t; unsigned mask; double hold; } ev[32]; static int n_ev = 0;
+       static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
+       if (s_sc < 0) {
+           s_sc = 0;
+@@ -744,7 +747,9 @@ skip_inject: ;
+                   double t = strtod(p, (char**)&p);
+                   if (*p == ':') p++;
+                   unsigned m = (unsigned)strtoul(p, (char**)&p, 0);
+-                  ev[n_ev].t = t; ev[n_ev].mask = m; n_ev++;
++                  double h = 0;
++                  if (*p == ':') { p++; h = strtod(p, (char**)&p); }
++                  ev[n_ev].t = t; ev[n_ev].mask = m; ev[n_ev].hold = h; n_ev++;
+                   while (*p == ',' || *p == ' ') p++;
+               }
+               printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
+@@ -761,13 +766,18 @@ skip_inject: ;
+           static int fired[32], held[32];
+           for (int i = 0; i < n_ev; i++) {
+               if (!fired[i] && now >= ev[i].t) { fired[i] = 1; held[i] = 40; }
+-              if (held[i] > 0) {
+-                  held[i]--;
++              const int down = held[i] > 0 ||
++                  (ev[i].hold > 0 && now >= ev[i].t && now < ev[i].t + ev[i].hold);
++              if (held[i] > 0) held[i]--;
++              if (down) {
+                   data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(ev[i].mask & 0xFF);
+                   data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
+                   static int said[32];
+                   if (!said[i]) { said[i] = 1;
+-                      printf("[cellPad] PAD_SCRIPT t=%.1fs press 0x%04X\n", ev[i].t, ev[i].mask); }
++                      if (ev[i].hold > 0)
++                          printf("[cellPad] PAD_SCRIPT t=%.1fs hold 0x%04X for %.0fs\n", ev[i].t, ev[i].mask, ev[i].hold);
++                      else
++                          printf("[cellPad] PAD_SCRIPT t=%.1fs press 0x%04X\n", ev[i].t, ev[i].mask); }
+               }
+           }
+       } }
+@@ -817,20 +827,32 @@ skip_inject: ;
       * started -- which can leave the subject of the demo off-screen or too far
       * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
      { static int s_st = -1;
