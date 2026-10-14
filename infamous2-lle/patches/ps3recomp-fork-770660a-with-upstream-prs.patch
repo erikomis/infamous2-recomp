@@ -368,6 +368,122 @@ index 0000000..c710fbc
 +int np_psnr_enabled(void) { return 0; }
 +const char* np_psnr_online_id(void) { return "PS3Player"; }
 +s32 cellSysutilQueueGuestCallbackArgs(u32 opd, const u64 args[8]) { (void)opd; (void)args; return 0; }
+diff --git a/libs/hardware/cellCamera.c b/libs/hardware/cellCamera.c
+index 3c51306..ac85195 100644
+--- a/libs/hardware/cellCamera.c
++++ b/libs/hardware/cellCamera.c
+@@ -236,3 +236,22 @@ s32 cellCameraRemoveNotifyCallback(s32 devNum)
+     (void)devNum;
+     return CELL_OK;
+ }
++
++/* The lv2-event-queue notification forms: the title binds a queue it owns to
++ * camera events (cellCameraSetNotifyEventQueue2) and later unbinds it. The
++ * virtual camera raises no events, so there is nothing to bind; accept, so
++ * the Move/camera init that asks (inFAMOUS 2's "Motion Controller Update")
++ * carries on instead of hitting the unresolved stub. */
++s32 cellCameraSetNotifyEventQueue2(u64 key, u64 source, u64 flag)
++{
++    (void)key; (void)source; (void)flag;
++    if (!s_initialized) return (s32)CELL_CAMERA_ERROR_NOT_INITIALIZED;
++    return CELL_OK;
++}
++
++s32 cellCameraRemoveNotifyEventQueue2(u64 key)
++{
++    (void)key;
++    if (!s_initialized) return (s32)CELL_CAMERA_ERROR_NOT_INITIALIZED;
++    return CELL_OK;
++}
+diff --git a/libs/hardware/cellCamera.h b/libs/hardware/cellCamera.h
+index 3c69481..e1b1a3e 100644
+--- a/libs/hardware/cellCamera.h
++++ b/libs/hardware/cellCamera.h
+@@ -95,4 +95,7 @@ s32 cellCameraRemoveNotifyCallback(s32 devNum);
+ }
+ #endif
+ 
++s32 cellCameraSetNotifyEventQueue2(u64 key, u64 source, u64 flag);
++s32 cellCameraRemoveNotifyEventQueue2(u64 key);
++
+ #endif /* PS3RECOMP_CELL_CAMERA_H */
+diff --git a/libs/hardware/cellGem.c b/libs/hardware/cellGem.c
+index a060ce2..001fd5a 100644
+--- a/libs/hardware/cellGem.c
++++ b/libs/hardware/cellGem.c
+@@ -129,3 +129,14 @@ s32 cellGemEnableCameraPitchAngleCorrection(s32 enable)
+     if (!s_initialized) return (s32)CELL_GEM_ERROR_NOT_INITIALIZED;
+     return CELL_OK;
+ }
++
++/* cellGemGetMemorySize(s32 max_connect): the memory cellGemInit wants for that
++ * many controllers (RPCS3 cellGem.cpp: 0x120000 for up to two, 0x140000
++ * beyond; more than CELL_GEM_MAX_NUM is an error). inFAMOUS 2 asks before
++ * cellGemInit; unanswered, the import fell through to the unresolved stub. */
++s32 cellGemGetMemorySize(s32 max_connect)
++{
++    if (max_connect <= 0 || max_connect > CELL_GEM_MAX_NUM)
++        return (s32)CELL_GEM_ERROR_INVALID_ARGUMENT;
++    return max_connect <= 2 ? 0x120000 : 0x140000;
++}
+diff --git a/libs/hardware/cellGem.h b/libs/hardware/cellGem.h
+index d403baf..76c5505 100644
+--- a/libs/hardware/cellGem.h
++++ b/libs/hardware/cellGem.h
+@@ -111,4 +111,6 @@ s32 cellGemEnableCameraPitchAngleCorrection(s32 enable);
+ }
+ #endif
+ 
++s32 cellGemGetMemorySize(s32 max_connect);
++
+ #endif /* PS3RECOMP_CELL_GEM_H */
+diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
+index 621d53e..0169b8b 100644
+--- a/libs/input/cellPad.c
++++ b/libs/input/cellPad.c
+@@ -817,20 +817,32 @@ skip_inject: ;
+      * started -- which can leave the subject of the demo off-screen or too far
+      * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
+     { static int s_st = -1;
+-      static unsigned char s_v[4] = {128,128,128,128};
+       /* Optional 5th/6th fields: the seconds the hold starts and ends, so the menus
+-       * before gameplay are not driven by it (PAD_STICK="128,0,128,128,300,320"). */
+-      static double s_from = 0, s_until = 1e30; static unsigned long long s_t0 = 0;
++       * before gameplay are not driven by it (PAD_STICK="128,0,128,128,300,320").
++       * Several holds, separated by ';', drive a tutorial that asks for one
++       * stick after another in a single run ("...;128,128,128,0,450,456"). */
++      enum { STICK_MAX = 16 };
++      static unsigned char s_v[STICK_MAX][4];
++      static double s_from[STICK_MAX], s_until[STICK_MAX]; static int s_n = 0;
++      static unsigned long long s_t0 = 0;
+       if (!s_t0) s_t0 = GetTickCount64();
+       if (s_st < 0) { const char* e = getenv("PAD_STICK");
+         s_st = e ? 1 : 0;
+-        if (e) { int a=128,b=128,c=128,d=128;
+-                 sscanf(e, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&s_from,&s_until);
+-                 s_v[0]=(unsigned char)a; s_v[1]=(unsigned char)b;
+-                 s_v[2]=(unsigned char)c; s_v[3]=(unsigned char)d; } }
+-      if (s_st && (double)(GetTickCount64() - s_t0) / 1000.0 >= s_from && (double)(GetTickCount64() - s_t0) / 1000.0 < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
+-                  hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
+-                  hs->connected = 1; }
++        for (const char* q = e; q && *q && s_n < STICK_MAX; ) {
++            int a=128,b=128,c=128,d=128; double f = 0, u = 1e30;
++            if (sscanf(q, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&f,&u) < 4) break;
++            s_v[s_n][0]=(unsigned char)a; s_v[s_n][1]=(unsigned char)b;
++            s_v[s_n][2]=(unsigned char)c; s_v[s_n][3]=(unsigned char)d;
++            s_from[s_n] = f; s_until[s_n] = u; s_n++;
++            q = strchr(q, ';'); if (q) q++;
++        }
++        if (s_n) printf("[cellPad] PAD_STICK: %d hold(s)\n", s_n); }
++      if (s_st) { const double now = (double)(GetTickCount64() - s_t0) / 1000.0;
++        for (int i = 0; i < s_n; i++)
++            if (now >= s_from[i] && now < s_until[i]) {
++                hs->analog_lx = s_v[i][0]; hs->analog_ly = s_v[i][1];
++                hs->analog_rx = s_v[i][2]; hs->analog_ry = s_v[i][3];
++                hs->connected = 1; break; } }
+       /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
+        * deflections instead of holding one. Guessing a single stick position and
+        * re-running costs ~5 minutes a try; a sweep answers "can input move the
 diff --git a/libs/network/sceNp.c b/libs/network/sceNp.c
 index 8bb66db..764c79f 100644
 --- a/libs/network/sceNp.c
@@ -1562,6 +1678,152 @@ index 0000000..6152dd0
 + for(u32 u=0;u<16;u++){rsx_test_fp_instr(uc+u*16,RSX_TEST_FP_OPC(0x17)|RSX_TEST_FP_TEXU(u)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|(u==15?RSX_TEST_FP_END:0),RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);rsx_fp_shadow_desc_from_texture(&d[u],0xB0,2,0,1,0x02020000,3u<<28,0x80000000);}
 + CHECK(rsx_fp_texture_units(uc,256)==65535,"all sixteen unit mask");CHECK(rsx_fp_decompile_buffered_shadow_ex(uc,256,64,0,d,now,sizeof now,&nc)>0&&strstr(now,"_rsx_shadow_cmp15"),"bounded output supports sixteen comparison helpers");
 + printf("shadow metadata: %d checks, %d failures\n",checks,failures);return failures?1:0;}
+diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
+index 4c03372..51bfb18 100644
+--- a/runtime/ppu/ppu_fs.cpp
++++ b/runtime/ppu/ppu_fs.cpp
+@@ -26,6 +26,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <errno.h>
+ #include <sys/stat.h>
+ #include "../platform/win32_dirent.h"   /* <dirent.h>, or a Win32 stand-in */
+ 
+@@ -663,6 +664,61 @@ static void cellFsReaddir(ppu_context* ctx)
+     ctx->gpr[3] = CELL_OK;
+ }
+ 
++/* CellFsDirectoryEntry is a 52-byte stat followed by a 258-byte dirent,
++ * rounded to four-byte alignment: 312 bytes. entries_size is bytes, while
++ * data_count is a big-endian u32 count of complete entries. The stream is
++ * shared with cellFsReaddir and cellFsClosedir. */
++static void cellFsGetDirectoryEntries(ppu_context* ctx)
++{
++    const uint32_t fd = (uint32_t)ctx->gpr[3];
++    const uint32_t entries = (uint32_t)ctx->gpr[4];
++    const uint32_t bytes = (uint32_t)ctx->gpr[5];
++    const uint32_t count_ptr = (uint32_t)ctx->gpr[6];
++    const uint64_t limit = ppu_vm_size ? ppu_vm_size : 0x100000000ull;
++    if (!entries || !count_ptr || uint64_t(entries) + bytes > limit ||
++        uint64_t(count_ptr) + 4 > limit) {
++        ctx->gpr[3] = 0x8001000Du; // CELL_EFAULT
++        return;
++    }
++    if (fd < 3 || fd >= FS_MAX || !g_dirs[fd]) {
++        ctx->gpr[3] = 0x8001002Au; // CELL_EBADF
++        return;
++    }
++    uint32_t count = 0;
++    ctx->gpr[3] = CELL_OK;
++    for (; count < bytes / 312; ++count) {
++        errno = 0;
++        struct dirent* entry = readdir(g_dirs[fd]);
++        if (!entry) {
++            if (errno) ctx->gpr[3] = 0x8001002Bu; // CELL_EIO
++            break;
++        }
++        char path[1300];
++        snprintf(path, sizeof path, "%s/%s", g_dir_path[fd], entry->d_name);
++        struct stat st;
++        if (stat(path, &st) != 0) {
++            ctx->gpr[3] = 0x8001002Bu; // entry disappeared or cannot be inspected
++            break;
++        }
++        uint32_t out = entries + count * 312;
++        memset(vm_base + out, 0, 312);
++        bool directory = (st.st_mode & S_IFDIR) != 0;
++        /* The fork's write_stat also takes the host stat for the times
++         * (upstream PR #247 writes them itself below). */
++        write_stat(out, (directory ? CELL_FS_S_IFDIR : CELL_FS_S_IFREG) |
++                        (uint32_t(st.st_mode) & 0777), uint64_t(st.st_size), &st);
++        vm_write64(out + 0x0C, uint64_t(st.st_atime));
++        vm_write64(out + 0x14, uint64_t(st.st_mtime));
++        vm_write64(out + 0x1C, uint64_t(st.st_ctime));
++        size_t length = strlen(entry->d_name);
++        if (length > 255) length = 255;
++        vm_base[out + 52] = directory ? CELL_FS_TYPE_DIR : CELL_FS_TYPE_REG;
++        vm_base[out + 53] = uint8_t(length);
++        memcpy(vm_base + out + 54, entry->d_name, length);
++    }
++    vm_write32(count_ptr, count);
++}
++
+ static void cellFsClosedir(ppu_context* ctx)
+ {
+     int fd = (int)(uint32_t)ctx->gpr[3];
+@@ -808,6 +864,7 @@ extern "C" void ppu_fs_register(void)
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsStat"),     "cellFsStat",     cellFsStat);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsFstat"),    "cellFsFstat",    cellFsFstat);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsOpendir"),  "cellFsOpendir",  cellFsOpendir);
++    ps3_hle_register_ctx(ps3_compute_nid("cellFsGetDirectoryEntries"), "cellFsGetDirectoryEntries", cellFsGetDirectoryEntries);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsReaddir"),  "cellFsReaddir",  cellFsReaddir);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsClosedir"), "cellFsClosedir", cellFsClosedir);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsMkdir"),    "cellFsMkdir",    cellFsMkdir);
+diff --git a/runtime/ppu/tests/test_ppu_directory.cpp b/runtime/ppu/tests/test_ppu_directory.cpp
+new file mode 100644
+index 0000000..42ed073
+--- /dev/null
++++ b/runtime/ppu/tests/test_ppu_directory.cpp
+@@ -0,0 +1,58 @@
++// Real directory stream and guest-memory ABI, without game data or a GPU.
++#include "../ppu_fs.cpp"
++#include <cassert>
++#include <set>
++#include <string>
++extern "C" { uint8_t* vm_base = nullptr; uint32_t ppu_vm_size = 65536; }
++extern "C" void vm_write32(uint64_t a, uint32_t v) {
++    assert(a + 4 <= ppu_vm_size);
++    for (int i=0;i<4;i++) vm_base[a+i]=uint8_t(v >> (24-i*8));
++}
++extern "C" void vm_write64(uint64_t a, uint64_t v) {
++    vm_write32(a, uint32_t(v>>32)); vm_write32(a+4, uint32_t(v));
++}
++static uint32_t read32(uint32_t a) {
++    return uint32_t(vm_base[a])<<24 | uint32_t(vm_base[a+1])<<16 |
++           uint32_t(vm_base[a+2])<<8 | vm_base[a+3];
++}
++static ppu_context call(int fd, uint32_t size, uint32_t entries=0x100, uint32_t count=0x80) {
++    ppu_context c={}; c.gpr[3]=fd; c.gpr[4]=entries; c.gpr[5]=size; c.gpr[6]=count;
++    cellFsGetDirectoryEntries(&c); return c;
++}
++int main(int argc, char** argv) {
++    assert(argc==2); uint8_t memory[65536]={}; vm_base=memory;
++    DIR* d=opendir(argv[1]); assert(d);
++    int fd=fd_alloc_dir(d); assert(fd>=3);
++    snprintf(g_dir_path[fd],sizeof g_dir_path[fd],"%s",argv[1]);
++    assert(uint32_t(call(fd,312,0).gpr[3])==0x8001000Du);
++    assert(uint32_t(call(fd,312,0x100,0).gpr[3])==0x8001000Du);
++    assert(uint32_t(call(999,312).gpr[3])==0x8001002Au);
++    assert(call(fd,311).gpr[3]==0 && read32(0x80)==0);
++    std::set<std::string> names;
++    for (;;) {
++        memset(memory+0x100,0xA5,625);
++        auto c=call(fd,625); assert(c.gpr[3]==0);
++        uint32_t n=read32(0x80); assert(n<=2);
++        assert(memory[0x100+624]==0xA5); // incomplete trailing entry untouched
++        if(!n) break;
++        for(uint32_t i=0;i<n;i++) {
++            uint32_t ea=0x100+i*312;
++            std::string name(reinterpret_cast<char*>(memory+ea+54));
++            assert(names.insert(name).second);
++            assert(memory[ea+53]==name.size());
++            if(name=="payload") {
++                assert(memory[ea+52]==2);
++                assert((read32(ea)&0xF000)==0x8000);
++                assert(read32(ea+36)==0 && read32(ea+40)==7);
++            } else if(name=="folder") {
++                assert(memory[ea+52]==1);
++                assert((read32(ea)&0xF000)==0x4000);
++            }
++        }
++    }
++    assert(names.count("payload") && names.count("folder") && names.count(".hidden"));
++    assert(call(fd,312).gpr[3]==0 && read32(0x80)==0); // stable EOF
++    closedir(d); g_dirs[fd]=nullptr;
++    assert(uint32_t(call(fd,312).gpr[3])==0x8001002Au);
++    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
++}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 index 3addd48..ce6172b 100644
 --- a/runtime/spu/spu_channels.c
@@ -1605,6 +1867,38 @@ index 3addd48..ce6172b 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 772c2d6..6b4fb66 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -524,6 +524,13 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
+     return spu_interp_run_until(ctx, start_lsa, 0);
+ }
+ 
++/* One big-endian LS word, for the rejoin diagnostic. */
++static inline uint32_t interp_ls_w(const spu_context* c, uint32_t a)
++{
++    a &= SPU_LS_MASK & ~3u;
++    return (uint32_t)c->ls[a] << 24 | (uint32_t)c->ls[a + 1] << 16 | (uint32_t)c->ls[a + 2] << 8 | c->ls[a + 3];
++}
++
+ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
+     ctx->pc = start_lsa & 0x3FFFC;
+     ctx->status = SPU_STATUS_RUNNING;
+@@ -563,8 +570,11 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+         /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
+         if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) {
+             { static _Atomic int s_rj = -1; if (s_rj < 0) { const char* e = getenv("SPU_REJOIN_DBG"); s_rj = e ? atoi(e) : 0; }
+-              if (s_rj > 0 && steps > 1000) { s_rj--; fprintf(stderr, "[rejoin] img=%d pc=0x%05X after %llu steps (from 0x%05X)\n",
+-                  ctx->image_id, ctx->pc, (unsigned long long)steps, start_lsa & 0x3FFFC); } }
++              if (s_rj > 0 && steps > 1000) { s_rj--; { const uint32_t s0 = start_lsa & 0x3FFF0;
++                  fprintf(stderr, "[rejoin] img=%d ovl=%d pc=0x%05X after %llu steps (from 0x%05X) LS[from]=%08X %08X %08X %08X LS[4000]=%08X %08X %08X %08X\n",
++                  ctx->image_id, ctx->resident_ovl, ctx->pc, (unsigned long long)steps, start_lsa & 0x3FFFC,
++                  interp_ls_w(ctx, s0), interp_ls_w(ctx, s0 + 4), interp_ls_w(ctx, s0 + 8), interp_ls_w(ctx, s0 + 12),
++                  interp_ls_w(ctx, 0x4000), interp_ls_w(ctx, 0x4004), interp_ls_w(ctx, 0x4008), interp_ls_w(ctx, 0x400C)); } } }
+             spu_xfer_log(ctx, "rejoin", g_spu_interp_last_pc, ctx->pc);
+             g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
+         g_spu_interp_last_pc = ctx->pc;
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
 index ab59cbe..6f63368 100644
 --- a/tools/ppu_lifter.py
@@ -1766,6 +2060,44 @@ index 0000000..013a99c
 +                   cwd=ROOT, check=True, timeout=60)
 +    for mode in ("independent_clears", "independent_depth_stencil"):
 +        subprocess.run([str(binary), mode], check=True, timeout=20)
+diff --git a/tools/test_ppu_directory.py b/tools/test_ppu_directory.py
+new file mode 100644
+index 0000000..0cef0f0
+--- /dev/null
++++ b/tools/test_ppu_directory.py
+@@ -0,0 +1,32 @@
++#!/usr/bin/env python3
++"""Build/run the PPU directory-entry regression on POSIX."""
++import os
++from pathlib import Path
++import platform
++import subprocess
++import sys
++import tempfile
++
++ROOT = Path(__file__).resolve().parents[1]
++
++def main():
++    if os.name == 'nt':
++        print('SKIP: PPU fixture requires the POSIX build toolchain')
++        return
++    with tempfile.TemporaryDirectory(prefix='ps3-dir-') as tmp:
++        out=Path(tmp); fixture=out/'fixture'; fixture.mkdir()
++        (fixture/'payload').write_bytes(b'1234567')
++        (fixture/'.hidden').write_bytes(b'')
++        (fixture/'folder').mkdir()
++        subprocess.run([sys.executable,str(ROOT/'tools/make_smoke_elf.py'),
++                        '--out',str(out/'smoke.elf'),'--header',str(out/'ppu_recomp.h')],check=True)
++        linker='-Wl,-dead_strip' if platform.system()=='Darwin' else '-Wl,--gc-sections'
++        subprocess.run([os.environ.get('CXX','c++'),'-std=c++20','-O1','-UNDEBUG',
++                        '-ffunction-sections','-fdata-sections',linker,
++                        '-I'+str(out),'-I'+str(ROOT/'include'),
++                        str(ROOT/'runtime/ppu/tests/test_ppu_directory.cpp'),
++                        '-o',str(out/'test')],check=True)
++        subprocess.run([str(out/'test'),str(fixture)],check=True,timeout=15)
++
++if __name__=='__main__':
++    main()
 diff --git a/tools/test_ppu_fallthrough.py b/tools/test_ppu_fallthrough.py
 index 9ebd54c..cde3d45 100644
 --- a/tools/test_ppu_fallthrough.py

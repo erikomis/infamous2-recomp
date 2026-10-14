@@ -1,0 +1,182 @@
+diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
+index e8f6c2bd..82d7d2d9 100644
+--- a/runtime/ppu/ppu_fs.cpp
++++ b/runtime/ppu/ppu_fs.cpp
+@@ -22,6 +22,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <errno.h>
+ #include <sys/stat.h>
+ #include "../platform/win32_dirent.h"   /* <dirent.h>, or a Win32 stand-in */
+ 
+@@ -642,6 +643,59 @@ static void cellFsReaddir(ppu_context* ctx)
+     ctx->gpr[3] = CELL_OK;
+ }
+ 
++/* CellFsDirectoryEntry is a 52-byte stat followed by a 258-byte dirent,
++ * rounded to four-byte alignment: 312 bytes. entries_size is bytes, while
++ * data_count is a big-endian u32 count of complete entries. The stream is
++ * shared with cellFsReaddir and cellFsClosedir. */
++static void cellFsGetDirectoryEntries(ppu_context* ctx)
++{
++    const uint32_t fd = (uint32_t)ctx->gpr[3];
++    const uint32_t entries = (uint32_t)ctx->gpr[4];
++    const uint32_t bytes = (uint32_t)ctx->gpr[5];
++    const uint32_t count_ptr = (uint32_t)ctx->gpr[6];
++    const uint64_t limit = ppu_vm_size ? ppu_vm_size : 0x100000000ull;
++    if (!entries || !count_ptr || uint64_t(entries) + bytes > limit ||
++        uint64_t(count_ptr) + 4 > limit) {
++        ctx->gpr[3] = 0x8001000Du; // CELL_EFAULT
++        return;
++    }
++    if (fd < 3 || fd >= FS_MAX || !g_dirs[fd]) {
++        ctx->gpr[3] = 0x8001002Au; // CELL_EBADF
++        return;
++    }
++    uint32_t count = 0;
++    ctx->gpr[3] = CELL_OK;
++    for (; count < bytes / 312; ++count) {
++        errno = 0;
++        struct dirent* entry = readdir(g_dirs[fd]);
++        if (!entry) {
++            if (errno) ctx->gpr[3] = 0x8001002Bu; // CELL_EIO
++            break;
++        }
++        char path[1300];
++        snprintf(path, sizeof path, "%s/%s", g_dir_path[fd], entry->d_name);
++        struct stat st;
++        if (stat(path, &st) != 0) {
++            ctx->gpr[3] = 0x8001002Bu; // entry disappeared or cannot be inspected
++            break;
++        }
++        uint32_t out = entries + count * 312;
++        memset(vm_base + out, 0, 312);
++        bool directory = (st.st_mode & S_IFDIR) != 0;
++        write_stat(out, (directory ? CELL_FS_S_IFDIR : CELL_FS_S_IFREG) |
++                        (uint32_t(st.st_mode) & 0777), uint64_t(st.st_size));
++        vm_write64(out + 0x0C, uint64_t(st.st_atime));
++        vm_write64(out + 0x14, uint64_t(st.st_mtime));
++        vm_write64(out + 0x1C, uint64_t(st.st_ctime));
++        size_t length = strlen(entry->d_name);
++        if (length > 255) length = 255;
++        vm_base[out + 52] = directory ? CELL_FS_TYPE_DIR : CELL_FS_TYPE_REG;
++        vm_base[out + 53] = uint8_t(length);
++        memcpy(vm_base + out + 54, entry->d_name, length);
++    }
++    vm_write32(count_ptr, count);
++}
++
+ static void cellFsClosedir(ppu_context* ctx)
+ {
+     int fd = (int)(uint32_t)ctx->gpr[3];
+@@ -787,6 +841,7 @@ extern "C" void ppu_fs_register(void)
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsStat"),     "cellFsStat",     cellFsStat);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsFstat"),    "cellFsFstat",    cellFsFstat);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsOpendir"),  "cellFsOpendir",  cellFsOpendir);
++    ps3_hle_register_ctx(ps3_compute_nid("cellFsGetDirectoryEntries"), "cellFsGetDirectoryEntries", cellFsGetDirectoryEntries);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsReaddir"),  "cellFsReaddir",  cellFsReaddir);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsClosedir"), "cellFsClosedir", cellFsClosedir);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsMkdir"),    "cellFsMkdir",    cellFsMkdir);
+diff --git a/runtime/ppu/tests/test_ppu_directory.cpp b/runtime/ppu/tests/test_ppu_directory.cpp
+new file mode 100644
+index 00000000..42ed073c
+--- /dev/null
++++ b/runtime/ppu/tests/test_ppu_directory.cpp
+@@ -0,0 +1,58 @@
++// Real directory stream and guest-memory ABI, without game data or a GPU.
++#include "../ppu_fs.cpp"
++#include <cassert>
++#include <set>
++#include <string>
++extern "C" { uint8_t* vm_base = nullptr; uint32_t ppu_vm_size = 65536; }
++extern "C" void vm_write32(uint64_t a, uint32_t v) {
++    assert(a + 4 <= ppu_vm_size);
++    for (int i=0;i<4;i++) vm_base[a+i]=uint8_t(v >> (24-i*8));
++}
++extern "C" void vm_write64(uint64_t a, uint64_t v) {
++    vm_write32(a, uint32_t(v>>32)); vm_write32(a+4, uint32_t(v));
++}
++static uint32_t read32(uint32_t a) {
++    return uint32_t(vm_base[a])<<24 | uint32_t(vm_base[a+1])<<16 |
++           uint32_t(vm_base[a+2])<<8 | vm_base[a+3];
++}
++static ppu_context call(int fd, uint32_t size, uint32_t entries=0x100, uint32_t count=0x80) {
++    ppu_context c={}; c.gpr[3]=fd; c.gpr[4]=entries; c.gpr[5]=size; c.gpr[6]=count;
++    cellFsGetDirectoryEntries(&c); return c;
++}
++int main(int argc, char** argv) {
++    assert(argc==2); uint8_t memory[65536]={}; vm_base=memory;
++    DIR* d=opendir(argv[1]); assert(d);
++    int fd=fd_alloc_dir(d); assert(fd>=3);
++    snprintf(g_dir_path[fd],sizeof g_dir_path[fd],"%s",argv[1]);
++    assert(uint32_t(call(fd,312,0).gpr[3])==0x8001000Du);
++    assert(uint32_t(call(fd,312,0x100,0).gpr[3])==0x8001000Du);
++    assert(uint32_t(call(999,312).gpr[3])==0x8001002Au);
++    assert(call(fd,311).gpr[3]==0 && read32(0x80)==0);
++    std::set<std::string> names;
++    for (;;) {
++        memset(memory+0x100,0xA5,625);
++        auto c=call(fd,625); assert(c.gpr[3]==0);
++        uint32_t n=read32(0x80); assert(n<=2);
++        assert(memory[0x100+624]==0xA5); // incomplete trailing entry untouched
++        if(!n) break;
++        for(uint32_t i=0;i<n;i++) {
++            uint32_t ea=0x100+i*312;
++            std::string name(reinterpret_cast<char*>(memory+ea+54));
++            assert(names.insert(name).second);
++            assert(memory[ea+53]==name.size());
++            if(name=="payload") {
++                assert(memory[ea+52]==2);
++                assert((read32(ea)&0xF000)==0x8000);
++                assert(read32(ea+36)==0 && read32(ea+40)==7);
++            } else if(name=="folder") {
++                assert(memory[ea+52]==1);
++                assert((read32(ea)&0xF000)==0x4000);
++            }
++        }
++    }
++    assert(names.count("payload") && names.count("folder") && names.count(".hidden"));
++    assert(call(fd,312).gpr[3]==0 && read32(0x80)==0); // stable EOF
++    closedir(d); g_dirs[fd]=nullptr;
++    assert(uint32_t(call(fd,312).gpr[3])==0x8001002Au);
++    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
++}
+diff --git a/tools/test_ppu_directory.py b/tools/test_ppu_directory.py
+new file mode 100644
+index 00000000..0cef0f05
+--- /dev/null
++++ b/tools/test_ppu_directory.py
+@@ -0,0 +1,32 @@
++#!/usr/bin/env python3
++"""Build/run the PPU directory-entry regression on POSIX."""
++import os
++from pathlib import Path
++import platform
++import subprocess
++import sys
++import tempfile
++
++ROOT = Path(__file__).resolve().parents[1]
++
++def main():
++    if os.name == 'nt':
++        print('SKIP: PPU fixture requires the POSIX build toolchain')
++        return
++    with tempfile.TemporaryDirectory(prefix='ps3-dir-') as tmp:
++        out=Path(tmp); fixture=out/'fixture'; fixture.mkdir()
++        (fixture/'payload').write_bytes(b'1234567')
++        (fixture/'.hidden').write_bytes(b'')
++        (fixture/'folder').mkdir()
++        subprocess.run([sys.executable,str(ROOT/'tools/make_smoke_elf.py'),
++                        '--out',str(out/'smoke.elf'),'--header',str(out/'ppu_recomp.h')],check=True)
++        linker='-Wl,-dead_strip' if platform.system()=='Darwin' else '-Wl,--gc-sections'
++        subprocess.run([os.environ.get('CXX','c++'),'-std=c++20','-O1','-UNDEBUG',
++                        '-ffunction-sections','-fdata-sections',linker,
++                        '-I'+str(out),'-I'+str(ROOT/'include'),
++                        str(ROOT/'runtime/ppu/tests/test_ppu_directory.cpp'),
++                        '-o',str(out/'test')],check=True)
++        subprocess.run([str(out/'test'),str(fixture)],check=True,timeout=15)
++
++if __name__=='__main__':
++    main()
