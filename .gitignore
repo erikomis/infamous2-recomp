@@ -1,0 +1,20 @@
+# Toolkit checkouts (tools/setup_toolkit.sh recreates the one the port uses)
+/ps3recomp/
+/ps3recomp-fork/
+/ps3recomp-merge/
+/.venv/
+
+# Game, firmware and everything generated from them stay local.
+game/
+fw/
+vfs/
+recompiled/
+prx/
+lle/
+lle_spu/
+spu/
+spu_miss/
+out/
+build/
+
+.DS_Store
