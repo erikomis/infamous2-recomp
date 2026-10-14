@@ -579,19 +579,32 @@ index 9a76e67..a4f7beb 100644
          if (fi > 0 && rs->alpha_test_enable &&
              rsx_fp_apply_alpha_test_buffered(s_ps_hlsl, sizeof s_ps_hlsl,
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index 933abcb..be288f9 100644
+index 933abcb..f5cba7f 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
-@@ -72,7 +72,7 @@ enum {
+@@ -71,8 +71,8 @@ enum {
+     OP_TXD=0x19, OP_RCP=0x1A, OP_RSQ=0x1B, OP_EX2=0x1C, OP_LG2=0x1D,
      OP_LIT=0x1E, OP_LRP=0x1F, OP_STR=0x20, OP_SFL=0x21, OP_COS=0x22,
      OP_SIN=0x23, OP_PK2H=0x24, OP_UP2H=0x25, OP_POW=0x26, OP_PK4UB=0x27,
-     OP_UP4UB=0x28, OP_PK2US=0x29, OP_UP2US=0x2A, OP_DP2A=0x2E, OP_TXL=0x2F,
+-    OP_UP4UB=0x28, OP_PK2US=0x29, OP_UP2US=0x2A, OP_DP2A=0x2E, OP_TXL=0x2F,
 -    OP_TXB=0x31, OP_RFL=0x36, OP_DP2=0x38, OP_NRM=0x39, OP_DIV=0x3A,
++    OP_UP4UB=0x28, OP_PK2US=0x29, OP_UP2US=0x2A, OP_PKG=0x2C, OP_UPG=0x2D, OP_DP2A=0x2E, OP_TXL=0x2F,
 +    OP_TXB=0x31, OP_TEXBEM=0x33, OP_TXPBEM=0x34, OP_RFL=0x36, OP_DP2=0x38, OP_NRM=0x39, OP_DIV=0x3A,
      OP_DIVSQ=0x3B, OP_LIF=0x3C, OP_FENCT=0x3D, OP_FENCB=0x3E
  };
  
-@@ -359,8 +359,10 @@ static const char* input_expr(u32 input_src)
+@@ -94,6 +94,10 @@ const char* rsx_fp_opcode_name(u32 op)
+     case OP_TXL: return "TXL"; case OP_TXB: return "TXB"; case OP_RFL: return "RFL";
+     case OP_DIV: return "DIV"; case OP_DP2: return "DP2"; case OP_NRM: return "NRM";
+     case OP_DIVSQ: return "DIVSQ"; case OP_LIF: return "LIF";
++    case OP_PK4B: return "PK4B"; case OP_UP4B: return "UP4B"; case OP_PK2H: return "PK2H";
++    case OP_UP2H: return "UP2H"; case OP_PK4UB: return "PK4UB"; case OP_UP4UB: return "UP4UB";
++    case OP_PK2US: return "PK2US"; case OP_UP2US: return "UP2US"; case OP_PKG: return "PKG";
++    case OP_UPG: return "UPG";
+     case OP_FENCT: return "FENCT"; case OP_FENCB: return "FENCB";
+     default:     return "?";
+     }
+@@ -359,8 +363,10 @@ static const char* input_expr(u32 input_src)
          "input.tc4", "input.tc5", "input.tc6", "input.tc7" };
      switch (input_src) {
      case 0x0: return "input.position"; /* WPOS */
@@ -604,7 +617,7 @@ index 933abcb..be288f9 100644
      case 0x3: return "input.fog";      /* FOGC */
      default:
          if (input_src >= 0x4 && input_src <= 0xB) return tc[input_src - 0x4]; /* TC0..7 */
-@@ -445,12 +447,104 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+@@ -445,12 +451,104 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
      return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
  }
  
@@ -710,7 +723,7 @@ index 933abcb..be288f9 100644
      u32 buffered_constant_count = 0;
      if (buffered) {
          rsx_fp_constant_block constants;
-@@ -517,6 +611,14 @@ static int rsx_fp_decompile_internal(
+@@ -517,6 +615,14 @@ static int rsx_fp_decompile_internal(
          u32 opcode    = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
          u32 input_src = (w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT;
          u32 tex_unit  = (w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT;
@@ -725,7 +738,26 @@ index 933abcb..be288f9 100644
          int is_branch = (w2 & FP_BRANCH) ? 1 : 0;
  
          /* Execution condition (exec_if) + condition-code write (set_cond).
-@@ -702,6 +804,10 @@ static int rsx_fp_decompile_internal(
+@@ -655,6 +761,18 @@ static int rsx_fp_decompile_internal(
+         case OP_FRC: snprintf(rhs, sizeof(rhs), "frac(%s)", a); break;
+         case OP_FLR: snprintf(rhs, sizeof(rhs), "floor(%s)", a); break;
+         case OP_RCP: snprintf(rhs, sizeof(rhs), "(1.0 / (%s).x)", a); break;
++        /* Pack/unpack (RPCS3 FragmentProgramDecompiler PK/UP cases and the pkg/upg
++         * builtins): the packed word is a scalar that replicates. */
++        case OP_PK4UB: snprintf(rhs, sizeof(rhs), "asfloat(_rsx_pk4ub(%s))", a); break;
++        case OP_UP4UB: snprintf(rhs, sizeof(rhs), "_rsx_up4ub((%s).x)", a); break;
++        case OP_PKG:   snprintf(rhs, sizeof(rhs), "asfloat(_rsx_pk4ub(_rsx_lin2srgb(%s)))", a); break;
++        case OP_UPG:   snprintf(rhs, sizeof(rhs), "_rsx_srgb2lin(_rsx_up4ub((%s).x))", a); break;
++        case OP_PK4B:  snprintf(rhs, sizeof(rhs), "asfloat(_rsx_pk4b(%s))", a); break;
++        case OP_UP4B:  snprintf(rhs, sizeof(rhs), "_rsx_up4b((%s).x)", a); break;
++        case OP_PK2US: snprintf(rhs, sizeof(rhs), "asfloat(_rsx_pk2us(%s))", a); break;
++        case OP_UP2US: snprintf(rhs, sizeof(rhs), "_rsx_up2us((%s).x)", a); break;
++        case OP_PK2H:  snprintf(rhs, sizeof(rhs), "asfloat(_rsx_pk2h(%s))", a); break;
++        case OP_UP2H:  snprintf(rhs, sizeof(rhs), "_rsx_up2h((%s).x)", a); break;
+         /* Real RSX RSQ ignores the input's sign — 1/sqrt(|x|), not 1/sqrt(x)
+          * (oracle: RPCS3 FragmentProgramDecompiler.cpp, "RSQ ignores the sign
+          * of the inputs (Metro Last Light, GTA4)"). The strict form NaN'd the
+@@ -702,6 +820,10 @@ static int rsx_fp_decompile_internal(
          case OP_SNE: snprintf(rhs, sizeof(rhs), "(float4)((%s) != (%s))", a, b); break;
          case OP_SEQ: snprintf(rhs, sizeof(rhs), "(float4)((%s) == (%s))", a, b); break;
          case OP_TEX:
@@ -736,7 +768,7 @@ index 933abcb..be288f9 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Cubemap: sample with the full 3-component direction vector. */
                  snprintf(rhs, sizeof(rhs),
-@@ -714,6 +820,10 @@ static int rsx_fp_decompile_internal(
+@@ -714,6 +836,10 @@ static int rsx_fp_decompile_internal(
                           "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
              break;
          case OP_TXP:
@@ -747,7 +779,28 @@ index 933abcb..be288f9 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Projective divide is meaningless for a cube lookup; sample
                   * the direction directly. */
-@@ -817,13 +927,17 @@ static int rsx_fp_decompile_internal(
+@@ -760,11 +886,16 @@ static int rsx_fp_decompile_internal(
+             }
+             handled = 0;   /* no destination write */
+             break;
+-        default:
+-            out_puts(&o, "    /* TODO: unhandled FP opcode ");
+-            out_puts(&o, rsx_fp_opcode_name(opcode));
+-            out_puts(&o, " */\n");
++        default: {
++            /* The number and the raw words, so an opcode outside the table
++             * can be identified from the dumped shader alone. */
++            char todo[160];
++            snprintf(todo, sizeof todo,
++                     "    /* TODO: unhandled FP opcode 0x%02X (%s) words %08X %08X %08X %08X */\n",
++                     opcode, rsx_fp_opcode_name(opcode), w0, w1, w2, w3);
++            out_puts(&o, todo);
+             handled = 0;
++            break; }
+             break;
+         }
+ 
+@@ -817,13 +948,17 @@ static int rsx_fp_decompile_internal(
                                   "      /* exec_if=none: write suppressed */\n");
                      } else {
                          /* Per-component select gated by the CC sign test.
@@ -769,7 +822,7 @@ index 933abcb..be288f9 100644
                      }
                      out_puts(&o, buf);
                  }
-@@ -907,7 +1021,7 @@ static int rsx_fp_decompile_internal(
+@@ -907,7 +1042,7 @@ static int rsx_fp_decompile_internal(
      /* Preamble: PSInput matches the backend's placeholder layout; temp/half
       * register files; texture+sampler banks for TEX. Built here, in front of
       * the body, now that the return type is known. */
@@ -778,17 +831,33 @@ index 933abcb..be288f9 100644
      Out p = { preamble, sizeof(preamble), 0, 1 };
      preamble[0] = '\0';
      out_puts(&p,
-@@ -945,6 +1059,9 @@ static int rsx_fp_decompile_internal(
+@@ -945,6 +1080,25 @@ static int rsx_fp_decompile_internal(
              buffered_constant_count ? buffered_constant_count : 1u);
          out_puts(&p, constants_decl);
      }
++    /* NV40 pack/unpack. A packed word travels on in a float's bits, so the
++     * packs bitcast and the unpacks bitcast back; the sRGB forms follow
++     * RPCS3's _builtin_pkg/_builtin_upg (linear_to_srgb, srgb_to_linear).
++     * These were the opcodes inFAMOUS 2's character materials used and the
++     * decompiler skipped, leaving the destination with whatever it held. */
++    out_puts(&p,
++        "uint   _rsx_pk4ub(float4 v) { uint4 b = (uint4)round(saturate(v) * 255.0); return b.x | (b.y << 8) | (b.z << 16) | (b.w << 24); }\n"
++        "float4 _rsx_up4ub(float v) { uint u = asuint(v); return float4(u & 255u, (u >> 8) & 255u, (u >> 16) & 255u, (u >> 24) & 255u) / 255.0; }\n"
++        "uint   _rsx_pk4b(float4 v) { uint4 b = (uint4)((int4)round(clamp(v, -1.0, 1.0) * 127.0)) & 255u; return b.x | (b.y << 8) | (b.z << 16) | (b.w << 24); }\n"
++        "float4 _rsx_up4b(float v) { uint u = asuint(v); int4 b = int4(u & 255u, (u >> 8) & 255u, (u >> 16) & 255u, (u >> 24) & 255u); b = (b << 24) >> 24; return clamp((float4)b / 127.0, -1.0, 1.0); }\n"
++        "uint   _rsx_pk2us(float4 v) { uint2 b = (uint2)round(saturate(v.xy) * 65535.0); return b.x | (b.y << 16); }\n"
++        "float4 _rsx_up2us(float v) { uint u = asuint(v); return float4(u & 65535u, u >> 16, u & 65535u, u >> 16) / 65535.0; }\n"
++        "uint   _rsx_pk2h(float4 v) { return f32tof16(v.x) | (f32tof16(v.y) << 16); }\n"
++        "float4 _rsx_up2h(float v) { uint u = asuint(v); return float4(f16tof32(u & 65535u), f16tof32(u >> 16), f16tof32(u & 65535u), f16tof32(u >> 16)); }\n"
++        "float4 _rsx_lin2srgb(float4 cl) { cl = saturate(cl); float4 low = cl * 12.92; float4 high = 1.055 * pow(cl, 1.0 / 2.4) - 0.055; return saturate((cl < 0.0031308) ? low : high); }\n"
++        "float4 _rsx_srgb2lin(float4 cs) { float4 a = cs / 12.92; float4 b = pow(max(cs + 0.055, 0.0) / 1.055, 2.4); return (cs > 0.04045) ? b : a; }\n");
 +    if (shadow) for (u32 u = 0; u < 16; u++)
 +        if ((sampled_units & (1u << u)) && shadow[u].enabled)
 +            fp_shadow_helper(&p, u, tex_cube_mask, &shadow[u]);
      if (targets == 1) {
          out_puts(&p, "float4 main(PSInput input) : SV_TARGET {\n");
      } else {
-@@ -970,7 +1087,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
+@@ -970,7 +1124,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
                          u32 tex_cube_mask, char* out, u32 out_size)
  {
      return rsx_fp_decompile_internal(
@@ -797,7 +866,7 @@ index 933abcb..be288f9 100644
  }
  
  int rsx_fp_decompile_buffered_ex(
-@@ -978,10 +1095,19 @@ int rsx_fp_decompile_buffered_ex(
+@@ -978,10 +1132,19 @@ int rsx_fp_decompile_buffered_ex(
      char* out, u32 out_size, u32* out_constant_count)
  {
      return rsx_fp_decompile_internal(
@@ -851,7 +920,7 @@ index 7161c4e..5f4019d 100644
   * success or -1 for an unterminated/truncated/oversized program. */
  int rsx_fp_collect_constants(
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..3560a03 100644
+index 98db285..ce544ac 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -742,6 +742,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
@@ -1056,6 +1125,59 @@ index 98db285..3560a03 100644
          /* Metal wants every attachment the same size, and the engine registers
           * an MRT set's members at target A's, so a set whose members disagree
           * is one this frame cannot honour: it stops at the gap, as the vtable
+@@ -3471,16 +3550,28 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+         /* PS3RECOMP_METAL_PASS_LOG=1: every 600th present, print the frame's
+          * record stream grouped into passes (kind, targets, depth, count, and
+          * the textures the first draw samples). */
+-        if (present_dst && getenv("PS3RECOMP_METAL_PASS_LOG")) {
++        /* =2: split a pass at every change of pipeline or bound textures, so
++         * each line is one material's run of draws instead of one line per
++         * pass with only its first draw described. */
++        { static int s_pl = -1; static unsigned s_pl_min = 1000, s_pl_every = 300;
++          if (s_pl < 0) { const char* e = getenv("PS3RECOMP_METAL_PASS_LOG"); s_pl = e ? atoi(e) : 0;
++              /* _MIN: a frame counts when it has more records than this;
++               * _EVERY: print every nth such frame. A cutscene frame has fewer
++               * records than a busy menu, so the defaults can skip it. */
++              e = getenv("PS3RECOMP_METAL_PASS_LOG_MIN");   if (e && atoi(e) > 0) s_pl_min = (unsigned)atoi(e);
++              e = getenv("PS3RECOMP_METAL_PASS_LOG_EVERY"); if (e && atoi(e) > 0) s_pl_every = (unsigned)atoi(e); }
++        if (present_dst && s_pl) {
+             static unsigned s_pf;
+-            if (s_eng_rec_count > 1000 && (s_pf++ % 300) == 0) {
++            if (s_eng_rec_count > s_pl_min && (s_pf++ % s_pl_every) == 0) {
+                 fprintf(stderr, "[pass] ---- frame %u: %u records ----\n", s_pf, s_eng_rec_count);
+                 u32 i = 0;
+                 while (i < s_eng_rec_count) {
+                     const EngRecord* r = &s_eng_rec[i];
+                     u32 j = i + 1;
+                     while (j < s_eng_rec_count && s_eng_rec[j].kind == r->kind && s_eng_rec[j].nrt == r->nrt &&
+-                           !memcmp(s_eng_rec[j].rt, r->rt, sizeof r->rt) && s_eng_rec[j].depth == r->depth) j++;
++                           !memcmp(s_eng_rec[j].rt, r->rt, sizeof r->rt) && s_eng_rec[j].depth == r->depth &&
++                           (s_pl < 2 || (s_eng_rec[j].pipeline == r->pipeline &&
++                                         !memcmp(s_eng_rec[j].tex, r->tex, sizeof r->tex)))) j++;
+                     fprintf(stderr, "[pass] %5u x%-4u kind=%d rt=", i, j - i, (int)r->kind);
+                     for (u32 k = 0; k < r->nrt; k++) fprintf(stderr, "%s%u", k ? "," : "", r->rt[k]);
+                     fprintf(stderr, " depth=%u", r->depth);
+@@ -3498,7 +3589,7 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+                     i = j;
+                 }
+             }
+-        }
++        } }
+         pt = eng_pt_now();
+         id<MTLCommandBuffer> cb = [s_queue commandBuffer];
+         eng_encode_records(cb, stage);
+@@ -3672,7 +3763,10 @@ static void eng_present(void* user, u32 surface)
+     const u32 nrec = s_eng_rec_count;
+     eng_encode_and_commit(src);
+     eng_dump_frame(src);
+-    if (nrec > 1000) eng_dump_surfaces();   /* world frames only */
++    { static unsigned s_sd_min = 1000; static int s_sd_init;
++      if (!s_sd_init) { s_sd_init = 1; const char* e = getenv("PS3RECOMP_METAL_SURF_DUMP_MIN");
++          if (e && atoi(e) > 0) s_sd_min = (unsigned)atoi(e); }
++      if (nrec > s_sd_min) eng_dump_surfaces(); }   /* world frames only (_MIN records) */
+ }
+ 
+ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
 diff --git a/libs/video/tests/test_color_input_metal.m b/libs/video/tests/test_color_input_metal.m
 new file mode 100644
 index 0000000..9b069a1
