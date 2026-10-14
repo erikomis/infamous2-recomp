@@ -682,11 +682,37 @@ index 73b7e71..8394da7 100644
          vm_write32(cur + 4, 0x20000000u | io_begin);   /* JUMP -> begin */
          vm_write32(ctx + 8, begin);
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..a4f7beb 100644
+index 9a76e67..d152cdd 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
-@@ -1227,6 +1227,19 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -979,6 +979,14 @@ static u32 eng_cube_mask(void)
+          * failure, not a wrong pixel. */
+         if (t.enabled && t.cubemap && t.width && t.width == t.height)
+             mask |= 1u << u;
++        /* Texture input gamma (TEXTURE_ADDRESS bits 20..23, upstream PR #305)
++         * is not honoured by this engine yet; say once whether the title asks
++         * for it, so a too-dark frame can be blamed on it or not. */
++        { static int said = 0;
++          const u32 gamma = (rsx_dsp_reg(&g.rsx, 0x1A08u + u * 0x20u) >> 20) & 0xFu;
++          if (t.enabled && gamma && !said) { said = 1;
++              fprintf(stderr, "[rsx engine] texture gamma decode requested (unit %u, mask 0x%X) -- not implemented\n",
++                      u, gamma); } }
+     }
+     return mask;
+ }
+@@ -1225,8 +1233,30 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+     const u32 vp_instrs = fixed ? 0 : vp->instrs, fp_size = fixed ? 0 : fp->size;
+ 
      const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
++    /* Integer framebuffer sRGB output (upstream PR #304, ported): a nonzero
++     * SET_SHADER_PACKER asks the ROP for linear-to-sRGB on 8-bit colour
++     * targets written from the half register file. */
++    const u32 srgb_output = !fixed && rsx_fp_srgb_output_enabled(
++        rsx_dsp_reg(&g.rsx, 0x1FECu), fp_ctrl, rs->alpha_ref_format & 0x1Fu);
++    { static int said = 0;
++      if (srgb_output && !said) { said = 1;
++          fprintf(stderr, "[rsx engine] sRGB framebuffer output in use (packer=0x%X, fmt=0x%X)\n",
++                  rsx_dsp_reg(&g.rsx, 0x1FECu), rs->alpha_ref_format & 0x1Fu); } }
      const u32 cube_mask = eng_cube_mask();
      const u32 vtex_mask = eng_vtex_mask();
 +    /* Depth textures with comparison enabled return visibility, not raw
@@ -705,29 +731,31 @@ index 9a76e67..a4f7beb 100644
  
      static const rsx_fp_constant_block no_constants;
      g.fp_constants = fixed ? &no_constants : &fp->constants;
-@@ -1247,6 +1260,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1247,6 +1277,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          int valid, fixed;
          u64 vp_hash, fp_struct;
          u32 fp_ctrl_key, cube_mask, vtex_mask, layout_mask, layout_stride, rt_count;
-+        u32 shadow_mask;
++        u32 shadow_mask, srgb_output;
 +        rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES];
          rsx_be_format rt_fmt;
          rsx_be_render_state rs;
          u64 key;
-@@ -1259,7 +1274,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1259,7 +1291,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          kmemo.fp_ctrl_key == fp_ctrl_key && kmemo.cube_mask == cube_mask &&
          kmemo.vtex_mask == vtex_mask && kmemo.layout_mask == layout->mask &&
          kmemo.layout_stride == layout->stride && kmemo.rt_count == rt_count &&
 -        kmemo.rt_fmt == rt_fmt && !memcmp(&kmemo.rs, rs, sizeof *rs)) {
 +        kmemo.rt_fmt == rt_fmt && !memcmp(&kmemo.rs, rs, sizeof *rs) &&
-+        kmemo.shadow_mask == shadow_mask &&
++        kmemo.shadow_mask == shadow_mask && kmemo.srgb_output == srgb_output &&
 +        (!shadow_mask || !memcmp(kmemo.shadow, shadow, sizeof shadow))) {
          key = kmemo.key;
          goto key_done;
      }
-@@ -1272,6 +1289,10 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1271,7 +1305,12 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         key = eng_fnv1a(&vp->hash, sizeof vp->hash, key);
          key = eng_fnv1a(&fp->structural, sizeof fp->structural, key);
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
++        if (srgb_output) key = eng_fnv1a(&srgb_output, sizeof srgb_output, key);
          key = eng_fnv1a(&cube_mask, sizeof cube_mask, key);
 +        if (shadow_mask) {
 +            key = eng_fnv1a(&shadow_mask, sizeof shadow_mask, key);
@@ -736,15 +764,16 @@ index 9a76e67..a4f7beb 100644
          key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
-@@ -1285,6 +1306,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1285,6 +1324,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      kmemo.fp_ctrl_key = fp_ctrl_key; kmemo.cube_mask = cube_mask; kmemo.vtex_mask = vtex_mask;
      kmemo.layout_mask = layout->mask; kmemo.layout_stride = layout->stride;
      kmemo.rt_count = rt_count; kmemo.rt_fmt = rt_fmt; memcpy(&kmemo.rs, rs, sizeof *rs);
 +    kmemo.shadow_mask = shadow_mask; memcpy(kmemo.shadow, shadow, sizeof shadow);
++    kmemo.srgb_output = srgb_output;
      kmemo.key = key;
  key_done:;
  
-@@ -1317,8 +1339,8 @@ key_done:;
+@@ -1317,9 +1358,12 @@ key_done:;
          vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
                                           layout->mask, s_vs_hlsl,
                                           sizeof s_vs_hlsl);
@@ -753,10 +782,14 @@ index 9a76e67..a4f7beb 100644
 +        fi = rsx_fp_decompile_buffered_shadow_ex(fp_uc, fp_size, fp_ctrl, cube_mask,
 +                shadow_mask ? shadow : NULL, s_ps_hlsl, sizeof s_ps_hlsl, &nconst);
          if (fi > 0 && nconst != g.fp_constants->count) fi = -1;
++        if (fi > 0 && srgb_output &&
++            rsx_fp_apply_srgb_output(s_ps_hlsl, sizeof s_ps_hlsl) < 0)
++            fi = -1;
          if (fi > 0 && rs->alpha_test_enable &&
              rsx_fp_apply_alpha_test_buffered(s_ps_hlsl, sizeof s_ps_hlsl,
+                                              rs->alpha_func) < 0)
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index 933abcb..f5cba7f 100644
+index 933abcb..be4bdab 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
 @@ -71,8 +71,8 @@ enum {
@@ -1064,8 +1097,83 @@ index 933abcb..f5cba7f 100644
  static float fp_half_to_float(u16 h)
  {
      const u32 sign = (u32)(h & 0x8000u) << 16;
+@@ -1294,3 +1457,74 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
+     }
+     return patched;
+ }
++
++/* Integer framebuffer sRGB output (upstream PR #304, ported). NV4097_SET_SHADER_PACKER
++ * accepts any nonzero value. Floating surfaces and 32-bit exports bypass the
++ * integer framebuffer's RGB transfer function. */
++int rsx_fp_srgb_output_enabled(u32 packer, u32 ctrl, u32 color_format)
++{
++    return packer != 0 && !(ctrl & FP_CTRL_32BIT_EXPORTS) &&
++           color_format != 0x0Bu && color_format != 0x0Cu && color_format != 0x0Du;
++}
++
++int rsx_fp_apply_srgb_output(char* hlsl, u32 capacity)
++{
++    static const char helper[] =
++        "float4 _rsx_srgb_output(float4 v) {\n"
++        "    float3 lo = v.rgb * 12.92;\n"
++        "    float3 hi = 1.055 * pow(max(v.rgb, (float3)0), (float3)(1.0 / 2.4)) - 0.055;\n"
++        "    float3 rgb = float3(v.r < 0.0031308 ? lo.r : hi.r,\n"
++        "                         v.g < 0.0031308 ? lo.g : hi.g,\n"
++        "                         v.b < 0.0031308 ? lo.b : hi.b);\n"
++        "    return float4(saturate(rgb), v.a);\n}\n";
++    if (!hlsl || !capacity) return -1;
++    size_t len = 0;
++    while (len < capacity && hlsl[len]) ++len;
++    if (len == capacity || strstr(hlsl, "_rsx_srgb_output")) return -1;
++    char* marker = NULL;
++    for (char* p = strstr(hlsl, "    return "); p;
++         p = strstr(p + 1, "    return ")) marker = p;
++    if (!marker) return -1;
++    const char* expression = marker + strlen("    return ");
++    const char* end = strstr(expression, ";\n}\n");
++    if (!end || end == expression || (size_t)(end - expression) >= 96 || end[4])
++        return -1;
++    char output[96];
++    memcpy(output, expression, (size_t)(end - expression));
++    output[end - expression] = 0;
++    const int mrt = strstr(hlsl, "struct PSOutput") != NULL;
++    char suffix[1024];
++    int n = snprintf(suffix, sizeof suffix, "    %s _rsx_color_out = %s;\n",
++                     mrt ? "PSOutput" : "float4", output);
++    if (n < 0 || (size_t)n >= sizeof suffix) return -1;
++    if (mrt) {
++        unsigned targets = 0;
++        for (unsigned t = 0; t < 4; ++t) {
++            char field[64];
++            snprintf(field, sizeof field, "    float4 t%u : SV_TARGET%u;", t, t);
++            if (!strstr(hlsl, field)) continue;
++            const int added = snprintf(suffix + n, sizeof suffix - (size_t)n,
++                "    _rsx_color_out.t%u = _rsx_srgb_output(_rsx_color_out.t%u);\n", t, t);
++            if (added < 0 || (size_t)added >= sizeof suffix - (size_t)n) return -1;
++            n += added; ++targets;
++        }
++        if (!targets) return -1;
++    } else {
++        const int added = snprintf(suffix + n, sizeof suffix - (size_t)n,
++            "    _rsx_color_out = _rsx_srgb_output(_rsx_color_out);\n");
++        if (added < 0 || (size_t)added >= sizeof suffix - (size_t)n) return -1;
++        n += added;
++    }
++    const int added = snprintf(suffix + n, sizeof suffix - (size_t)n,
++                              "    return _rsx_color_out;\n}\n");
++    if (added < 0 || (size_t)added >= sizeof suffix - (size_t)n) return -1;
++    n += added;
++    const size_t prefix = (size_t)(marker - hlsl);
++    const size_t helper_len = sizeof helper - 1;
++    if (helper_len + prefix + (size_t)n + 1 > capacity) return -1;
++    /* All parsing/capacity checks precede the first mutation. */
++    memcpy(marker, suffix, (size_t)n + 1);
++    memmove(hlsl + helper_len, hlsl, prefix + (size_t)n + 1);
++    memcpy(hlsl, helper, helper_len);
++    return 1;
++}
 diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
-index 7161c4e..5f4019d 100644
+index 7161c4e..c72d0a6 100644
 --- a/libs/video/rsx_fp_decompiler.h
 +++ b/libs/video/rsx_fp_decompiler.h
 @@ -116,6 +116,27 @@ int rsx_fp_decompile_buffered_ex(
@@ -1096,6 +1204,25 @@ index 7161c4e..5f4019d 100644
  /* Extract the exact runtime inline-CONST payload. Returns the slot count on
   * success or -1 for an unterminated/truncated/oversized program. */
  int rsx_fp_collect_constants(
+@@ -150,6 +171,18 @@ int rsx_fp_constant_ring_plan(
+ int rsx_vertex_constant_ring_plan(
+     u32 used, u32 capacity, u32 block_bytes, u32* out_offset);
+ 
++/* Integer framebuffer sRGB conversion (NV4097_SET_SHADER_PACKER / 0x1FEC),
++ * upstream PR #304. Pass the decoded surface color format. Any nonzero packer
++ * enables it for half exports; floating surfaces and 32-bit exports bypass
++ * conversion. */
++int rsx_fp_srgb_output_enabled(u32 packer, u32 ctrl, u32 color_format);
++
++/* Apply RGB-only linear-to-sRGB conversion to all emitted color targets,
++ * before output quantization. Alpha and optional depth exports are preserved.
++ * Returns 1, or -1 without mutation for malformed source/insufficient space.
++ * Apply before alpha-test wrapping; disabled draws should skip this helper. */
++int rsx_fp_apply_srgb_output(char* hlsl, u32 capacity);
++
+ /* Return the mnemonic for an NV40 fragment opcode (or "?" if unknown).
+  * Useful for disassembly/logging. */
+ const char* rsx_fp_opcode_name(u32 opcode);
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
 index 98db285..c76ebe4 100644
 --- a/libs/video/rsx_metal_backend.m
@@ -1902,7 +2029,7 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..ce6172b 100644
+index 3addd48..b68175f 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -1705,6 +1705,15 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
@@ -1944,6 +2071,32 @@ index 3addd48..ce6172b 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
+@@ -2633,15 +2656,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+     }
+ 
+     if (!fn && !ctx->policy_mode && ctx->pc >= SPU_JM2_KERNEL_BASE) {
+-        /* First sighting of each target (up to 16), reported in one write so
+-         * several SPU threads hitting it at once cannot interleave lines. */
+-        static uint32_t seen[16]; static int n_seen = 0;
++        /* First sighting of each target (up to 64), reported in one write so
++         * several SPU threads hitting it at once cannot interleave lines. 64,
++         * not 16: a 100 KB job module whose lift missed a whole region shows
++         * a new target every few seconds, and each run should name as many of
++         * them as it can for the next re-lift. */
++        enum { UNLIFTED_SEEN_MAX = 64 };
++        static uint32_t seen[UNLIFTED_SEEN_MAX]; static int n_seen = 0;
+         int known = 0, n = __atomic_load_n(&n_seen, __ATOMIC_ACQUIRE);
+-        for (int i = 0; i < n && i < 16; i++)
++        for (int i = 0; i < n && i < UNLIFTED_SEEN_MAX; i++)
+             if (__atomic_load_n(&seen[i], __ATOMIC_RELAXED) == ctx->pc) { known = 1; break; }
+-        if (!known && n < 16) {
++        if (!known && n < UNLIFTED_SEEN_MAX) {
+             int slot = __atomic_fetch_add(&n_seen, 1, __ATOMIC_ACQ_REL);
+-            if (slot < 16) __atomic_store_n(&seen[slot], ctx->pc, __ATOMIC_RELAXED);
++            if (slot < UNLIFTED_SEEN_MAX) __atomic_store_n(&seen[slot], ctx->pc, __ATOMIC_RELAXED);
+             uint32_t p0 = ctx->pc & SPU_LS_MASK;
+             uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
+                           ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
 index 772c2d6..6b4fb66 100644
 --- a/runtime/spu/spu_interp.c
