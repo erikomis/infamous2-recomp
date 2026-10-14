@@ -1,0 +1,84 @@
+diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
+index 718392f..ba4effe 100644
+--- a/runtime/ppu/ppu_sysprx.cpp
++++ b/runtime/ppu/ppu_sysprx.cpp
+@@ -327,15 +327,19 @@ static void sys_lwmutex_unlock(ppu_context* ctx)
+  * EAs (the generic adapter would pass them raw and the C sysPrxForUser impl
+  * deref'd them as host pointers -> AV during cellSpurs init). A no-op wait is
+  * adequate here: the CRT/SPURS paths that reach us use these for one-shot init
+- * handshakes, not long-term blocking. sys_lwcond_t: +0x00 lwmutex EA (be64),
+- * +0x08 lwcond_queue id. */
++ * handshakes, not long-term blocking. sys_lwcond_t is 8 bytes: +0x00 lwmutex
++ * EA (be32), +0x04 lwcond_queue id (be32). Titles read the struct themselves:
++ * inFAMOUS 2's FIOS tests the word at +0x00 for non-zero before every wait and
++ * prints "wait for invalid cond" when it is 0, so a be64 pointer here (high
++ * half first) reads as an uncreated cond, and an id at +0x08 lands in whatever
++ * the title keeps after the struct. */
+ static void sys_lwcond_create(ppu_context* ctx)
+ {
+     static uint32_t s_lwcond_id = 0x4C000000u;
+     uint32_t lwcond  = (uint32_t)ctx->gpr[3];
+     uint32_t lwmutex = (uint32_t)ctx->gpr[4];
+-    vm_write64(lwcond + 0x00, (uint64_t)lwmutex);
+-    vm_write32(lwcond + 0x08, ++s_lwcond_id);
++    vm_write32(lwcond + 0x00, lwmutex);
++    vm_write32(lwcond + 0x04, ++s_lwcond_id);
+     ctx->gpr[3] = 0;
+ }
+ static void sys_lwcond_destroy(ppu_context* ctx)    { ctx->gpr[3] = 0; }
+@@ -349,7 +353,7 @@ static void sys_lwcond_signal_to(ppu_context* ctx)  { ctx->gpr[3] = 0; }
+ static void sys_lwcond_wait(ppu_context* ctx)
+ {
+     uint32_t lwcond  = (uint32_t)ctx->gpr[3];
+-    uint32_t lwmutex = (uint32_t)vm_read64(lwcond + 0x00);
++    uint32_t lwmutex = vm_read32(lwcond + 0x00);
+     HANDLE s = lwm_sem(lwmutex);
+     if (s) {
+         uint32_t own = vm_read32(lwmutex + LWM_OWNER);
+diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
+index 66c65e5..e39a726 100644
+--- a/tools/ppu_lifter.py
++++ b/tools/ppu_lifter.py
+@@ -3651,9 +3651,41 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+                         pass
+         def _ends_block(x):     # a branch that does not return to the next insn
+             return x.mnemonic.startswith('b') and x.mnemonic not in ('bl', 'bctrl', 'blrl')
++        # An epilogue that ends in a TAIL CALL leaves the function exactly as
++        # one that ends in `blr` does, and restores the same registers on the
++        # way out. inFAMOUS 2 func_000B9BD0 loads its table base register in
++        # the prologue (`lwz r30,-0x7E90(r2)`), has an early exit `ld r30,
++        # 0xE0(r1); ...; b 0xB8570`, and dispatches 19 instructions later
++        # through `lwz r11,-0x7F80(r30)`: the restore read as r30's nearest
++        # definition, no base resolved, and the switch lifted to an unresolved
++        # indirect call. A `b` leaves the function when it goes back past the
++        # function's entry, or forward past the dispatcher to another
++        # function's entry. Both need the real entries: without func_starts
++        # the scan is bounded by the nearest `blr`, which an early return puts
++        # in the middle of a function, so only `blr` is trusted there.
++        _lo_addr = all_insns[_scan_lo(i)].addr if func_starts else 0
++        _hi_addr = all_insns[i].addr
++        def _leaves(x):
++            if x.mnemonic == 'blr':
++                return True
++            if x.mnemonic != 'b' or not func_starts:
++                return False
++            last = x.operands.split(',')[-1].strip()
++            if not last.startswith('0x'):
++                return False
++            try:
++                t = int(last, 16)
++            except ValueError:
++                return False
++            if t < _lo_addr:
++                return True
++            if t > _hi_addr and func_starts:
++                k2 = _bisect.bisect_left(func_starts, t)
++                return k2 < len(func_starts) and func_starts[k2] == t
++            return False
+         out, k = [], len(seg) - 1
+         while k >= 0:
+-            if seg[k].mnemonic == 'blr':
++            if _leaves(seg[k]):
+                 # back to the block's first insn: a branch target, or the insn
+                 # right after another branch (fallthrough entry)
+                 while k > 0 and seg[k].addr not in targets and not _ends_block(seg[k - 1]):

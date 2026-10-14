@@ -1,0 +1,10 @@
+# Game, firmware and everything generated from them stay local.
+/game/
+/fw/
+/vfs/
+/recompiled/
+/prx/
+/spu/
+/spu_miss/
+/out/
+/build/
