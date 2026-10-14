@@ -8,9 +8,12 @@ a seguir. `[x]` = feito e verificado; `[ ]` = a fazer.
 Menu → jogo novo → vídeo de abertura → cutscene no motor do jogo nas docas de
 Empire City (Cole, Zeke, Lucy Kuo), com menu de pausa e opções funcionando.
 Personagens com iluminação e cor de pele corretas. A cutscene termina sozinha
-(~7 min a ~17 fps) e o jogo entra no primeiro tutorial de combate ("Use the
-right stick to look up"). Média de ~17 fps numa execução de 330 s que inclui o
-boot. O gameplay em si ainda não foi exercitado.
+(~7 min a ~17 fps) e o jogo entra no tutorial. Com entrada por script o
+tutorial responde (analógico direito para olhar, esquerdo para andar, R1 para
+disparar), a sequência da Besta roda inteira e o jogo chega ao navio
+cargueiro, com Cole escalando — gameplay de verdade, a ~16 fps sem janela,
+numa execução de 15 min sem travar. Falta jogar com teclado ou controle numa
+execução com janela.
 
 ## Fase 1 — Boot e pipeline ✅
 
@@ -48,6 +51,8 @@ Feitas neste port:
 - [x] HLE: `cellGemGetMemorySize`, `cellCameraSetNotifyEventQueue2`/`RemoveNotifyEventQueue2`.
 - [x] Entrada programada: `PAD_STICK` com vários intervalos numa execução.
 - [x] `sys_lwcond_t` com layout errado (FIOS recusava toda espera). Só no upstream; o fork já tinha.
+- [x] Metal: command buffers que terminam com erro (GPU travada, recurso inválido) são reportados com o código, em vez de passarem em silêncio.
+- [x] cellGcm: o dump das palavras do FIFO numa recuperação (branch inválido, `get` parado) sai sem precisar de `GCM_RECDBG`, que é barulhento demais para uma execução longa.
 
 PRs abertos do upstream aplicados:
 
@@ -68,7 +73,9 @@ PRs abertos do upstream aplicados:
 ## Fase 3 — Gameplay
 
 - [x] Passar da cutscene das docas para a primeira missão: o tutorial do primeiro combate aparece sem intervenção.
-- [ ] Exercitar o gameplay: responder aos prompts do tutorial (analógico direito, disparos), ver o que quebra.
+- [x] Exercitar o gameplay: os prompts do tutorial respondem à entrada por script (analógico direito: olhar para cima, para a esquerda…; depois o esquerdo e R1). A sequência da Besta (relâmpagos) roda até o fim e o jogo segue para o navio cargueiro, onde Cole escala e pula com a entrada do script. ~16 fps sem janela; 19.080 frames em 900 s sem travar (`PAD_STICK` com 16 intervalos + `PAD_SCRIPT` com 22 eventos).
+- [ ] Jogar o navio e a chegada a New Marais com teclado ou controle numa execução com janela; a entrada por script só vai até onde o roteiro alcança.
+- [ ] Travamento intermitente na cutscene: numa execução em três, o walker do FIFO do cellGcm declara `get` parado (`FIFO resync (stuck-get)`) e ressincroniza no `put`. Quando isso pula uma fence, os seis SPUs ficam estacionados esperando o evento de reserva (`rdch ch=0 evmask=0x400`) e a apresentação para. Só aconteceu com outra carga na máquina (um build em paralelo); numa execução limpa a mesma ressincronização passou sem dano. O dump das palavras onde o walker parou agora sai sem `GCM_RECDBG`, para pegar a próxima.
 - [x] "Cole em T-pose no menu de opções": não é visível. Pausar a cutscene (START) mostra o menu de pausa com a cena congelada na pose correta ao fundo, e a tela de opções usa a arte estilizada da cidade, como no original; a figura em T-pose que eu tinha visto estava num render target intermediário que nunca vai para a tela.
 - [x] Trecho SPU interpretado (`LS 0x6C64`): eram cinco módulos `DA7ABA5E` embutidos no EBOOT que o gerenciador de jobs carrega em LS 0x6C00 e ninguém traduzia. `tools/lift_datamods.py` os traduz e registra como regiões de código; zero trechos longos no menu e ~30 fps nesse trecho (eram ~17).
 - [x] Áudio: a mixagem produz som (146 s gravados com `AUDIO_WAV`, pico 0,61, primeiro som aos 6 s). Falta só ouvir pelo alto-falante numa execução com janela.

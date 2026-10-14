@@ -550,7 +550,7 @@ index ea160aa..a2318a0 100644
  void sceNpSetFakeUsername(const char* username);
  
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..7c66352 100644
+index 73b7e71..8394da7 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -782,6 +782,9 @@ static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
@@ -563,7 +563,21 @@ index 73b7e71..7c66352 100644
  /* How close `current` must get to `end` before the runtime will recycle a ring
   * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
   * title that is merely near the end from being touched. */
-@@ -1690,8 +1693,32 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1332,8 +1335,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+ 
+ static void gcm_fifo_dump_around(u32 getoff)
+ {
++    /* Only ever called on a recovery (bad branch, stuck get), and capped, so
++     * it no longer hides behind GCM_RECDBG: the words the walker stopped on
++     * are the one thing a run that wedged once in three can still tell us,
++     * and GCM_RECDBG is far too loud to leave on for a 15-minute run. */
+     static int d = 0;
+-    if (!getenv("GCM_RECDBG") || d++ >= 3) return;
++    if (d++ >= 3) return;
+     for (u32 t = 0; t < GCM_TRACE_N; t++) {
+         u32 k = (s_tr_i + t) % GCM_TRACE_N;
+         if (!s_tr_w[k]) continue;
+@@ -1690,8 +1697,32 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -598,7 +612,7 @@ index 73b7e71..7c66352 100644
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -2310,9 +2337,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -2310,9 +2341,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of

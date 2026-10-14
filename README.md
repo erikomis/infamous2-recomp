@@ -23,7 +23,7 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Menu principal 3D, menu de pausa, opções | ✅ |
 | Jogo novo → vídeo de abertura → cutscene no motor do jogo | ✅ |
 | Fim da cutscene → tutorial do primeiro combate | ✅ |
-| Gameplay controlável | ⏳ em teste (entrada por script) |
+| Gameplay controlável | ✅ por script: tutorial, sequência da Besta e navio cargueiro (~16 fps); teclado/controle com janela ainda por testar |
 | Áudio (mixagem), DLC, todos os imports do firmware | ✅ |
 | T-pose do Cole no fundo do menu de opções | 🐞 conhecido |
 
@@ -86,7 +86,12 @@ Teclado (enquanto o controle físico não é testado):
 | I J K L | analógico direito |
 
 Para testes sem janela: `tools/capture.sh <nome> <segundos>` salva um PNG do
-frame a cada 10 s, e `PAD_SCRIPT="95:0x4000"` aperta ✕ aos 95 s.
+frame a cada 10 s, `PAD_SCRIPT="95:0x4000"` aperta ✕ aos 95 s e
+`PAD_STICK="lx,ly,rx,ry,de,até;..."` segura os analógicos num intervalo
+(0–255, 128 = centro). Foi assim que o tutorial foi jogado: `PAD_SCRIPT`
+com ✕ aos 95 e 110 s para o menu, o analógico direito em cada direção por
+10 s a partir dos 470 s, depois o esquerdo, e R1 (`0x0800`), L1 (`0x0400`),
+R2 (`0x0200`) e ✕ a partir dos 655 s.
 
 ## Correções feitas aqui
 
