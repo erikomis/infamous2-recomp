@@ -716,10 +716,35 @@ index 7718d14..1b04e12 100644
          return 0;
        }
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..3b4aaa1 100644
+index 9a76e67..6f6a3cc 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
-@@ -1225,8 +1225,45 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -586,9 +586,9 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+     s->stamp = ++s_surf_clock;
+     if (slot == g.n_surfaces) g.n_surfaces++;
+     { static u32 logs = 0; if (__atomic_fetch_add(&logs, 1, __ATOMIC_RELAXED) < 16)
+-        fprintf(stderr, "[rsx engine] surface %u:0x%08X %ux%u fmt %d%s\n",
++        fprintf(stderr, "[rsx engine] surface %u:0x%08X %ux%u fmt %d%s -> h%u\n",
+                 location, offset, want_w, want_h, (int)want_fmt,
+-                seed ? " (seeded from guest memory)" : ""); }
++                seed ? " (seeded from guest memory)" : "", handle); }
+     return slot;
+ }
+ 
+@@ -925,6 +925,12 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+       e.content_hash = eng_texture_content_hash(location, offset, span, &readable); }
+     e.handle = eng_texture_upload(location, offset, fmt, w, h, levels, pitch,
+                                   cube, remap);
++    /* PS3RECOMP_ENG_TEXLOG=1: one line per texture the engine creates (guest
++     * location/offset, format byte, size, levels, pitch, cube, crossbar) and
++     * the backend handle it got, so a pass log's tex= numbers can be read. */
++    { static int on = -1; if (on < 0) on = getenv("PS3RECOMP_ENG_TEXLOG") ? 1 : 0;
++      if (on) fprintf(stderr, "[rsx texlog] h%u <- loc %u off 0x%08X fmt 0x%02X %ux%u mips %u pitch %u cube %d remap 0x%04X span %u\n",
++                      e.handle, location, offset, fmt, w, h, levels, pitch, cube, remap, span); }
+     if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
+     if (e.handle || !evicted) { g.textures[index] = e; eng_tidx_rebuild(); }
+     return e.handle;
+@@ -1225,8 +1231,45 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vp_instrs = fixed ? 0 : vp->instrs, fp_size = fixed ? 0 : fp->size;
  
      const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
@@ -765,7 +790,7 @@ index 9a76e67..3b4aaa1 100644
  
      static const rsx_fp_constant_block no_constants;
      g.fp_constants = fixed ? &no_constants : &fp->constants;
-@@ -1247,6 +1284,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1247,6 +1290,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          int valid, fixed;
          u64 vp_hash, fp_struct;
          u32 fp_ctrl_key, cube_mask, vtex_mask, layout_mask, layout_stride, rt_count;
@@ -775,7 +800,7 @@ index 9a76e67..3b4aaa1 100644
          rsx_be_format rt_fmt;
          rsx_be_render_state rs;
          u64 key;
-@@ -1259,7 +1299,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1259,7 +1305,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          kmemo.fp_ctrl_key == fp_ctrl_key && kmemo.cube_mask == cube_mask &&
          kmemo.vtex_mask == vtex_mask && kmemo.layout_mask == layout->mask &&
          kmemo.layout_stride == layout->stride && kmemo.rt_count == rt_count &&
@@ -788,7 +813,7 @@ index 9a76e67..3b4aaa1 100644
          key = kmemo.key;
          goto key_done;
      }
-@@ -1271,7 +1315,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1271,7 +1321,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          key = eng_fnv1a(&vp->hash, sizeof vp->hash, key);
          key = eng_fnv1a(&fp->structural, sizeof fp->structural, key);
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
@@ -802,7 +827,7 @@ index 9a76e67..3b4aaa1 100644
          key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
-@@ -1285,6 +1335,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1285,6 +1341,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      kmemo.fp_ctrl_key = fp_ctrl_key; kmemo.cube_mask = cube_mask; kmemo.vtex_mask = vtex_mask;
      kmemo.layout_mask = layout->mask; kmemo.layout_stride = layout->stride;
      kmemo.rt_count = rt_count; kmemo.rt_fmt = rt_fmt; memcpy(&kmemo.rs, rs, sizeof *rs);
@@ -812,7 +837,7 @@ index 9a76e67..3b4aaa1 100644
      kmemo.key = key;
  key_done:;
  
-@@ -1317,9 +1370,13 @@ key_done:;
+@@ -1317,9 +1376,13 @@ key_done:;
          vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
                                           layout->mask, s_vs_hlsl,
                                           sizeof s_vs_hlsl);
@@ -828,6 +853,24 @@ index 9a76e67..3b4aaa1 100644
          if (fi > 0 && rs->alpha_test_enable &&
              rsx_fp_apply_alpha_test_buffered(s_ps_hlsl, sizeof s_ps_hlsl,
                                               rs->alpha_func) < 0)
+@@ -1805,6 +1868,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+                                      t.remap & 0xFFFFu, t.format)
+                 : 0;
+             textures[u] = view ? view : g.surfaces[sampled].handle;
++            /* PS3RECOMP_ENG_TEXLOG=1 also names the first 300 render-target
++             * reads: which target a unit's address resolved to, and whether
++             * the texture's size matched it. */
++            { static int on = -1; static int n;
++              if (on < 0) on = getenv("PS3RECOMP_ENG_TEXLOG") ? 1 : 0;
++              if (on && n < 300) { n++;
++                  fprintf(stderr, "[rsx texlog] draw into 0x%08X: unit %u fmt 0x%02X %ux%u remap 0x%04X loc %u off 0x%08X -> surface %ux%u h%u view h%u%s\n",
++                          n_targets ? g.surfaces[target_slots[0]].offset : 0u, u, t.format, t.width, t.height,
++                          t.remap & 0xFFFFu, t.location, t.offset, g.surfaces[sampled].w, g.surfaces[sampled].h,
++                          g.surfaces[sampled].handle, view,
++                          (g.surfaces[sampled].w == t.width && g.surfaces[sampled].h == t.height) ? "" : " SIZE MISMATCH"); } }
+             continue;
+         }
+         const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
 index 933abcb..8408f72 100644
 --- a/libs/video/rsx_fp_decompiler.c
@@ -1626,10 +1669,33 @@ index 98db285..c76ebe4 100644
  
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
 diff --git a/libs/video/rsx_texture_layout.c b/libs/video/rsx_texture_layout.c
-index b32a702..53acd91 100644
+index b32a702..ecb1a85 100644
 --- a/libs/video/rsx_texture_layout.c
 +++ b/libs/video/rsx_texture_layout.c
-@@ -333,3 +333,27 @@ void rsx_texture_component_remap(u32 control1, u32 rsx_fmt, u8 out[4])
+@@ -319,8 +319,21 @@ void rsx_texture_component_remap(u32 control1, u32 rsx_fmt, u8 out[4])
+      * inFamous's fog/DOF pass reads its 256x256 B8 lookup through B and drew
+      * the whole scene black. */
+     static const u8 lanes_b8[4]   = {3, 0, 0, 0};
++    /* X16, X32_FLOAT and the DEPTH16/DEPTH24 formats are one real channel
++     * too, uploaded as R16/R32F, and the sampler presents it on every lane
++     * (RPCS3's {R,R,R,R} for X32_FLOAT and DEPTH*), so a crossbar may read it
++     * through any of A,R,G,B. inFAMOUS 2 binds its 1024x8 X16 lighting ramp
++     * with 0xAAEE -- R from B -- and reads .x: through the ARGB table that is
++     * the empty B component of an R16 resource, zero, and every light in the
++     * main menu was multiplied by it, leaving Cole a black silhouette. (RPCS3
++     * lists X16 as {R,ONE,R,ONE}; that title's crossbar only makes sense with
++     * the value reachable from B, which both readings give for R.) */
++    static const u8 lanes_x[4]    = {0, 0, 0, 0};
+     const u32 base = rsx_fmt & 0x9Fu;
+-    const u8* src2res = base == 0x8Bu ? lanes_g8b8 : base == 0x81u ? lanes_b8 : lanes_argb;
++    const int one_channel = base == 0x90u || base == 0x91u || base == 0x92u ||
++                            base == 0x93u || base == 0x94u || base == 0x9Cu;
++    const u8* src2res = base == 0x8Bu ? lanes_g8b8 : base == 0x81u ? lanes_b8
++                      : one_channel   ? lanes_x    : lanes_argb;
+ 
+     if (!(control1 & 0xFFFFu)) control1 = 0xAAE4u;   /* unset -> identity */
+ 
+@@ -333,3 +346,27 @@ void rsx_texture_component_remap(u32 control1, u32 rsx_fmt, u8 out[4])
                             : src2res[s];
      }
  }
@@ -2057,6 +2123,51 @@ index 0000000..6152dd0
 + for(u32 u=0;u<16;u++){rsx_test_fp_instr(uc+u*16,RSX_TEST_FP_OPC(0x17)|RSX_TEST_FP_TEXU(u)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|(u==15?RSX_TEST_FP_END:0),RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);rsx_fp_shadow_desc_from_texture(&d[u],0xB0,2,0,1,0x02020000,3u<<28,0x80000000);}
 + CHECK(rsx_fp_texture_units(uc,256)==65535,"all sixteen unit mask");CHECK(rsx_fp_decompile_buffered_shadow_ex(uc,256,64,0,d,now,sizeof now,&nc)>0&&strstr(now,"_rsx_shadow_cmp15"),"bounded output supports sixteen comparison helpers");
 + printf("shadow metadata: %d checks, %d failures\n",checks,failures);return failures?1:0;}
+diff --git a/libs/video/tests/test_texture_layout.c b/libs/video/tests/test_texture_layout.c
+index 5a825a0..11c7af6 100644
+--- a/libs/video/tests/test_texture_layout.c
++++ b/libs/video/tests/test_texture_layout.c
+@@ -666,6 +666,32 @@ static void test_remap_g8b8_lanes(void)
+ /* Compressed formats decode to RGBA, so they use the same lanes as A8R8G8B8 --
+  * NOT a bent table cancelling a reversed crossbar, which is how the old bug
+  * hid on DXT while breaking everything else. */
++/* X16, X32_FLOAT and the DEPTH formats are one real channel, uploaded as
++ * R16/R32F and presented on every lane, so a crossbar that reads B gets the
++ * value and not an empty component. inFAMOUS 2 binds its X16 lighting ramp
++ * with 0xAAEE (R from B); through the ARGB table that read zero and nothing
++ * in the main menu was lit. */
++static void test_remap_one_channel_lanes(void)
++{
++    u8 m[4];
++    rsx_texture_component_remap(0xAAEEu, FMT_X16, m);
++    CHECK_EQ(m[R_], 0); CHECK_EQ(m[G_], 0); CHECK_EQ(m[B_], 0); CHECK_EQ(m[A_], 0);
++    rsx_texture_component_remap(0xAAE4u, FMT_X16 | FMT_LN, m);
++    for (int i = 0; i < 4; i++) CHECK_EQ(m[i], 0);
++    rsx_texture_component_remap(0xAAE4u, FMT_X32F, m);
++    for (int i = 0; i < 4; i++) CHECK_EQ(m[i], 0);
++    rsx_texture_component_remap(0xAAE4u, FMT_DEPTH16, m);
++    for (int i = 0; i < 4; i++) CHECK_EQ(m[i], 0);
++    rsx_texture_component_remap(0xAAE4u, FMT_DEPTH24, m);
++    for (int i = 0; i < 4; i++) CHECK_EQ(m[i], 0);
++    /* A forced constant still wins over the crossbar. */
++    rsx_texture_component_remap(0xA9EEu, FMT_X16, m);     /* op for A = 1 */
++    CHECK_EQ(m[A_], RSX_REMAP_ONE); CHECK_EQ(m[R_], 0);
++    /* Two-channel and four-channel formats keep their own tables. */
++    rsx_texture_component_remap(0xAAEEu, FMT_A8R8G8B8, m);
++    CHECK_EQ(m[R_], 2);                                    /* R from B = comp 2 */
++}
++
+ static void test_remap_dxt_matches_argb(void)
+ {
+     u8 a[4], d[4];
+@@ -705,6 +731,7 @@ int main(void)
+     test_remap_field_order_is_not_reversed();
+     test_remap_force_zero_and_one();
+     test_remap_g8b8_lanes();
++    test_remap_one_channel_lanes();
+     test_remap_dxt_matches_argb();
+     test_remap_rejects_null();
+ 
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
 index 4c03372..51bfb18 100644
 --- a/runtime/ppu/ppu_fs.cpp
@@ -2204,10 +2315,10 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..032d5f8 100644
+index 3addd48..427d640 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
-@@ -709,6 +709,38 @@ static int spu_mfc_atomic_body(spu_context* ctx, uint32_t cmd)
+@@ -709,6 +709,51 @@ static int spu_mfc_atomic_body(spu_context* ctx, uint32_t cmd)
        } }
      switch (cmd) {
      case MFC_GETLLAR_CMD:
@@ -2232,11 +2343,24 @@ index 3addd48..032d5f8 100644
 +                  for (int i = 0; i < ASTAT_MAX; i++) {
 +                      if (!s_st[i].c || !s_st[i].n) continue;
 +                      const uint8_t* p = vm_base + s_st[i].ea;
-+                      fprintf(stderr, "[atomic-stat] spu=%X img=%d pc=0x%05X %.0f getllar/s, last line 0x%08X: "
-+                              "%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
++                      fprintf(stderr, "[atomic-stat] spu=%X img=%d pc=0x%05X %.0f getllar/s, last line 0x%08X:",
 +                              s_st[i].c->spu_id, s_st[i].c->image_id, (unsigned)(s_st[i].c->pc & SPU_LS_MASK),
-+                              s_st[i].n / secs, s_st[i].ea,
-+                              p[0],p[1],p[2],p[3], p[4],p[5],p[6],p[7], p[8],p[9],p[10],p[11], p[12],p[13],p[14],p[15]);
++                              s_st[i].n / secs, s_st[i].ea);
++                      for (int o = 0; o < 48; o += 4)
++                          fprintf(stderr, " %02X%02X%02X%02X", p[o],p[o+1],p[o+2],p[o+3]);
++                      /* A word that looks like a pointer into guest memory: the
++                       * item it names, so a cursor circling a list shows the list. */
++                      for (int o = 0; o < 16; o += 4) {
++                          const uint32_t w = ((uint32_t)p[o]<<24)|((uint32_t)p[o+1]<<16)|((uint32_t)p[o+2]<<8)|p[o+3];
++                          if (w >= 0x10000u && w < 0x20000000u && !(w & 3u)) {
++                              const uint8_t* q = vm_base + w;
++                              fprintf(stderr, " | [0x%08X]:", w);
++                              for (int k = 0; k < 32; k += 4)
++                                  fprintf(stderr, " %02X%02X%02X%02X", q[k],q[k+1],q[k+2],q[k+3]);
++                              break;
++                          }
++                      }
++                      fprintf(stderr, "\n");
 +                      s_st[i].n = 0;
 +                  }
 +                  s_last_ns = now;
@@ -2246,7 +2370,7 @@ index 3addd48..032d5f8 100644
          /* Lockstep tick: a guest GETLLAR..PUTLLC poll loop is intra-function
           * (all gotos), so it never crosses the SPU_DRAIN tick site -- without a
           * tick here a polling SPU would hold the run token forever while the
-@@ -1294,8 +1326,14 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+@@ -1294,8 +1339,14 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
           * read the decrementer before writing it. */
          if (!ctx->dec_base_ns) ctx->dec_base_ns = spu_host_ns();
          uint64_t elapsed = spu_host_ns() - ctx->dec_base_ns;
@@ -2263,7 +2387,7 @@ index 3addd48..032d5f8 100644
          v = ctx->decrementer - ticks;
          break;
      }
-@@ -1705,6 +1743,15 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
+@@ -1705,6 +1756,15 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
          for (unsigned slot = 0; slot < 4 && !f; ++slot)
              if (ctx->resident_code[slot].image_id)
                  f = (spu_lifted_fn)spu_lookup(lsa, ctx->resident_code[slot].image_id);
@@ -2279,7 +2403,7 @@ index 3addd48..032d5f8 100644
      return f;
  }
  
-@@ -2366,7 +2413,21 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2366,7 +2426,21 @@ static int spu_smc_microstep(spu_context* ctx)
          /* Stop at the drain's return point too: it sits mid-function, so it is
           * no lifted entry, and a job's return would otherwise run on through
           * the caller's code (GH3's song-freeze; see drain_ret_pc). */
@@ -2302,7 +2426,7 @@ index 3addd48..032d5f8 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
-@@ -2633,15 +2694,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2633,15 +2707,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      }
  
      if (!fn && !ctx->policy_mode && ctx->pc >= SPU_JM2_KERNEL_BASE) {
