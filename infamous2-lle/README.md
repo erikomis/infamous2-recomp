@@ -23,6 +23,9 @@ On macOS/arm64, headless:
 Not checked: whether a press of ✕ starts a new game. Every run that tried it
 had the Mac go to sleep part-way, which stretches all of the timing.
 
+Fixed since: the saturated-green patch on Cole's scalp (untranslated
+pack/unpack opcodes, see below).
+
 Known slow path: an SPU job enters LS `0x6C64` unlifted and runs about 22,000
 instructions on the interpreter each time before it returns to `0x56B8` /
 `0x56D0`. Which image holds that code is still open.
@@ -30,9 +33,10 @@ instructions on the interpreter each time before it returns to `0x56B8` /
 ## Fixes in `patches/` (against the fork)
 
 `ps3recomp-fork-770660a-with-upstream-prs.patch` is what
-`../tools/setup_toolkit.sh` applies: the three fixes below plus the upstream
-pull requests in `patches/upstream-prs/` (see `../CREDITS.md`).
-`ps3recomp-fork-770660a-local.patch` is the three fixes alone.
+`../tools/setup_toolkit.sh` applies: every fix below plus the upstream pull
+requests in `patches/upstream-prs/` (see `../CREDITS.md`).
+`ps3recomp-fork-770660a-local.patch` is the first three fixes alone, kept for
+reference.
 
 - **`tools/ppu_lifter.py`, jump tables.** A tail-call epilogue (`ld r30` ... `b`)
   between the prologue and a switch was read as the base register's
@@ -46,6 +50,19 @@ pull requests in `patches/upstream-prs/` (see `../CREDITS.md`).
   the interpreter. The "is this address lifted?" probe ignored the resident WWS
   job overlay, so the rest of every interrupted job ran interpreted (83,000
   instructions on average). That was why the menu ran at about 0.4 fps.
+- **`libs/video/rsx_fp_decompiler.c`, pack/unpack opcodes.** PK4UB, UP4UB,
+  PKG and UPG (and PK4B/UP4B, PK2H/UP2H, PK2US/UP2US) were not translated at
+  all: the instruction was skipped and the destination kept its old value.
+  The character materials use PK4UB→UPG and PKG→UP4UB as their sRGB↔linear
+  conversion right before the outputs, so Cole's scalp came out saturated
+  green and skin tones were off. Implemented after RPCS3's
+  FragmentProgramDecompiler (`_builtin_pkg`/`_builtin_upg`). An unhandled
+  opcode now prints its number and raw words in the dumped shader.
+- **`libs/video/rsx_metal_backend.m`, diagnostics.** `PS3RECOMP_METAL_PASS_LOG=2`
+  splits a pass at every pipeline/texture change; `_MIN` and `_EVERY` set the
+  record threshold and period for the pass log, `PS3RECOMP_METAL_SURF_DUMP_MIN`
+  for the surface dump (the defaults only fire on frames with more than 1000
+  records, which a cutscene does not reach).
 
 ## Layout
 
@@ -58,6 +75,9 @@ pull requests in `patches/upstream-prs/` (see `../CREDITS.md`).
 | `tools/boot.sh` | Timed headless run |
 | `tools/capture.sh` | Headless run that keeps a PNG of the presented frame every 10 s |
 | `tools/lldb_barrier.py` | Prints the WWS job barrier lanes (attach did not work here; kept for a debug launch) |
+| `tools/passlog.py` | Summarises a `PS3RECOMP_METAL_PASS_LOG` log: passes, targets, pipelines, textures |
+| `tools/psfeatures.py` | One line per dumped pixel shader: units sampled, targets, risky ops |
+| `tools/surfstats.py`, `tools/greenshare.py` | Fill/green/brightness stats of dumped render targets and captured frames |
 
 ## Rebuilding
 

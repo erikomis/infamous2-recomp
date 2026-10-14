@@ -23,7 +23,7 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Menu principal 3D, menu de pausa, opções | ✅ |
 | Jogo novo → vídeo de abertura → cutscene no motor do jogo | ✅ ~17 fps |
 | Gameplay controlável | ⏳ ainda não alcançado |
-| Mancha verde no cabelo do Cole, T-pose no menu de opções | 🐞 conhecidos |
+| T-pose do Cole no fundo do menu de opções | 🐞 conhecido |
 
 Detalhes e próximos passos em [ROADMAP.md](ROADMAP.md).
 
@@ -93,6 +93,7 @@ No toolkit (em `infamous2-lle/patches/`, aplicadas pelo `setup_toolkit.sh`):
 - **Lifter:** jump tables perdidas atrás de um epílogo com tail-call.
 - **cellGcm:** o FIFO pulava comandos quando o jogo "estacionava" a GPU antes de religar o bloco; o menu congelava.
 - **SPU:** o interpretador não voltava ao código traduzido dentro dos módulos de job WWS; o menu rodava a ~0,4 fps.
+- **Fragment shaders:** os opcodes de pack/unpack do NV40 (PK4UB, UP4UB, PKG, UPG e os irmãos de 16 bits) não existiam no decompilador e eram pulados; o jogo os usa como conversão sRGB↔linear nos materiais de personagem, e sem eles o couro cabeludo do Cole saía verde e a pele com tons errados. Implementados seguindo o RPCS3.
 - **Upstream:** PRs abertos aplicados — #297, #275, #274, #278, #293, #303; #266 e #302 portados à mão (créditos em [CREDITS.md](CREDITS.md)).
 
 No port: extrator dos 27 módulos de job embutidos no EBOOT, registro do

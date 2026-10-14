@@ -30,11 +30,11 @@ gameplay controlável.
 - [x] Jogo novo, vídeo de abertura, cutscene no motor do jogo.
 - [x] Menu de pausa e tela de opções.
 - [x] Iluminação dos personagens nas cutscenes (comparação de profundidade das sombras).
+- [x] Cor dos materiais de personagem: o decompilador pulava os opcodes de pack/unpack (PK4UB, UP4UB, PKG, UPG) que o jogo usa como conversão sRGB↔linear; era a mancha verde no couro cabeludo do Cole e tons de pele errados.
 
 ## Fase 3 — Gameplay
 
 - [ ] Passar da cutscene das docas para a primeira missão e corrigir o que quebrar.
-- [ ] Mancha verde-pura no couro cabeludo do Cole: despejar as texturas desse draw e conferir formato/remap.
 - [ ] Cole em T-pose no fundo do menu de opções (animação; o inFamous 1 no fork tem o mesmo sintoma).
 - [ ] Trecho SPU que ainda roda interpretado (`LS 0x6C64`, ~22 mil instruções por vez): achar a imagem dona e traduzir esse ponto de entrada.
 - [ ] Áudio real: até agora todos os testes usaram `SDL_AUDIODRIVER=dummy`.
