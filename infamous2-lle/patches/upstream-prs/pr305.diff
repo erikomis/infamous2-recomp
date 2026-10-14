@@ -1,0 +1,377 @@
+diff --git a/docs/rsx-texture-gamma.md b/docs/rsx-texture-gamma.md
+new file mode 100644
+index 00000000..c6c7e280
+--- /dev/null
++++ b/docs/rsx-texture-gamma.md
+@@ -0,0 +1,36 @@
++# Texture input gamma state
++
++The shared draw engine now honors TEXTURE_ADDRESS bits 20..23 as a final RGBA
++channel mask. Gamma decoding is the standard piecewise sRGB-to-linear
++operation, applied to the filtered/remapped sample before instruction result
++scaling and destination saturation. It leaves unselected lanes unchanged.
++
++Normalized color format eligibility follows the RSX format feature table;
++float, depth, X16/Y16_X16 and HILO formats bypass gamma. Signed source channels
++take precedence after crossbar mapping. EXP_TEX overrides gamma per fetch, so
++an ordinary and an expanded fetch using the same unit remain distinct.
++Only units with an active referenced fetch contribute gamma cache identity
++or cause a helper to be emitted. Gamma state does not mutate texture bytes or
++request extra uploads. Disabling the mask reuses the original raw variant.
++
++TEX, TXP, TXB and TXL use the existing translated fetches. Active gamma on
++unsupported TXD/TEXBEM/TXPBEM rejects translation rather than silently omitting
++the operation. Existing entry points pass NULL metadata and preserve their
++source bytes. Unsupported format decoding, ADDRESS unsigned-remap bias,
++source signed decoding and standalone legacy backend shader paths remain
++existing limits; this correction does not claim to implement those paths.
++
++Primary contracts at RPCS3 ffba2bf09ef3980638f9327b25240d81414034ab:
++- [per-format hardware feature table](https://github.com/RPCS3/rpcs3/blob/ffba2bf09ef3980638f9327b25240d81414034ab/rpcs3/Emu/RSX/Common/TextureUtils.cpp)
++- [channel mask and precedence](https://github.com/RPCS3/rpcs3/blob/ffba2bf09ef3980638f9327b25240d81414034ab/rpcs3/Emu/RSX/RSXTexture.cpp)
++- [post-sample processing and EXP_TEX override](https://github.com/RPCS3/rpcs3/blob/ffba2bf09ef3980638f9327b25240d81414034ab/rpcs3/Emu/RSX/Program/GLSLSnippets/RSXProg/RSXFragmentTextureOps.glsl)
++- [piecewise transfer](https://github.com/RPCS3/rpcs3/blob/ffba2bf09ef3980638f9327b25240d81414034ab/rpcs3/Emu/RSX/Program/GLSLSnippets/RSXProg/RSXFragmentPrologue.glsl)
++
++Synthetic `test_rsx_texture_gamma.c` exercises real production dispatch/cache,
++format and remap state, all 16 masks, supported fetch types, explicit failures
++and source-byte compatibility. Its Metal companion consumes these generated
++shaders on units 0 and 15 with asymmetric bilinear samples and a nonidentity
++resource crossbar. Float observation targets expose arithmetic differences.
++These are translated GPU checks, not original RSX hardware or scene claims.
++Framebuffer output encoding is a separate original control: an encoded copy
++requires both stages to preserve its original color math.
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+index b438d877..45b219b9 100644
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -1336,6 +1336,15 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+     const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
+     const u32 cube_mask = eng_cube_mask();
+     const u32 vtex_mask = eng_vtex_mask();
++    u8 gamma_masks[RSX_DSP_NUM_TEXTURES] = {0};
++    if (!fixed) for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u) {
++        rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
++        if (t.enabled) gamma_masks[u] = rsx_texture_gamma_mask(t.format, t.remap, t.filter, t.wrap);
++    }
++    const u32 gamma_units = fixed ? 0 : rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
++    for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
++        if (!(gamma_units & (1u << u))) gamma_masks[u] = 0;
++
+     u32 unnorm_dim[RSX_DSP_NUM_TEXTURES][2];
+     const u32 unnorm_mask = eng_unnorm_units(unnorm_dim);
+ 
+@@ -1358,6 +1367,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         if (!key) return 0;
+         const u32 fp_ctrl_key = fp_ctrl & 0x40u;
+         key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
++        if (gamma_units) key = eng_fnv1a(gamma_masks, sizeof gamma_masks, key);
+         key = eng_fnv1a(&cube_mask, sizeof cube_mask, key);
+         key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
+         key = eng_fnv1a(&unnorm_mask, sizeof unnorm_mask, key);
+@@ -1389,7 +1399,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
+                                          layout->mask, s_vs_hlsl,
+                                          sizeof s_vs_hlsl);
+-        fi = rsx_fp_decompile_buffered_ex(fp_uc, fp_size, fp_ctrl, cube_mask,
++        fi = rsx_fp_decompile_buffered_color_ex(fp_uc, fp_size, fp_ctrl, cube_mask, gamma_masks,
+                                           s_ps_hlsl, sizeof s_ps_hlsl, &nconst);
+         if (fi > 0 && nconst != g.fp_constants.count) fi = -1;
+         if (fi > 0 && rsx_fp_apply_unnorm_scale(s_ps_hlsl, sizeof s_ps_hlsl, unnorm_mask,
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 545670f2..09d08378 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -72,7 +72,7 @@ enum {
+     OP_LIT=0x1E, OP_LRP=0x1F, OP_STR=0x20, OP_SFL=0x21, OP_COS=0x22,
+     OP_SIN=0x23, OP_PK2H=0x24, OP_UP2H=0x25, OP_POW=0x26, OP_PK4UB=0x27,
+     OP_UP4UB=0x28, OP_PK2US=0x29, OP_UP2US=0x2A, OP_DP2A=0x2E, OP_TXL=0x2F,
+-    OP_TXB=0x31, OP_RFL=0x36, OP_DP2=0x38, OP_NRM=0x39, OP_DIV=0x3A,
++    OP_TXB=0x31, OP_TEXBEM=0x33, OP_TXPBEM=0x34, OP_RFL=0x36, OP_DP2=0x38, OP_NRM=0x39, OP_DIV=0x3A,
+     OP_DIVSQ=0x3B, OP_LIF=0x3C, OP_FENCT=0x3D, OP_FENCB=0x3E
+ };
+ 
+@@ -415,11 +415,54 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+     return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
+ }
+ 
++
++/* EXP_TEX overrides gamma on compatible normalized color formats. Metadata
++ * has already excluded formats without gamma support. */
++u32 rsx_fp_texture_gamma_units(const u8* ucode, u32 max_bytes,
++                                const u8 gamma_masks[16])
++{
++    if (!ucode || !gamma_masks) return 0;
++    u32 units = 0;
++    for (u32 off = 0; off + 16 <= max_bytes;) {
++        const u32 w0 = rsx_fp_read_word(ucode + off);
++        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
++        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
++        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        const u32 op = (w0 >> 24) & 63u, unit = (w0 >> FP_TEX_UNIT_SHIFT) & 15u;
++        if (!(w2 & FP_BRANCH) && !(w0 & (1u << 21)) && gamma_masks[unit] &&
++            (op == OP_TEX || op == OP_TXP || op == OP_TXB || op == OP_TXL ||
++             op == OP_TXD || op == OP_TEXBEM || op == OP_TXPBEM))
++            units |= 1u << unit;
++        off += 16;
++        if (!(w2 & FP_BRANCH) && ((w1 & 3u) == 2 || (w2 & 3u) == 2 || (w3 & 3u) == 2)) off += 16;
++        if (w0 & FP_END) return units;
++    }
++    return 0;
++}
++
++static void fp_gamma_helper(Out* out)
++{
++    out_puts(out,
++        "float4 _rsx_gamma_input(float4 v, uint mask) {\n"
++        "    float4 lo = v / 12.92;\n"
++        "    float4 hi = pow(max((v + 0.055) / 1.055, (float4)0), (float4)2.4);\n"
++        "    float4 decoded = float4(v.r > 0.04045 ? hi.r : lo.r,\n"
++        "                            v.g > 0.04045 ? hi.g : lo.g,\n"
++        "                            v.b > 0.04045 ? hi.b : lo.b,\n"
++        "                            v.a > 0.04045 ? hi.a : lo.a);\n"
++        "    return float4((mask & 1u) ? decoded.r : v.r,\n"
++        "                  (mask & 2u) ? decoded.g : v.g,\n"
++        "                  (mask & 4u) ? decoded.b : v.b,\n"
++        "                  (mask & 8u) ? decoded.a : v.a);\n}\n");
++}
++
+ static int rsx_fp_decompile_internal(
+     const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
+-    int buffered, char* out, u32 out_size, u32* out_constant_count)
++    int buffered, const u8 gamma_masks[16],
++    char* out, u32 out_size, u32* out_constant_count)
+ {
+     if (!ucode || !out || out_size == 0) return -1;
++    const u32 gamma_units = rsx_fp_texture_gamma_units(ucode, max_bytes, gamma_masks);
+ 
+     u32 buffered_constant_count = 0;
+     if (buffered) {
+@@ -609,6 +652,14 @@ static int rsx_fp_decompile_internal(
+             continue;
+         }
+ 
++        if (gamma_masks && gamma_masks[tex_unit] && !(w0 & (1u << 21)) &&
++            (opcode == OP_TXD || opcode == OP_TEXBEM || opcode == OP_TXPBEM)) {
++            static u32 reported;
++            if (reported++ < 32)
++                fprintf(stderr, "[RSX fp] gamma fetch opcode %u unsupported on unit %u\n", opcode, tex_unit);
++            return -1;
++        }
++
+         /* Build the RHS expression for this opcode. */
+         char rhs[640];
+         int handled = 1;
+@@ -738,6 +789,14 @@ static int rsx_fp_decompile_internal(
+             break;
+         }
+ 
++        if (gamma_masks && gamma_masks[tex_unit] && !(w0 & (1u << 21)) &&
++            (opcode == OP_TEX || opcode == OP_TXP || opcode == OP_TXB || opcode == OP_TXL)) {
++            char sample[sizeof rhs]; memcpy(sample, rhs, sizeof sample);
++            const int length = snprintf(rhs, sizeof rhs, "_rsx_gamma_input(%s, %uu)",
++                                        sample, gamma_masks[tex_unit] & 15u);
++            if (length < 0 || (size_t)length >= sizeof rhs) return -1;
++        }
++
+         int has_dest = !(w0 & FP_OUT_NONE);
+         if (handled && (has_dest || set_cond)) {
+             u32 dst_idx = (w0 & FP_OUT_REG_MASK) >> FP_OUT_REG_SHIFT;
+@@ -877,7 +936,7 @@ static int rsx_fp_decompile_internal(
+     /* Preamble: PSInput matches the backend's placeholder layout; temp/half
+      * register files; texture+sampler banks for TEX. Built here, in front of
+      * the body, now that the return type is known. */
+-    char preamble[2048];
++    char preamble[4096]; /* optional post-sample color helper plus declarations */
+     Out p = { preamble, sizeof(preamble), 0, 1 };
+     preamble[0] = '\0';
+     out_puts(&p,
+@@ -915,6 +974,7 @@ static int rsx_fp_decompile_internal(
+             buffered_constant_count ? buffered_constant_count : 1u);
+         out_puts(&p, constants_decl);
+     }
++    if (gamma_units) fp_gamma_helper(&p);
+     if (targets == 1) {
+         out_puts(&p, "float4 main(PSInput input) : SV_TARGET {\n");
+     } else {
+@@ -940,7 +1000,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
+                         u32 tex_cube_mask, char* out, u32 out_size)
+ {
+     return rsx_fp_decompile_internal(
+-        ucode, max_bytes, ctrl, tex_cube_mask, 0, out, out_size, NULL);
++        ucode, max_bytes, ctrl, tex_cube_mask, 0, NULL, out, out_size, NULL);
+ }
+ 
+ int rsx_fp_decompile_buffered_ex(
+@@ -948,7 +1008,7 @@ int rsx_fp_decompile_buffered_ex(
+     char* out, u32 out_size, u32* out_constant_count)
+ {
+     return rsx_fp_decompile_internal(
+-        ucode, max_bytes, ctrl, tex_cube_mask, 1, out, out_size,
++        ucode, max_bytes, ctrl, tex_cube_mask, 1, NULL, out, out_size,
+         out_constant_count);
+ }
+ 
+@@ -1264,3 +1324,11 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
+     }
+     return patched;
+ }
++
++int rsx_fp_decompile_buffered_color_ex(
++    const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
++    const u8 gamma_masks[16], char* out, u32 out_size, u32* out_constant_count)
++{
++    return rsx_fp_decompile_internal(ucode, max_bytes, ctrl, tex_cube_mask,
++        1, gamma_masks, out, out_size, out_constant_count);
++}
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+index d54473ba..b8ff9534 100644
+--- a/libs/video/rsx_fp_decompiler.h
++++ b/libs/video/rsx_fp_decompiler.h
+@@ -155,6 +155,15 @@ int rsx_fp_constant_ring_plan(
+ int rsx_vertex_constant_ring_plan(
+     u32 used, u32 capacity, u32 block_bytes, u32* out_offset);
+ 
++/* Gamma metadata is a post-filter/post-remap RGBA lane mask, with formats
++ * validated by rsx_texture_gamma_mask. EXP_TEX overrides gamma per fetch.
++ * Old entry points pass NULL and preserve their source byte for byte. */
++u32 rsx_fp_texture_gamma_units(const u8* ucode, u32 max_bytes,
++                                const u8 gamma_masks[16]);
++int rsx_fp_decompile_buffered_color_ex(
++    const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
++    const u8 gamma_masks[16], char* out, u32 out_size, u32* out_constant_count);
++
+ /* Return the mnemonic for an NV40 fragment opcode (or "?" if unknown).
+  * Useful for disassembly/logging. */
+ const char* rsx_fp_opcode_name(u32 opcode);
+diff --git a/libs/video/rsx_texture_layout.c b/libs/video/rsx_texture_layout.c
+index 4e0d0e03..cc659439 100644
+--- a/libs/video/rsx_texture_layout.c
++++ b/libs/video/rsx_texture_layout.c
+@@ -332,3 +332,26 @@ void rsx_texture_component_remap(u32 control1, u32 rsx_fmt, u8 out[4])
+                            : src2res[s];
+     }
+ }
++
++/* ADDRESS gamma flags name final RGBA lanes, after remapping. Signed input
++ * interpretation wins; its FILTER ARGB flags follow the source crossbar. */
++u8 rsx_texture_gamma_mask(u32 format, u32 control1, u32 filter, u32 address)
++{
++    switch (format & 0x9Fu) {
++    case 0x81: case 0x82: case 0x83: case 0x84: case 0x85:
++    case 0x86: case 0x87: case 0x88: case 0x8B: case 0x8D: case 0x8E: case 0x8F:
++    case 0x97: case 0x9D: case 0x9E: break;
++    default: return 0;
++    }
++    u8 gamma = (u8)((address >> 20) & 15u);
++    if (!gamma) return 0;
++    if (!(control1 & 0xFFFFu)) control1 = 0xAAE4u;
++    u8 remap[4]; rsx_texture_component_remap(control1, format, remap);
++    static const u8 rgba_lane[4] = {3, 0, 1, 2};
++    for (u32 i = 0; i < 4; ++i) {
++        const u32 source = (control1 >> (2u * i)) & 3u;
++        if (remap[i] < RSX_REMAP_ZERO && ((filter >> (28u + source)) & 1u))
++            gamma &= (u8)~(1u << rgba_lane[i]);
++    }
++    return gamma;
++}
+diff --git a/libs/video/rsx_texture_layout.h b/libs/video/rsx_texture_layout.h
+index ce99e681..325d761f 100644
+--- a/libs/video/rsx_texture_layout.h
++++ b/libs/video/rsx_texture_layout.h
+@@ -170,6 +170,11 @@ void rsx_texture_decode(void* dst, u32 dst_pitch,
+                         const u8* src, u32 w, u32 h,
+                         const rsx_tex_layout* tl, int argb_as_rgba);
+ 
++/* Per-final-RGBA-lane gamma flags from TEXTURE_ADDRESS bits 20..23.
++ * Float/depth/non-gamma formats return zero; source signed flags take
++ * precedence after the existing crossbar. No texture bytes are converted. */
++u8 rsx_texture_gamma_mask(u32 format, u32 control1, u32 filter, u32 address);
++
+ /* --- component remap (NV4097 TEXTURE_CONTROL1 crossbar) ------------------
+  *
+  * Each of the texture's four outputs is either a channel of the sampled
+diff --git a/libs/video/tests/test_rsx_texture_gamma.c b/libs/video/tests/test_rsx_texture_gamma.c
+new file mode 100644
+index 00000000..65a37164
+--- /dev/null
++++ b/libs/video/tests/test_rsx_texture_gamma.c
+@@ -0,0 +1,44 @@
++/* Source/state tests use synthetic programs and the production engine. */
++#define main existing_engine_test_main
++#include "test_rsx_draw_engine.c"
++#undef main
++#include "rsx_test_programs.h"
++#include "rsx_fp_decompiler.h"
++#include "rsx_texture_layout.h"
++static char captured[65536];
++static u32 capture_pipeline(void* u,const char* vs,const char* ps,const rsx_be_render_state* rs,const rsx_vertex_layout_plan* l,u32 stride,rsx_be_format f,u32 n)
++{ snprintf(captured,sizeof captured,"%s",ps);return stub_pipeline_create(u,vs,ps,rs,l,stride,f,n); }
++static void make_fp(u8* p,u32 opcode,u32 unit,u32 expanded)
++{ rsx_test_fp_instr(p,RSX_TEST_FP_OPC(opcode)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|RSX_TEST_FP_TEXU(unit)|RSX_TEST_FP_END|(expanded?1u<<21:0),RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT); }
++int main(int argc,char** argv)
++{
++ vm_base=calloc(1,GUEST_BYTES);ppu_vm_size=GUEST_BYTES;engine_up();rsx_draw_backend be=g_stub_backend;be.pipeline_create=capture_pipeline;rsx_draw_engine_set_backend(&be);
++ u8 vp[32];rsx_test_vp_mov_out(vp,0,RSX_TEST_VP_SWZ_IDENT,0,0);rsx_test_vp_mov_out(vp+16,8,RSX_TEST_VP_SWZ_IDENT,7,1);m(0x1E9C,0);
++ for(u32 i=0;i<8;i++){u32 x;memcpy(&x,vp+i*4,4);m(0xB80+i*4,x);}m(0x1EA0,0);make_fp(vm_base+0x60000,0x17,0,0);m(0x8E4,0x60002);m(0x1D60,0x40);
++ bind_texture_unit(RSX_LOCATION_MAIN,TEX_OFFSET);m(M_TEX_UNIT+8,0);draw_triangle();const u32 raw=stub.bound_pipeline;char original[65536];memcpy(original,captured,sizeof original);const int uploads=stub.n_texture_upload;
++ m(M_TEX_UNIT+8,7u<<20);draw_triangle();const u32 gamma=stub.bound_pipeline;
++ CHECK(stub.n_pipeline_create==2&&gamma!=raw,"gamma mask selects distinct shader");CHECK(strstr(captured,"_rsx_gamma_input")!=NULL,"gamma shader decodes samples");CHECK(stub.n_texture_upload==uploads,"state transition does not mutate/upload texture bytes");CHECK(stub.bound_mask==1,"only referenced unit is bound");
++ m(M_TEX_UNIT+0x20+8,15u<<20);draw_triangle();CHECK(stub.bound_pipeline==gamma&&stub.n_pipeline_create==2,"unused unit does not create helper/key/binding");
++ m(M_TEX_UNIT+8,0);draw_triangle();CHECK(stub.bound_pipeline==raw&&stub.n_pipeline_create==2,"gamma disable switchback reuses raw shader");
++ make_fp(vm_base+0x60000,0x17,0,1);m(M_TEX_UNIT+8,0);draw_triangle();const u32 expanded=stub.bound_pipeline;const int count=stub.n_pipeline_create;m(M_TEX_UNIT+8,7u<<20);draw_triangle();CHECK(stub.bound_pipeline==expanded&&stub.n_pipeline_create==count,"EXP_TEX overrides gamma without extra cache identity");
++ const u32 formats[]={0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x8B,0x8D,0x8E,0x8F,0x97,0x9D,0x9E};
++ for(u32 f=0;f<sizeof formats/sizeof formats[0];++f)for(u32 mask=0;mask<16;++mask)CHECK(rsx_texture_gamma_mask(formats[f],0xAAE4,0,mask<<20)==mask,"supported normalized formats retain final lane mask");
++ const u32 bypass[]={0x90,0x91,0x92,0x93,0x94,0x95,0x98,0x99,0x9A,0x9B,0x9C,0x9F,0x80};
++ for(u32 f=0;f<sizeof bypass/sizeof bypass[0];++f)CHECK(!rsx_texture_gamma_mask(bypass[f],0xAAE4,0,15u<<20),"float/depth/non-gamma format bypasses");
++ CHECK(rsx_texture_gamma_mask(0x85,0xAAE4,1u<<29,15u<<20)==14,"signed source R wins over gamma R");
++ CHECK(rsx_texture_gamma_mask(0x85,0xAAE4,1u<<28,15u<<20)==7,"signed source A wins over gamma A");
++ CHECK(rsx_texture_gamma_mask(0x85,0xAA1B,1u<<28,15u<<20)==11,"signed source follows remap while gamma names final B");
++ CHECK(rsx_texture_gamma_mask(0x85,0,0,7u<<20)==7,"unset crossbar retains default identity");
++ u8 fp[32];char hlsl[65536],legacy[65536];u8 masks[16]={0};u32 constants=0;
++ for(u32 unit=0;unit<16;unit+=15)for(u32 op=0;op<4;++op)for(u32 mask=0;mask<16;++mask){const u32 ops[]={0x17,0x18,0x31,0x2F};make_fp(fp,ops[op],unit,0);memset(masks,0,sizeof masks);masks[unit]=(u8)mask;
++ CHECK(rsx_fp_decompile_buffered_color_ex(fp,16,0x40,0,masks,hlsl,sizeof hlsl,&constants)>0,"supported texture opcode decompiles with channel mask");
++ CHECK((strstr(hlsl,"float4 _rsx_gamma_input")!=NULL)==(mask!=0),"helper emitted only for active fetch");
++ if(mask==0){CHECK(rsx_fp_decompile_buffered_ex(fp,16,0x40,0,legacy,sizeof legacy,&constants)>0&&!strcmp(legacy,hlsl),"zero metadata preserves original source byte for byte");}
++ if(argc==2){char path[1024];snprintf(path,sizeof path,"%s/u%u-op%u-mask%u.hlsl",argv[1],unit,op,mask);FILE* f=fopen(path,"wb");if(f){fputs(hlsl,f);fclose(f);}}
++ }
++ masks[0]=7;const u32 unsupported[]={0x19,0x33,0x34};for(u32 i=0;i<3;++i){make_fp(fp,unsupported[i],0,0);CHECK(rsx_fp_decompile_buffered_color_ex(fp,16,0x40,0,masks,hlsl,sizeof hlsl,&constants)<0,"active unsupported fetch fails explicitly");}
++ make_fp(fp,0x17,0,0);rsx_test_fp_put_word(fp,(RSX_TEST_FP_OPC(0x17)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0));make_fp(fp+16,0x17,0,1);
++ CHECK(rsx_fp_decompile_buffered_color_ex(fp,32,0x40,0,masks,hlsl,sizeof hlsl,&constants)>0,"mixed ordinary/expanded same-unit fetch decompiles");
++ CHECK(rsx_fp_texture_gamma_units(fp,32,masks)==1,"ordinary fetch retains gamma when same unit also expands");
++ engine_down();free(vm_base);printf("texture gamma: %d failures\n",g_failures);return g_failures?1:0;
++}
+diff --git a/libs/video/tests/test_rsx_texture_gamma.m b/libs/video/tests/test_rsx_texture_gamma.m
+new file mode 100644
+index 00000000..2c5e5494
+--- /dev/null
++++ b/libs/video/tests/test_rsx_texture_gamma.m
+@@ -0,0 +1,29 @@
++/* Synthetic post-filter/post-remap gamma check. No title data. */
++#include "../rsx_metal_backend.m"
++u8* vm_base;
++u32 cellGcmResolveLocated(int local,u32 off){(void)local;return off;}
++static unsigned checks,failures;
++#define CHECK(x,label) do{++checks;if(!(x)){++failures;fprintf(stderr,"FAIL %s\n",label);}}while(0)
++static float decode(float v){return v>.04045f?powf((v+.055f)/1.055f,2.4f):v/12.92f;}
++int main(int argc,char** argv)
++{
++ if(argc!=2)return 2;
++ @autoreleasepool {
++ s_dev=MTLCreateSystemDefaultDevice();if(!s_dev)return 2;s_queue=[s_dev newCommandQueue];NSError* error=nil;
++ const char* vs="#include <metal_stdlib>\nusing namespace metal;struct V{float4 p[[position]];float4 t[[user(locn3)]];};vertex V vs(uint i[[vertex_id]],constant float4& t[[buffer(0)]]){float2 p[3]={float2(-1,-1),float2(3,-1),float2(-1,3)};return{float4(p[i],0,1),t};}";
++ id<MTLLibrary> vl=[s_dev newLibraryWithSource:[NSString stringWithUTF8String:vs]options:nil error:&error];CHECK(vl!=nil,"synthetic TC0 vertex shader");if(!vl)return 2;
++ MTLTextureDescriptor* td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:2 height:2 mipmapped:NO];td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageShaderRead|MTLTextureUsagePixelFormatView;
++ id<MTLTexture> texture=[s_dev newTextureWithDescriptor:td];const u8 bytes[16]={0,15,64,80,64,55,128,180,128,180,250,200,255,240,160,250};[texture replaceRegion:MTLRegionMake2D(0,0,2,2)mipmapLevel:0 withBytes:bytes bytesPerRow:8];
++ MTLTextureSwizzleChannels swap={MTLTextureSwizzleBlue,MTLTextureSwizzleAlpha,MTLTextureSwizzleRed,MTLTextureSwizzleGreen};
++ id<MTLTexture> remapped=[texture newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm textureType:MTLTextureType2D levels:NSMakeRange(0,1)slices:NSMakeRange(0,1)swizzle:swap];CHECK(remapped!=nil,"asymmetric resource crossbar view");if(!remapped)return 2;
++ td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:1 height:1 mipmapped:NO];td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageRenderTarget;id<MTLTexture> output=[s_dev newTextureWithDescriptor:td];
++ MTLSamplerDescriptor* sd=[MTLSamplerDescriptor new];sd.minFilter=MTLSamplerMinMagFilterLinear;sd.magFilter=MTLSamplerMinMagFilterLinear;sd.sAddressMode=MTLSamplerAddressModeClampToEdge;sd.tAddressMode=MTLSamplerAddressModeClampToEdge;id<MTLSamplerState> sampler=[s_dev newSamplerStateWithDescriptor:sd];
++ const unsigned lanes[2][4]={{0,1,2,3},{2,3,0,1}};
++ for(unsigned unitIndex=0;unitIndex<2;++unitIndex)for(unsigned op=0;op<4;++op)for(unsigned mask=0;mask<16;++mask){const unsigned unit=unitIndex?15:0;char path[1024];snprintf(path,sizeof path,"%s/u%u-op%u-mask%u.hlsl",argv[1],unit,op,mask);FILE* f=fopen(path,"rb");if(!f)return 2;fseek(f,0,SEEK_END);long size=ftell(f);rewind(f);char* source=calloc(1,(size_t)size+1);fread(source,1,(size_t)size,f);fclose(f);id<MTLFunction> fp=eng_function(source,RSX_SHADER_STAGE_FRAGMENT,"synthetic gamma");free(source);CHECK(fp!=nil,"actual translated sample shader compiles");if(!fp)return 2;
++ MTLRenderPipelineDescriptor* pd=[MTLRenderPipelineDescriptor new];pd.vertexFunction=[vl newFunctionWithName:@"vs"];pd.fragmentFunction=fp;pd.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA32Float;id<MTLRenderPipelineState> pipeline=[s_dev newRenderPipelineStateWithDescriptor:pd error:&error];CHECK(pipeline!=nil,"gamma observation pipeline");if(!pipeline)return 2;
++ for(unsigned view=0;view<2;++view)for(unsigned point=0;point<3;++point){const float uv[3][2]={{.375f,.625f},{.5f,.5f},{.25f,.25f}};float tc[4]={uv[point][0],uv[point][1],0,1};if(op==1){tc[0]*=2;tc[1]*=2;tc[3]=2;}
++ MTLRenderPassDescriptor* rp=[MTLRenderPassDescriptor renderPassDescriptor];rp.colorAttachments[0].texture=output;rp.colorAttachments[0].loadAction=MTLLoadActionClear;rp.colorAttachments[0].storeAction=MTLStoreActionStore;id<MTLCommandBuffer> cb=[s_queue commandBuffer];id<MTLRenderCommandEncoder> e=[cb renderCommandEncoderWithDescriptor:rp];[e setRenderPipelineState:pipeline];[e setVertexBytes:tc length:16 atIndex:0];[e setFragmentTexture:view?remapped:texture atIndex:unit];[e setFragmentSamplerState:sampler atIndex:unit];[e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];[e endEncoding];[cb commit];[cb waitUntilCompleted];CHECK(cb.status==MTLCommandBufferStatusCompleted&&!cb.error,"GPU completes");float got[4];[output getBytes:got bytesPerRow:16 fromRegion:MTLRegionMake2D(0,0,1,1)mipmapLevel:0];const float x=uv[point][0]*2-.5f,y=uv[point][1]*2-.5f;const float weights[4]={(1-x)*(1-y),x*(1-y),(1-x)*y,x*y};for(unsigned c=0;c<4;++c){float sampled=0;for(unsigned p=0;p<4;++p)sampled+=(float)bytes[p*4+lanes[view][c]]/255.f*weights[p];const float expected=(mask&(1u<<c))?decode(sampled):sampled;CHECK(fabsf(got[c]-expected)<2e-5f,"post-filter final-lane gamma and ordinary channels");}}
++ }
++ printf("texture gamma GPU: %u checks/%u failures\n",checks,failures);return failures?1:0;
++ }
++}

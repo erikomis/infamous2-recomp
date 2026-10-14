@@ -1,0 +1,54 @@
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 545670f2..3ae97ab2 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -787,13 +787,17 @@ static int rsx_fp_decompile_internal(
+                                  "      /* exec_if=none: write suppressed */\n");
+                     } else {
+                         /* Per-component select gated by the CC sign test.
+-                         * lerp(dst, _v, mask) == mask ? _v : dst since the
+-                         * mask is exactly 0.0/1.0 from the bool->float cast. */
++                         * A real select, not lerp(dst, _v, mask): lerp is
++                         * arithmetic (dst + mask * (_v - dst)), so an Inf or
++                         * NaN in the unselected operand poisons the result
++                         * (0 * Inf = NaN), and a register holding raw bits
++                         * (a packed word) loses its denormal and NaN
++                         * patterns on the way through the ALU. */
+                         snprintf(buf, sizeof(buf),
+                                  "      float4 _p = (float4)((cc%u).%s %s (float4)0.0);\n"
+-                                 "      %s[%u].%s = lerp(%s[%u].%s, _v.%s, _p.%s);\n",
++                                 "      %s[%u].%s = (_p.%s != 0.0) ? _v.%s : %s[%u].%s;\n",
+                                  cc_read, cswz, cmp_op,
+-                                 reg, dst_idx, m, reg, dst_idx, m, m, m);
++                                 reg, dst_idx, m, m, m, reg, dst_idx, m);
+                     }
+                     out_puts(&o, buf);
+                 }
+diff --git a/libs/video/tests/test_fp_decompiler.c b/libs/video/tests/test_fp_decompiler.c
+index c4ea4f2b..f7102c8c 100644
+--- a/libs/video/tests/test_fp_decompiler.c
++++ b/libs/video/tests/test_fp_decompiler.c
+@@ -327,6 +327,23 @@ int main(void)
+         check("large_program_return", backend_hlsl, "return (_o == _o) ? _o");
+     }
+ 
++    /* A predicated write is a select, not a blend: MOV r0, COL0 executed
++     * only where CC0 > 0 must keep r0 bit for bit in the other components.
++     * lerp(r0, v, mask) is arithmetic, so an Inf/NaN in either operand
++     * leaks into the components the condition leaves alone. */
++    {
++        u8 prog[16];
++        put_word(prog + 0, OPC(0x01) | OUTMASK_ALL | INSRC(1) | END); /* MOV r0, COL0 */
++        put_word(prog + 4, T_INPUT | SWZ_IDENT | (1u << 20) |          /* exec_if gt */
++                           (0u << 21) | (1u << 23) | (2u << 25) | (3u << 27));
++        put_word(prog + 8, 0);
++        put_word(prog + 12, 0);
++        rsx_fp_decompile(prog, sizeof(prog), CTRL_32BIT, hlsl, sizeof(hlsl));
++        check("pred_select", hlsl,
++              "r[0].xyzw = (_p.xyzw != 0.0) ? _v.xyzw : r[0].xyzw;");
++        check_absent("pred_no_lerp", hlsl, "lerp(");
++    }
++
+     printf("\n===========================================\n");
+     printf("Results: %d passed, %d failed\n", g_pass, g_fail);
+     return g_fail ? 1 : 0;

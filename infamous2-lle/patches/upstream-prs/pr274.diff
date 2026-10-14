@@ -1,0 +1,416 @@
+diff --git a/libs/filesystem/edat.c b/libs/filesystem/edat.c
+index 64f0ff5c..edb4ac52 100644
+--- a/libs/filesystem/edat.c
++++ b/libs/filesystem/edat.c
+@@ -319,6 +319,24 @@ static const struct { const char* name; uint8_t key[16]; } KLIC_CANDIDATES[] = {
+                         0xFC,0x87,0x9E,0x74,0x33,0x43,0xBB,0x4F } },  /* PSP Remasters  */
+ };
+ 
++/* Klicensees the guest passed to sceNpDrmIsAvailable[2] (edat_add_klicensee). */
++#define EDAT_GUEST_KLIC_MAX 16
++static uint8_t s_guest_klic[EDAT_GUEST_KLIC_MAX][16];
++static int     s_guest_klic_n = 0;
++
++void edat_add_klicensee(const uint8_t klic[16])
++{
++    if (!klic) return;
++    for (int i = 0; i < s_guest_klic_n; i++)
++        if (memcmp(s_guest_klic[i], klic, 16) == 0) return;
++    if (s_guest_klic_n >= EDAT_GUEST_KLIC_MAX) {
++        fprintf(stderr, "[edat] klicensee table full -- ignoring a new key\n");
++        return;
++    }
++    memcpy(s_guest_klic[s_guest_klic_n++], klic, 16);
++    fprintf(stderr, "[edat] guest klicensee #%d registered\n", s_guest_klic_n);
++}
++
+ static const uint8_t NP_OMAC_KEY_2[16] = {
+     0x6B,0xA5,0x29,0x76,0xEF,0xDA,0x16,0xEF,0x3C,0x33,0x9F,0xB2,0x97,0x1E,0x25,0x6B };
+ static const uint8_t SDAT_KEY[16] = {
+@@ -488,24 +506,42 @@ int edat_decrypt_file(const char* in_path, const char* out_path)
+         fprintf(stderr, "[edat] SDAT: key derived from dev_hash\n");
+         have_key = 1;
+     } else {
++        /* dev_hash = AES-CMAC(klic ^ NP_OMAC_KEY_2) over header bytes 0x00..0x5F.
++         * The check is the same for NPD versions 2, 3 and 4 (version 3 only adds
++         * the metadata ECDSA signature, which a reader may skip). Keys from the
++         * guest first: a title's own klicensee is the common case for game data,
++         * the built-in ones only cover the platform-wide free/PSX/PSP keys. */
++        const int n_builtin = (int)(sizeof KLIC_CANDIDATES / sizeof KLIC_CANDIDATES[0]);
+         int found = -1;
+-        for (int c = 0; c < (int)(sizeof KLIC_CANDIDATES / sizeof KLIC_CANDIDATES[0]); c++) {
++        const uint8_t* found_key = NULL;
++        for (int c = 0; c < s_guest_klic_n + n_builtin && found < 0; c++) {
++            const uint8_t* k = (c < s_guest_klic_n) ? s_guest_klic[c]
++                                                    : KLIC_CANDIDATES[c - s_guest_klic_n].key;
+             uint8_t ck[16], mac[16];
+-            for (int i = 0; i < 16; i++)
+-                ck[i] = (uint8_t)(KLIC_CANDIDATES[c].key[i] ^ NP_OMAC_KEY_2[i]);
++            for (int i = 0; i < 16; i++) ck[i] = (uint8_t)(k[i] ^ NP_OMAC_KEY_2[i]);
+             aes128_cmac(ck, hdr, 0x60, mac);
+-            if (memcmp(mac, dev_hash, 16) == 0) { found = c; break; }
++            if (memcmp(mac, dev_hash, 16) == 0) { found = c; found_key = k; }
+         }
+         if (found >= 0 && (license & 3) == 3) {
+-            memcpy(key, KLIC_CANDIDATES[found].key, 16);
++            memcpy(key, found_key, 16);
+             have_key = 1;
+-            fprintf(stderr, "[edat] klicensee %s verified against dev_hash\n",
+-                    KLIC_CANDIDATES[found].name);
++            if (found < s_guest_klic_n)
++                fprintf(stderr, "[edat] guest klicensee #%d verified against dev_hash\n", found + 1);
++            else
++                fprintf(stderr, "[edat] klicensee %s verified against dev_hash\n",
++                        KLIC_CANDIDATES[found - s_guest_klic_n].name);
+         } else if (edat_rif_key(in_path, key)) {
+             have_key = 1;
+             fprintf(stderr, "[edat] license type %u: using the supplied RIF key%s\n",
+                     license, found >= 0 ? "" : " (dev_hash names an unknown klicensee)");
+         }
++        if (!have_key && (license & 3) == 3) {
++            fprintf(stderr,
++                "[edat] license type 3 (free): no known klicensee verifies dev_hash.\n"
++                "[edat]   The title's klicensee comes from its own sceNpDrmIsAvailable[2]\n"
++                "[edat]   call (edat_add_klicensee); open the file after that call.\n");
++            fclose(in); return -6;
++        }
+         if (!have_key) {
+             fprintf(stderr,
+                 "[edat] license type %u needs a RIF key and none was supplied.\n"
+diff --git a/libs/filesystem/edat.h b/libs/filesystem/edat.h
+index 36b25592..6f4fd64d 100644
+--- a/libs/filesystem/edat.h
++++ b/libs/filesystem/edat.h
+@@ -47,6 +47,16 @@ int edat_decrypt_file(const char* in_path, const char* out_path);
+  * it is newer than the source. Set PS3_EDAT=0 to disable the whole path. */
+ const char* edat_resolve(const char* host_path, char* buf, size_t cap);
+ 
++/* Hand the runtime a klicensee the guest supplied. On hardware a game that owns
++ * free (license type 3) or disc-bound EDATs passes its own klicensee to
++ * sceNpDrmIsAvailable / sceNpDrmIsAvailable2 before opening them; the kernel keeps
++ * it and decrypts later opens with it. These keys are title-specific and live in
++ * the game's code, so a runtime cannot carry them: it has to take them from the
++ * guest call. Registered keys are tried before the built-in ones, and each one is
++ * still checked against the file's dev_hash before use. Up to 16 are kept (a
++ * duplicate is ignored). */
++void edat_add_klicensee(const uint8_t klic[16]);
++
+ /* Self-check of the AES-128 and AES-CMAC primitives against the FIPS-197 and
+  * RFC 4493 vectors. Returns 0 if both match. Run once on first use: silently
+  * wrong crypto here produces plausible-looking garbage, which is the single most
+diff --git a/libs/filesystem/tests/test_edat_guest_klicensee.c b/libs/filesystem/tests/test_edat_guest_klicensee.c
+new file mode 100644
+index 00000000..f514e54b
+--- /dev/null
++++ b/libs/filesystem/tests/test_edat_guest_klicensee.c
+@@ -0,0 +1,153 @@
++/*
++ * A free (license type 3) EDAT under a title-specific klicensee decrypts once
++ * the title has passed that klicensee to sceNpDrmIsAvailable[2], the way it
++ * does on hardware before opening the file.
++ *
++ * Everything here is synthetic: the klicensee, the content id and the
++ * plaintext are made up, and the EDAT is built by this file with edat.c's
++ * own AES/CMAC primitives (NPD version 3, license 3, flags 0, three blocks,
++ * the last one partial). No key or file from any title is used.
++ *
++ * Second file: test_edat_guest_klicensee_np.c (sceNp.c). Built and run by
++ * tools/test_edat_guest_klicensee.py, which passes a scratch directory as
++ * argv[1] and removes it afterwards.
++ */
++#include "../edat.c"
++#include "ps3emu/ps3types.h"
++
++s32 sceNpDrmIsAvailable(const u8* k_licensee, const char* drm_path);
++s32 sceNpDrmIsAvailable2(const u8* k_licensee, const char* drm_path);
++extern uint8_t* vm_base;
++
++#define BLOCK  0x400u
++#define FSIZE  2500u          /* 3 blocks, the last 452 bytes */
++
++static const uint8_t KLIC[16] = {   /* synthetic title klicensee */
++    0x5A,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC,0xDD,0xEE,0x01 };
++static const uint8_t OTHER[16] = {  /* a different, equally synthetic key */
++    0xA5,0x10,0x20,0x30,0x40,0x50,0x60,0x70,0x80,0x90,0xA0,0xB0,0xC0,0xD0,0xE0,0xF0 };
++
++static void put32(uint8_t* p, uint32_t v)
++{ p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v; }
++
++static void cbc_encrypt(const uint8_t key[16], const uint8_t iv[16],
++                        const uint8_t* in, uint8_t* out, size_t len)
++{
++    uint8_t rk[176], x[16];
++    aes128_expand(key, rk);
++    memcpy(x, iv, 16);
++    for (size_t o = 0; o < len; o += 16) {
++        for (int i = 0; i < 16; i++) x[i] ^= in[o + i];
++        aes128_encrypt_block(rk, x, out + o);
++        memcpy(x, out + o, 16);
++    }
++}
++
++/* NPD v3, license 3, flags 0: meta table (one 16-byte CMAC per block) at
++ * 0x100, then the blocks. Block key = AES(klic, dev_hash[0..11] || be32(i)),
++ * data AES-CBC under it with the header digest as IV. */
++static int build_edat(const char* path, const uint8_t* plain)
++{
++    const uint32_t nblk = (FSIZE + BLOCK - 1) / BLOCK;
++    uint8_t hdr[0x100] = {0};
++    memcpy(hdr, "NPD\0", 4);
++    put32(hdr + 0x04, 3);                     /* version */
++    put32(hdr + 0x08, 3);                     /* license: free */
++    put32(hdr + 0x0C, 0);                     /* type */
++    memcpy(hdr + 0x10, "XX0000-TEST00000_00-SYNTHETICEDAT0001", 36);
++    for (int i = 0; i < 16; i++) hdr[0x40 + i] = (uint8_t)(0x30 + i);   /* digest */
++    for (int i = 0; i < 16; i++) hdr[0x50 + i] = (uint8_t)(0x90 + i);   /* title hash */
++    uint8_t ck[16];
++    for (int i = 0; i < 16; i++) ck[i] = (uint8_t)(KLIC[i] ^ NP_OMAC_KEY_2[i]);
++    aes128_cmac(ck, hdr, 0x60, hdr + 0x60);   /* dev_hash */
++    put32(hdr + 0x80, 0);                     /* flags */
++    put32(hdr + 0x84, BLOCK);
++    put32(hdr + 0x88, 0); put32(hdr + 0x8C, FSIZE);
++
++    FILE* f = fopen(path, "wb");
++    if (!f) return -1;
++    fwrite(hdr, 1, sizeof hdr, f);
++    uint8_t rk[176];
++    aes128_expand(KLIC, rk);
++    static uint8_t enc[3][BLOCK];
++    uint8_t meta[3][16];
++    for (uint32_t b = 0; b < nblk; b++) {
++        uint32_t len = (b == nblk - 1 && FSIZE % BLOCK) ? FSIZE % BLOCK : BLOCK;
++        uint32_t padded = (len + 15) & ~15u;
++        uint8_t pt[BLOCK] = {0}, bk[16] = {0}, kres[16];
++        memcpy(pt, plain + b * BLOCK, len);
++        memcpy(bk, hdr + 0x60, 12);
++        put32(bk + 12, b);
++        aes128_encrypt_block(rk, bk, kres);
++        cbc_encrypt(kres, hdr + 0x40, pt, enc[b], padded);
++        aes128_cmac(kres, enc[b], padded, meta[b]);
++    }
++    for (uint32_t b = 0; b < nblk; b++) fwrite(meta[b], 1, 16, f);
++    for (uint32_t b = 0; b < nblk; b++) {
++        uint32_t len = (b == nblk - 1 && FSIZE % BLOCK) ? FSIZE % BLOCK : BLOCK;
++        fwrite(enc[b], 1, (len + 15) & ~15u, f);
++    }
++    fclose(f);
++    return 0;
++}
++
++static int s_failed;
++static void check(int ok, const char* what)
++{
++    printf("%s: %s\n", ok ? "ok  " : "FAIL", what);
++    if (!ok) s_failed++;
++}
++
++int main(int argc, char** argv)
++{
++    if (argc < 2) { puts("FAIL: usage: test_edat_guest_klicensee SCRATCH_DIR"); return 1; }
++    const char* dir = argv[1];
++    char in[1024], out[1024], what[160];
++    snprintf(in, sizeof in, "%s/data.edat", dir);
++    snprintf(out, sizeof out, "%s/data.edat.dec", dir);
++
++    static uint8_t plain[FSIZE];
++    for (uint32_t i = 0; i < FSIZE; i++) plain[i] = (uint8_t)(i * 7 + (i >> 8));
++    if (build_edat(in, plain) != 0) { puts("FAIL: could not write the fixture"); return 1; }
++
++    vm_base = calloc(1, 0x10000);
++    if (!vm_base) { puts("FAIL: calloc"); return 1; }
++    const uint32_t klic_ea = 0x1000, other_ea = 0x1010, path_ea = 0x1100;
++    memcpy(vm_base + klic_ea, KLIC, 16);
++    memcpy(vm_base + other_ea, OTHER, 16);
++    strcpy((char*)vm_base + path_ea, "/dev_hdd0/game/TEST00000/USRDIR/data.edat");
++
++    int rc = edat_decrypt_file(in, out);
++    snprintf(what, sizeof what, "no klicensee from the guest: -6 (got %d)", rc);
++    check(rc == -6, what);
++
++    s32 r = sceNpDrmIsAvailable2((const u8*)(uintptr_t)other_ea,
++                                 (const char*)(uintptr_t)path_ea);
++    snprintf(what, sizeof what, "sceNpDrmIsAvailable2(other key) = %d", r);
++    check(r == 0, what);
++    rc = edat_decrypt_file(in, out);
++    snprintf(what, sizeof what, "a key that does not verify dev_hash is not used: -6 (got %d)", rc);
++    check(rc == -6, what);
++
++    r = sceNpDrmIsAvailable((const u8*)(uintptr_t)klic_ea,
++                            (const char*)(uintptr_t)path_ea);
++    snprintf(what, sizeof what, "sceNpDrmIsAvailable(title key) = %d", r);
++    check(r == 0, what);
++    rc = edat_decrypt_file(in, out);
++    snprintf(what, sizeof what, "with the title's klicensee: 0, every block hash verified (got %d)", rc);
++    check(rc == 0, what);
++    if (rc == 0) {
++        static uint8_t got[FSIZE + 16];
++        FILE* f = fopen(out, "rb");
++        size_t n = f ? fread(got, 1, sizeof got, f) : 0;
++        if (f) fclose(f);
++        snprintf(what, sizeof what, "plaintext: %zu bytes, matches", n);
++        check(n == FSIZE && memcmp(got, plain, FSIZE) == 0, what);
++    }
++
++    remove(out); remove(in);
++    free(vm_base);
++    if (s_failed) { printf("FAIL (%d failed)\n", s_failed); return 1; }
++    puts("PASS (0 failed)");
++    return 0;
++}
+diff --git a/libs/filesystem/tests/test_edat_guest_klicensee_np.c b/libs/filesystem/tests/test_edat_guest_klicensee_np.c
+new file mode 100644
+index 00000000..c710fbc3
+--- /dev/null
++++ b/libs/filesystem/tests/test_edat_guest_klicensee_np.c
+@@ -0,0 +1,18 @@
++/*
++ * test_edat_guest_klicensee's second file: sceNp.c (sceNpDrmIsAvailable[2])
++ * and the runtime symbols it links against. See test_edat_guest_klicensee.c.
++ */
++#include "../../network/sceNp.c"
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++int np_psnr_enabled(void) { return 0; }
++const char* np_psnr_online_id(void) { return "PS3Player"; }
++s32 cellSysutilQueueGuestCallbackArgs(u32 opd, const u64 args[8]) { (void)opd; (void)args; return 0; }
+diff --git a/libs/network/sceNp.c b/libs/network/sceNp.c
+index 8bb66dbb..764c79fe 100644
+--- a/libs/network/sceNp.c
++++ b/libs/network/sceNp.c
+@@ -12,6 +12,7 @@
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_write*: guest EA -> host, byte-swapped */
+ #include "np_psnr.h"
+ #include "../system/cellSysutil.h"
++#include "../filesystem/edat.h"
+ 
+ 
+ /* ---------------------------------------------------------------------------
+@@ -308,3 +309,35 @@ s32 sceNpScoreTerm(void)
+     s_score_initialized = 0;
+     return CELL_OK;
+ }
++
++/* ---------------------------------------------------------------------------
++ * NPDRM
++ *
++ * On hardware sceNpDrmIsAvailable[2](klicensee, path) checks the licence for an
++ * NPDRM file and leaves the klicensee with the kernel, so later cellFsOpen calls
++ * on EDATs return plaintext. Free (license type 3) and disc-bound game data use a
++ * title-specific klicensee that only the game knows; record it for the EDAT
++ * reader (libs/filesystem/edat.c), which verifies it against each file's
++ * dev_hash before using it. The two calls differ only in licence-check details
++ * that do not apply here.
++ * -----------------------------------------------------------------------*/
++
++static s32 np_drm_is_available(const u8* k_licensee, const char* drm_path)
++{
++    const u8* k = GUEST_PTR(k_licensee, const u8*);
++    const char* path = GUEST_PTR(drm_path, const char*);
++    /* A NULL klicensee is legal for content that needs none; nothing to record. */
++    if (k) edat_add_klicensee(k);
++    fprintf(stderr, "[sceNp] DRM availability check: %s\n", path ? path : "(null)");
++    return CELL_OK;
++}
++
++s32 sceNpDrmIsAvailable(const u8* k_licensee, const char* drm_path)
++{
++    return np_drm_is_available(k_licensee, drm_path);
++}
++
++s32 sceNpDrmIsAvailable2(const u8* k_licensee, const char* drm_path)
++{
++    return np_drm_is_available(k_licensee, drm_path);
++}
+diff --git a/libs/network/sceNp.h b/libs/network/sceNp.h
+index ea160aa4..a2318a0d 100644
+--- a/libs/network/sceNp.h
++++ b/libs/network/sceNp.h
+@@ -133,6 +133,12 @@ s32 sceNpManagerGetOnlineId(SceNpOnlineId* onlineId);
+ s32 sceNpManagerGetOnlineName(SceNpOnlineName* onlineName);
+ s32 sceNpManagerGetAccountAge(s32* age);
+ 
++/* NPDRM availability checks. The guest passes its klicensee (16 bytes) and the
++ * path of an EDAT/SELF; the klicensee is handed to the EDAT reader, which then
++ * decrypts that title's files on open. Always CELL_OK (licence present). */
++s32 sceNpDrmIsAvailable(const u8* k_licensee, const char* drm_path);
++s32 sceNpDrmIsAvailable2(const u8* k_licensee, const char* drm_path);
++
+ /* Set the fake PSN username (call before sceNpInit if desired) */
+ void sceNpSetFakeUsername(const char* username);
+ 
+diff --git a/tools/test_edat_guest_klicensee.py b/tools/test_edat_guest_klicensee.py
+new file mode 100755
+index 00000000..34b2c0c6
+--- /dev/null
++++ b/tools/test_edat_guest_klicensee.py
+@@ -0,0 +1,62 @@
++#!/usr/bin/env python3
++"""A free EDAT decrypts with the klicensee the title passes to sceNpDrmIsAvailable[2].
++
++On hardware a title hands its own klicensee to sceNpDrmIsAvailable or
++sceNpDrmIsAvailable2 before it opens a free (license type 3) or disc-bound
++EDAT; the kernel keeps it for later opens. The runtime never took that key,
++so such a file failed with -6 unless its klicensee was one of the built-in
++platform keys. This builds libs/filesystem/tests/test_edat_guest_klicensee.c
++with its second file (sceNp.c) and runs it. The EDAT, its key and its
++plaintext are synthetic, made by the test itself.
++
++It needs a host C compiler (under CI=1 a missing one fails instead of
++skipping).
++
++Usage:
++    python3 tools/test_edat_guest_klicensee.py
++"""
++
++import os
++import shutil
++import subprocess
++import sys
++import tempfile
++
++TOOLS = os.path.dirname(os.path.abspath(__file__))
++ROOT = os.path.dirname(TOOLS)
++TESTS = os.path.join(ROOT, "libs", "filesystem", "tests")
++SOURCES = [os.path.join(TESTS, "test_edat_guest_klicensee.c"),
++           os.path.join(TESTS, "test_edat_guest_klicensee_np.c")]
++
++
++def _cc():
++    return (shutil.which(os.environ.get("CC", "cc")) or shutil.which("clang")
++            or shutil.which("gcc"))
++
++
++def main():
++    cc = _cc()
++    if cc is None:
++        if os.environ.get("CI"):
++            print("FAIL: no C compiler found")
++            return 1
++        print("skip test_edat_guest_klicensee: no C compiler")
++        return 0
++    with tempfile.TemporaryDirectory() as td:
++        exe = os.path.join(td, "test_edat_guest_klicensee")
++        cmd = [cc, "-std=gnu17", "-w", "-I" + os.path.join(ROOT, "include"),
++               "-o", exe] + SOURCES
++        r = subprocess.run(cmd, capture_output=True, text=True)
++        if r.returncode != 0:
++            print("FAIL: fixture did not build")
++            print((r.stdout + r.stderr)[-4000:])
++            return 1
++        scratch = os.path.join(td, "scratch")
++        os.mkdir(scratch)
++        r = subprocess.run([exe, scratch], capture_output=True, text=True)
++        sys.stdout.write(r.stdout)
++        return r.returncode
++
++
++if __name__ == "__main__":
++    sys.exit(main())

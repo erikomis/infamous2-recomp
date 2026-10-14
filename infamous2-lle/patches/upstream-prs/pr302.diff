@@ -1,0 +1,560 @@
+diff --git a/docs/SHADOW_COMPARISON.md b/docs/SHADOW_COMPARISON.md
+new file mode 100644
+index 00000000..df98ec6d
+--- /dev/null
++++ b/docs/SHADOW_COMPARISON.md
+@@ -0,0 +1,49 @@
++# Fragment depth texture comparisons
++
++The shared draw engine and legacy Metal path specialize referenced texture
++units from TEXTURE_ADDRESS zfunc. Native depth formats with alpha-kill off
++activate comparison only for controls 1 through 6. NEVER (0), ALWAYS (7),
++non-depth textures and alpha-kill keep the existing raw sampling behavior.
++
++TEX compares source z with stored red-channel depth. TXP divides xyz by w
++before comparison. The reference is clamped to [0,1], and the scalar comparison
++is replicated into all four lanes. Comparisons are reference <, ==, <=, >, !=,
++and >= stored depth in control order. Linear sampling compares four texel
++centers separately before interpolating visibility; it does not compare a
++filtered depth value. The existing sampler supplies address/border behavior.
++
++Depth snapshots are currently bound as color textures (R32Float for D24_D8,
++R16 UNORM for D16). Explicit HLSL comparisons preserve those bindings rather
++than requiring a native depth texture and comparison sampler. UN coordinates
++use the bound texture's dimensions. Only referenced active units add shader
++helpers and cache identity, avoiding unused texture bindings/readbacks.
++
++Supported comparison scope is 2D D24_D8 or D16, one mip level, TEX/TXP and
++matching nearest or linear min/mag filtering. Active float-depth formats,
++cubes/other dimensions, multiple mip levels, mismatched filters and
++TXB/TXL/TXD/TEXBEM/TXPBEM reject translation with a bounded diagnostic. The
++engine drops failed pipelines; the legacy Metal path also rejects these
++failures instead of its ordinary built-in shader fallback. Other standalone
++legacy backend paths still need to adopt the metadata API. Texture remapping,
++LOD/aniso extensions and full hardware shadow sampling precision are outside
++this correction's coverage; existing texture/sampler behavior is retained.
++
++Synthetic tests contain no title programs or data:
++
++- `test_shadow_metadata.c`: activation, ordinary HLSL retention, unsupported
++  layouts/fetches, sixteen-unit bounded output.
++- `test_shadow_engine.c`: production method dispatch, per-unit shader cache,
++  switchback, unused-unit bindings and rejected draw emission.
++- `test_shadow_compare_metal.m`: actual translated GPU comparisons, projected
++  reference, equality, raw endpoint controls and checked legacy failures.
++
++Contract references:
++
++- RPCS3 RSXTexture.cpp: ADDRESS bits 28..31 select zfunc.
++  https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/RSXTexture.cpp
++- RPCS3 RSXThread.cpp: depth formats, alpha-kill and strict endpoint activation.
++  https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/RSXThread.cpp
++- RPCS3 FragmentProgramDecompiler.cpp: TEX/TXP shadow reference and replication.
++  https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/Program/FragmentProgramDecompiler.cpp
++- OpenGL ARB_shadow: reference direction/clamp and comparison before filtering.
++  https://registry.khronos.org/OpenGL/extensions/ARB/ARB_shadow.txt
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+index b438d877..1dd49eb4 100644
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -1336,8 +1336,25 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+     const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
+     const u32 cube_mask = eng_cube_mask();
+     const u32 vtex_mask = eng_vtex_mask();
++    rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES] = {{0}};
++    u32 shadow_mask = 0;
++    const u32 sampled_units = fixed ? 0 : rsx_fp_texture_units(fp_uc, fp_size);
++    for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
++        if (!(sampled_units & (1u << u))) continue;
++        rsx_dsp_texture t;
++        rsx_dsp_get_texture(&g.rsx, u, &t);
++        rsx_fp_shadow_desc_from_texture(&shadow[u], t.format, t.dimension,
++            t.cubemap, t.mipmaps, t.filter, t.wrap, t.control0);
++        if (shadow[u].enabled) shadow_mask |= 1u << u;
++    }
+     u32 unnorm_dim[RSX_DSP_NUM_TEXTURES][2];
+-    const u32 unnorm_mask = eng_unnorm_units(unnorm_dim);
++    /* Shadow helpers normalize against the bound resource themselves. Only
++     * sampled ordinary UN units need baked dimensions or cache identity. */
++    const u32 unnorm_mask = eng_unnorm_units(unnorm_dim) &
++        (fixed ? 0xFFFFu : sampled_units) & ~shadow_mask;
++    for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++)
++        if (!(unnorm_mask & (1u << u)))
++            unnorm_dim[u][0] = unnorm_dim[u][1] = 0;
+ 
+     memset(&g.fp_constants, 0, sizeof g.fp_constants);
+     if (!fixed && rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0)
+@@ -1359,6 +1376,10 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         const u32 fp_ctrl_key = fp_ctrl & 0x40u;
+         key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
+         key = eng_fnv1a(&cube_mask, sizeof cube_mask, key);
++        if (shadow_mask) {
++            key = eng_fnv1a(&shadow_mask, sizeof shadow_mask, key);
++            key = eng_fnv1a(shadow, sizeof shadow, key);
++        }
+         key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
+         key = eng_fnv1a(&unnorm_mask, sizeof unnorm_mask, key);
+         if (unnorm_mask) key = eng_fnv1a(unnorm_dim, sizeof unnorm_dim, key);
+@@ -1389,8 +1410,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
+                                          layout->mask, s_vs_hlsl,
+                                          sizeof s_vs_hlsl);
+-        fi = rsx_fp_decompile_buffered_ex(fp_uc, fp_size, fp_ctrl, cube_mask,
+-                                          s_ps_hlsl, sizeof s_ps_hlsl, &nconst);
++        fi = rsx_fp_decompile_buffered_shadow_ex(fp_uc, fp_size, fp_ctrl, cube_mask,
++                shadow_mask ? shadow : NULL, s_ps_hlsl, sizeof s_ps_hlsl, &nconst);
+         if (fi > 0 && nconst != g.fp_constants.count) fi = -1;
+         if (fi > 0 && rsx_fp_apply_unnorm_scale(s_ps_hlsl, sizeof s_ps_hlsl, unnorm_mask,
+                                                 (const u32 (*)[2])unnorm_dim, cube_mask) < 0)
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 545670f2..cd29db4c 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -72,7 +72,7 @@ enum {
+     OP_LIT=0x1E, OP_LRP=0x1F, OP_STR=0x20, OP_SFL=0x21, OP_COS=0x22,
+     OP_SIN=0x23, OP_PK2H=0x24, OP_UP2H=0x25, OP_POW=0x26, OP_PK4UB=0x27,
+     OP_UP4UB=0x28, OP_PK2US=0x29, OP_UP2US=0x2A, OP_DP2A=0x2E, OP_TXL=0x2F,
+-    OP_TXB=0x31, OP_RFL=0x36, OP_DP2=0x38, OP_NRM=0x39, OP_DIV=0x3A,
++    OP_TXB=0x31, OP_TEXBEM=0x33, OP_TXPBEM=0x34, OP_RFL=0x36, OP_DP2=0x38, OP_NRM=0x39, OP_DIV=0x3A,
+     OP_DIVSQ=0x3B, OP_LIF=0x3C, OP_FENCT=0x3D, OP_FENCB=0x3E
+ };
+ 
+@@ -415,12 +415,104 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+     return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
+ }
+ 
++void rsx_fp_shadow_desc_from_texture(rsx_fp_shadow_desc* out, u32 format,
++    u32 dimension, u32 cube, u32 mips, u32 filter, u32 address, u32 control0)
++{
++    memset(out, 0, sizeof *out);
++    const u32 base = format & 0x9Fu, func = (address >> 28) & 15u;
++    if (!(control0 & 0x80000000u) || (control0 & 4u) ||
++        (base != 0x90 && base != 0x91 && base != 0x92 && base != 0x93) ||
++        func == 0 || func == 7) return;
++    const u32 minf = (filter >> 16) & 7u, magf = (filter >> 24) & 7u;
++    const int minlin = minf == 2 || minf == 4 || minf == 6;
++    const int maglin = magf == 2;
++    out->enabled = (base == 0x91 || base == 0x93 || func > 7 || dimension != 2 || cube || mips > 1 ||
++        minf < 1 || minf > 6 || magf < 1 || magf > 2 || minlin != maglin) ? 2 : 1;
++    out->func = (u8)func;
++    out->linear = (u8)minlin;
++    out->unnormalized = (u8)((format & 0x40u) != 0);
++}
++
++u32 rsx_fp_texture_units(const u8* ucode, u32 max_bytes)
++{
++    u32 units = 0;
++    if (!ucode) return 0;
++    for (u32 off = 0; off + 16 <= max_bytes;) {
++        const u32 w0 = rsx_fp_read_word(ucode + off);
++        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
++        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
++        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        const u32 op = (w0 >> 24) & 63u;
++        if (!(w2 & FP_BRANCH) && (op == OP_TEX || op == OP_TXP ||
++            op == OP_TXB || op == OP_TXL || op == OP_TXD ||
++            op == OP_TEXBEM || op == OP_TXPBEM))
++            units |= 1u << ((w0 >> FP_TEX_UNIT_SHIFT) & 15u);
++        off += 16;
++        if (!(w2 & FP_BRANCH) && ((w1 & 3u) == 2 || (w2 & 3u) == 2 || (w3 & 3u) == 2))
++            off += 16;
++        if (w0 & FP_END) break;
++    }
++    return units;
++}
++
++static void fp_shadow_helper(Out* p, u32 unit, u32 cube_mask,
++                              const rsx_fp_shadow_desc* d)
++{
++    char tex[32], text[4096];
++    snprintf(tex, sizeof tex, cube_mask ? "rsx_tex%u" : "rsx_tex[%u]", unit);
++    const char* cmp[] = { "0.0", "reference < depth", "reference == depth",
++        "reference <= depth", "reference > depth", "reference != depth",
++        "reference >= depth", "1.0" };
++    snprintf(text, sizeof text,
++        "float _rsx_shadow_cmp%u(float reference, float depth) { return (float)(%s); }\n"
++        "float4 _rsx_shadow%u(float3 coordinate) {\n"
++        "    float reference = saturate(coordinate.z);\n",
++        unit, cmp[d->func], unit);
++    out_puts(p, text);
++    if (d->linear || d->unnormalized) {
++        snprintf(text, sizeof text, "    uint width, height; %s.GetDimensions(width, height);\n"
++            "    float2 size = float2(width, height);\n", tex);
++        out_puts(p, text);
++    }
++    out_puts(p, d->unnormalized ? "    float2 uv = coordinate.xy / size;\n" :
++                                     "    float2 uv = coordinate.xy;\n");
++    if (!d->linear) {
++        snprintf(text, sizeof text,
++            "    float depth = %s.SampleLevel(rsx_samp[%u], uv, 0.0).r;\n"
++            "    return (float4)_rsx_shadow_cmp%u(reference, depth);\n}\n",
++            tex, unit, unit);
++        out_puts(p, text);
++        return;
++    }
++    out_puts(p, "    float2 position = uv * size - 0.5;\n"
++        "    float2 base = floor(position); float2 fraction = position - base;\n");
++    for (u32 tap = 0; tap < 4; tap++) {
++        snprintf(text, sizeof text,
++            "    float d%u = %s.SampleLevel(rsx_samp[%u], (base + float2(%s, %s)) / size, 0.0).r;\n"
++            "    float c%u = _rsx_shadow_cmp%u(reference, d%u);\n",
++            tap, tex, unit, (tap & 1) ? "1.5" : "0.5", (tap & 2) ? "1.5" : "0.5", tap, unit, tap);
++        out_puts(p, text);
++    }
++    out_puts(p, "    return (float4)lerp(lerp(c0, c1, fraction.x), lerp(c2, c3, fraction.x), fraction.y);\n}\n");
++}
++
+ static int rsx_fp_decompile_internal(
+     const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
+-    int buffered, char* out, u32 out_size, u32* out_constant_count)
++    int buffered, const rsx_fp_shadow_desc* shadow, char* out, u32 out_size, u32* out_constant_count)
+ {
+     if (!ucode || !out || out_size == 0) return -1;
+ 
++    const u32 sampled_units = rsx_fp_texture_units(ucode, max_bytes);
++    if (shadow) for (u32 u = 0; u < 16; u++)
++        if ((sampled_units & (1u << u)) && shadow[u].enabled &&
++            (shadow[u].enabled != 1 || shadow[u].func > 7 ||
++             shadow[u].linear > 1 || shadow[u].unnormalized > 1 ||
++             (tex_cube_mask & (1u << u)))) {
++            static u32 n_layout_errors;
++            if (n_layout_errors++ < 32)
++                fprintf(stderr, "[RSX fp] unsupported depth comparison layout on texture unit %u\n", u);
++            return -1;
++        }
+     u32 buffered_constant_count = 0;
+     if (buffered) {
+         rsx_fp_constant_block constants;
+@@ -487,6 +579,14 @@ static int rsx_fp_decompile_internal(
+         u32 opcode    = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
+         u32 input_src = (w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT;
+         u32 tex_unit  = (w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT;
++        if (!(w2 & FP_BRANCH) && shadow && shadow[tex_unit].enabled &&
++            (opcode == OP_TXB || opcode == OP_TXL || opcode == OP_TXD ||
++             opcode == OP_TEXBEM || opcode == OP_TXPBEM)) {
++            static u32 n_fetch_errors;
++            if (n_fetch_errors++ < 32)
++                fprintf(stderr, "[RSX fp] unsupported depth comparison fetch on texture unit %u\n", tex_unit);
++            return -1;
++        }
+         int is_branch = (w2 & FP_BRANCH) ? 1 : 0;
+ 
+         /* Execution condition (exec_if) + condition-code write (set_cond).
+@@ -672,6 +772,10 @@ static int rsx_fp_decompile_internal(
+         case OP_SNE: snprintf(rhs, sizeof(rhs), "(float4)((%s) != (%s))", a, b); break;
+         case OP_SEQ: snprintf(rhs, sizeof(rhs), "(float4)((%s) == (%s))", a, b); break;
+         case OP_TEX:
++            if (shadow && shadow[tex_unit].enabled) {
++                snprintf(rhs, sizeof(rhs), "_rsx_shadow%u((%s).xyz)", tex_unit, a);
++                break;
++            }
+             if ((tex_cube_mask >> tex_unit) & 1u)
+                 /* Cubemap: sample with the full 3-component direction vector. */
+                 snprintf(rhs, sizeof(rhs),
+@@ -684,6 +788,10 @@ static int rsx_fp_decompile_internal(
+                          "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
+             break;
+         case OP_TXP:
++            if (shadow && shadow[tex_unit].enabled) {
++                snprintf(rhs, sizeof(rhs), "_rsx_shadow%u((%s).xyz / (%s).w)", tex_unit, a, a);
++                break;
++            }
+             if ((tex_cube_mask >> tex_unit) & 1u)
+                 /* Projective divide is meaningless for a cube lookup; sample
+                  * the direction directly. */
+@@ -877,7 +985,7 @@ static int rsx_fp_decompile_internal(
+     /* Preamble: PSInput matches the backend's placeholder layout; temp/half
+      * register files; texture+sampler banks for TEX. Built here, in front of
+      * the body, now that the return type is known. */
+-    char preamble[2048];
++    char preamble[32768]; /* bounded room for all 16 comparison helpers */
+     Out p = { preamble, sizeof(preamble), 0, 1 };
+     preamble[0] = '\0';
+     out_puts(&p,
+@@ -915,6 +1023,9 @@ static int rsx_fp_decompile_internal(
+             buffered_constant_count ? buffered_constant_count : 1u);
+         out_puts(&p, constants_decl);
+     }
++    if (shadow) for (u32 u = 0; u < 16; u++)
++        if ((sampled_units & (1u << u)) && shadow[u].enabled)
++            fp_shadow_helper(&p, u, tex_cube_mask, &shadow[u]);
+     if (targets == 1) {
+         out_puts(&p, "float4 main(PSInput input) : SV_TARGET {\n");
+     } else {
+@@ -940,7 +1051,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
+                         u32 tex_cube_mask, char* out, u32 out_size)
+ {
+     return rsx_fp_decompile_internal(
+-        ucode, max_bytes, ctrl, tex_cube_mask, 0, out, out_size, NULL);
++        ucode, max_bytes, ctrl, tex_cube_mask, 0, NULL, out, out_size, NULL);
+ }
+ 
+ int rsx_fp_decompile_buffered_ex(
+@@ -948,10 +1059,19 @@ int rsx_fp_decompile_buffered_ex(
+     char* out, u32 out_size, u32* out_constant_count)
+ {
+     return rsx_fp_decompile_internal(
+-        ucode, max_bytes, ctrl, tex_cube_mask, 1, out, out_size,
++        ucode, max_bytes, ctrl, tex_cube_mask, 1, NULL, out, out_size,
+         out_constant_count);
+ }
+ 
++int rsx_fp_decompile_buffered_shadow_ex(
++    const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
++    const rsx_fp_shadow_desc shadow[16],
++    char* out, u32 out_size, u32* out_constant_count)
++{
++    return rsx_fp_decompile_internal(ucode, max_bytes, ctrl, tex_cube_mask,
++        1, shadow, out, out_size, out_constant_count);
++}
++
+ static float fp_half_to_float(u16 h)
+ {
+     const u32 sign = (u32)(h & 0x8000u) << 16;
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+index d54473ba..3579b3ce 100644
+--- a/libs/video/rsx_fp_decompiler.h
++++ b/libs/video/rsx_fp_decompiler.h
+@@ -121,6 +121,27 @@ int rsx_fp_decompile_buffered_ex(
+     const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
+     char* out, u32 out_size, u32* out_constant_count);
+ 
++/* Native depth texture comparison metadata. Disabled descriptors preserve the
++ * original shader byte-for-byte. enabled=2 marks an active unsupported layout.
++ * RSX ADDRESS zfunc0/7 and texture alpha-kill bypass comparison; modes1..6
++ * compare the source reference against stored depth. R32 color snapshots are
++ * sampled explicitly, so no native depth texture/SampleCmp binding is needed.
++ * Supported: decoded D24_D8/D16, 2D TEX/TXP, one level, matching nearest or
++ * linear min/mag filters. Float-depth formats, cubes/3D, multiple levels and
++ * other texture opcodes reject translation when comparison is active.
++ * The shared engine and legacy Metal supply this state; other legacy backend
++ * paths retain their existing behavior until they adopt the metadata API. */
++typedef struct rsx_fp_shadow_desc {
++    u8 enabled, func, linear, unnormalized;
++} rsx_fp_shadow_desc;
++void rsx_fp_shadow_desc_from_texture(rsx_fp_shadow_desc* out, u32 format,
++    u32 dimension, u32 cube, u32 mips, u32 filter, u32 address, u32 control0);
++u32 rsx_fp_texture_units(const u8* ucode, u32 max_bytes);
++int rsx_fp_decompile_buffered_shadow_ex(
++    const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
++    const rsx_fp_shadow_desc shadow[16],
++    char* out, u32 out_size, u32* out_constant_count);
++
+ /* Extract the exact runtime inline-CONST payload. Returns the slot count on
+  * success or -1 for an unterminated/truncated/oversized program. */
+ int rsx_fp_collect_constants(
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+index d04b34e3..046979c9 100644
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -741,6 +741,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
+  * and sampled with a direction rather than a 2D coordinate, so it changes the
+  * compiled program and belongs in the key -- the D3D12 backend's PSO key
+  * carries cube_mask for the same reason. */
++static u32 fp_shadow_state(const rsx_state* st, const u8* uc,
++                           rsx_fp_shadow_desc shadow[RSX_MAX_TEXTURES])
++{
++    memset(shadow, 0, sizeof(rsx_fp_shadow_desc) * RSX_MAX_TEXTURES);
++    u32 shadow_mask = 0;
++    const u32 sampled_units = rsx_fp_texture_units(uc, MTL_FP_MAX_BYTES);
++    for (u32 u = 0; u < RSX_MAX_TEXTURES; u++) {
++        if (!(sampled_units & (1u << u))) continue;
++        const rsx_texture_state* t = &st->textures[u];
++        rsx_fp_shadow_desc_from_texture(&shadow[u], (t->format >> 8) & 255u,
++            (t->format >> 4) & 15u, (t->format >> 2) & 1u,
++            (t->format >> 16) & 0xFFFFu, t->filter, t->address, t->control0);
++        if (shadow[u].enabled) shadow_mask |= 1u << u;
++    }
++    return shadow_mask;
++}
++
+ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+ {
+     if (!vm_base || st->shader_program == 0) return -1;
+@@ -751,6 +768,8 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+ 
+     u64 key = rsx_fp_structural_hash(*uc, MTL_FP_MAX_BYTES, 1469598103934665603ull);
+     if (!key) return -1;                    /* malformed or unterminated */
++    rsx_fp_shadow_desc shadow[RSX_MAX_TEXTURES];
++    const u32 shadow_mask = fp_shadow_state(st, *uc, shadow);
+     const u32 ctrl      = st->shader_control;
+     const u32 ctrl_key  = ctrl & CELL_GCM_SHADER_CONTROL_32_BITS_EXPORTS;
+     const u32 alpha_en  = (st->alpha_test_enable && st->alpha_func != 0x0207u) ? 1u : 0u;
+@@ -760,15 +779,20 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+     key = fnv1a64(&alpha_fn, sizeof alpha_fn, key);
+     key = fnv1a64(&cube_mask, sizeof cube_mask, key);
+ 
++    if (shadow_mask) {
++        key = fnv1a64(&shadow_mask, sizeof shadow_mask, key);
++        key = fnv1a64(shadow, sizeof shadow, key);
++    }
+     for (u32 i = 0; i < s_fp_count; i++)
+-        if (s_fp_cache[i].key == key) return s_fp_cache[i].fn ? (int)i : -1;
+-    if (s_fp_count >= MTL_FP_CACHE) { s_caches_full = 1; return -1; }
++        if (s_fp_cache[i].key == key)
++            return s_fp_cache[i].fn ? (int)i : (shadow_mask ? -2 : -1);
++    if (s_fp_count >= MTL_FP_CACHE) { s_caches_full = 1; return shadow_mask ? -2 : -1; }
+ 
+     char name[64];
+     id<MTLFunction> fn = nil;
+     u32 nconst = 0;
+-    int ni = rsx_fp_decompile_buffered_ex(*uc, MTL_FP_MAX_BYTES, ctrl, cube_mask,
+-                                          s_hlsl, sizeof s_hlsl, &nconst);
++    int ni = rsx_fp_decompile_buffered_shadow_ex(*uc, MTL_FP_MAX_BYTES, ctrl, cube_mask,
++        shadow_mask ? shadow : NULL, s_hlsl, sizeof s_hlsl, &nconst);
+     if (ni > 0 && alpha_en &&
+         rsx_fp_apply_alpha_test_buffered(s_hlsl, sizeof s_hlsl, st->alpha_func) < 0)
+         ni = -1;
+@@ -792,13 +816,14 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+     { static int n = 0; if (n++ < 32)
+         fprintf(stderr, "[RSX metal] fragment program %016llX: %d instrs, %u constants -> %s\n",
+                 (unsigned long long)key, ni, nconst,
+-                fn ? "ok" : "FAILED (built-in shader instead)"); }
++                fn ? "ok" : (shadow_mask ? "FAILED (depth comparison draw rejected)" :
++                                             "FAILED (built-in shader instead)")); }
+ 
+     const int slot = (int)s_fp_count++;
+     s_fp_cache[slot].key    = key;
+     s_fp_cache[slot].fn     = fn;
+     s_fp_cache[slot].nconst = nconst;
+-    return fn ? slot : -1;
++    return fn ? slot : (shadow_mask ? -2 : -1);
+ }
+ 
+ /* Reserve `bytes` of constant staging at a 256-byte boundary. */
+@@ -827,24 +852,27 @@ static int cb_alloc(u32 bytes, u32* off)
+  * outputs do not link with the built-in fragment shader's inputs. */
+ static int guest_programs_for(const rsx_state* st, MtlDraw* d)
+ {
+-    const int vs = vp_slot_for(st, vtex_mask_for(st));
+-    if (vs < 0) return 0;
+     const u8* fp_uc = NULL;
+     const int fs = fp_slot_for(st, &fp_uc, cube_mask_for(st));
++    if (fs == -2) return -1; /* Active comparison must never use a raw fallback. */
+     if (fs < 0) return 0;
++    rsx_fp_shadow_desc shadow[RSX_MAX_TEXTURES];
++    const int fallback = fp_shadow_state(st, fp_uc, shadow) ? -1 : 0;
++    const int vs = vp_slot_for(st, vtex_mask_for(st));
++    if (vs < 0) return fallback;
+ 
+     /* PSConstants: the program's inline constants as host-order bit patterns,
+      * one float4 per slot, then fp_alpha. The count must match what the
+      * shader was compiled against. */
+     if (rsx_fp_collect_constants(fp_uc, MTL_FP_MAX_BYTES, &s_fp_consts) < 0 ||
+         s_fp_consts.count != s_fp_cache[fs].nconst)
+-        return 0;
++        return fallback;
+     const u32 nslots = s_fp_consts.count ? s_fp_consts.count : 1u;
+     const u32 fp_len = (nslots + 1u) * 16u;
+ 
+     u32 vp_off, fp_off;
+-    if (!cb_alloc(MTL_VP_CB_BYTES, &vp_off)) return 0;
+-    if (!cb_alloc(fp_len, &fp_off)) return 0;
++    if (!cb_alloc(MTL_VP_CB_BYTES, &vp_off)) return fallback;
++    if (!cb_alloc(fp_len, &fp_off)) return fallback;
+ 
+     /* VPConst: the 512 transform constants, then the viewport epilogue
+      * (see the D3D12 backend's vp_record_cb): x/y identity, and the z lane
+@@ -1580,7 +1608,8 @@ static void record_draw(const rsx_state* st, u32 prim, u32 base, u32 count,
+      * drops to the built-in shader must still fetch its vertices the same
+      * way. Constant staging reserved here for a draw that then fails on
+      * vertices is simply left unused until the frame resets it. */
+-    const int guest = s_guest_shaders && guest_programs_for(st, d);
++    const int guest = s_guest_shaders ? guest_programs_for(st, d) : 0;
++    if (guest < 0) { s_dropped_records++; return; }
+     if (guest) textures_for(st, d);
+ 
+     u32 first_vert = s_vert_count;
+diff --git a/libs/video/tests/test_shadow_compare_metal.m b/libs/video/tests/test_shadow_compare_metal.m
+new file mode 100644
+index 00000000..8844a8ab
+--- /dev/null
++++ b/libs/video/tests/test_shadow_compare_metal.m
+@@ -0,0 +1,33 @@
++/* Synthetic shadow comparison probe; no title programs, assets or target process. */
++#include "rsx_metal_backend.m"
++#include "rsx_test_programs.h"
++#include <stdio.h>
++#include <math.h>
++u8* vm_base;
++u32 cellGcmResolveLocated(int local,u32 off){(void)local;return off;}
++static int checks,failures;
++#define CHECK(c,n) do{checks++;if(!(c)){failures++;fprintf(stderr,"FAIL %s\n",n);}}while(0)
++static float expected(unsigned mode,float ref,float d){switch(mode){case 1:return ref<d;case 2:return ref==d;case 3:return ref<=d;case 4:return ref>d;case 5:return ref!=d;case 6:return ref>=d;default:return d;}}
++int main(void){@autoreleasepool{
++ s_dev=MTLCreateSystemDefaultDevice();if(!s_dev)return 2;s_queue=[s_dev newCommandQueue];vm_base=calloc(1,4096);
++ rsx_test_fp_instr(vm_base+256,RSX_TEST_FP_OPC(0x18)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|RSX_TEST_FP_END,RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);
++ const char* vsrc="#include <metal_stdlib>\nusing namespace metal;struct V {float4 p [[position]];float4 t [[user(locn3)]];};vertex V vs(uint i [[vertex_id]],constant float4& tc [[buffer(0)]]) {float2 p[3]={float2(-1,-1),float2(3,-1),float2(-1,3)};return {float4(p[i],0,1),tc};}";
++ NSError*err=nil;id<MTLLibrary>vl=[s_dev newLibraryWithSource:[NSString stringWithUTF8String:vsrc] options:nil error:&err];CHECK(vl!=nil,"vertex library");if(!vl)return 2;
++ MTLTextureDescriptor*td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:1 height:1 mipmapped:NO];td.usage=MTLTextureUsageShaderRead;id<MTLTexture>depth=[s_dev newTextureWithDescriptor:td];float d=.5f;[depth replaceRegion:MTLRegionMake2D(0,0,1,1) mipmapLevel:0 withBytes:&d bytesPerRow:4];
++ td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:1 height:1 mipmapped:NO];td.usage=MTLTextureUsageRenderTarget;id<MTLTexture>out=[s_dev newTextureWithDescriptor:td];MTLSamplerDescriptor*sd=[MTLSamplerDescriptor new];sd.minFilter=MTLSamplerMinMagFilterNearest;sd.magFilter=MTLSamplerMinMagFilterNearest;sd.sAddressMode=sd.tAddressMode=MTLSamplerAddressModeClampToEdge;id<MTLSamplerState>sampler=[s_dev newSamplerStateWithDescriptor:sd];
++ rsx_state st;memset(&st,0,sizeof st);st.shader_program=257;st.shader_control=64;st.textures[0].format=(0xB0u<<8)|(1u<<16)|(2u<<4)|1u;st.textures[0].control0=0x80000000;st.textures[0].filter=0x01010000;st.textures[0].image_rect=0x10001;
++ const u8*uc=NULL;
++ for(unsigned mode=0;mode<8;mode++)for(int refindex=0;refindex<4;refindex++){
++  float tc[4]={refindex==3?1.0f:.5f,refindex==3?1.0f:.5f,refindex==0?.25f:refindex==1?.5f:refindex==2?.75f:1.5f,refindex==3?2.0f:1.0f};st.textures[0].address=(mode<<28)|0x30303;
++  int slot=fp_slot_for(&st,&uc,0);CHECK(slot>=0,"guest TXP compilation");if(slot<0)continue;MTLRenderPipelineDescriptor*pd=[MTLRenderPipelineDescriptor new];pd.vertexFunction=[vl newFunctionWithName:@"vs"];pd.fragmentFunction=s_fp_cache[slot].fn;pd.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA32Float;id<MTLRenderPipelineState>pipe=[s_dev newRenderPipelineStateWithDescriptor:pd error:&err];CHECK(pipe!=nil,"actual translated fragment pipeline");if(!pipe)return 2;
++  MTLRenderPassDescriptor*rp=[MTLRenderPassDescriptor renderPassDescriptor];rp.colorAttachments[0].texture=out;rp.colorAttachments[0].loadAction=MTLLoadActionClear;rp.colorAttachments[0].storeAction=MTLStoreActionStore;id<MTLCommandBuffer>cb=[s_queue commandBuffer];id<MTLRenderCommandEncoder>e=[cb renderCommandEncoderWithDescriptor:rp];[e setRenderPipelineState:pipe];[e setVertexBytes:tc length:sizeof(tc) atIndex:0];[e setFragmentTexture:depth atIndex:0];[e setFragmentSamplerState:sampler atIndex:0];[e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];[e endEncoding];[cb commit];[cb waitUntilCompleted];CHECK(cb.status==MTLCommandBufferStatusCompleted&&!cb.error,"GPU draw completes");float pixel[4]={0};[out getBytes:pixel bytesPerRow:16 fromRegion:MTLRegionMake2D(0,0,1,1) mipmapLevel:0];float want=expected(mode,tc[2]/tc[3],d);CHECK(fabsf(pixel[0]-want)<1e-6,"reference-to-stored-depth compare or raw endpoint bypass");printf("mode%u reference%g stored%g actual%g expected%g\n",mode,tc[2]/tc[3],d,pixel[0],want);
++ }
++ MtlDraw draw;memset(&draw,0,sizeof draw);
++ st.textures[0].address=(3u<<28)|0x30303;
++ CHECK(guest_programs_for(&st,&draw)==-1,"active comparison cannot fall back on a missing guest VP");
++ st.textures[0].format=(0xB0u<<8)|(2u<<16)|(2u<<4)|1u;
++ CHECK(fp_slot_for(&st,&uc,0)==-2,"unsupported mip layout rejects legacy shader");
++ CHECK(fp_slot_for(&st,&uc,0)==-2,"cached unsupported layout still rejects legacy shader");
++ CHECK(guest_programs_for(&st,&draw)==-1,"unsupported comparison rejects legacy draw");
++ printf("Projected depth compare: %d checks, %d failures\n",checks,failures);free(vm_base);return failures?1:0;
++}}
+diff --git a/libs/video/tests/test_shadow_engine.c b/libs/video/tests/test_shadow_engine.c
+new file mode 100644
+index 00000000..2e3130d6
+--- /dev/null
++++ b/libs/video/tests/test_shadow_engine.c
+@@ -0,0 +1,23 @@
++/* Synthetic production draw-engine shadow state/cache test; no title data. */
++#define main old_engine_tests_main
++#include "test_rsx_draw_engine.c"
++#undef main
++#include "rsx_test_programs.h"
++static char shadow_ps[65536];
++static u32 capture_pipeline(void* u,const char* vs,const char* ps,const rsx_be_render_state* rs,const rsx_vertex_layout_plan* l,u32 stride,rsx_be_format f,u32 n){snprintf(shadow_ps,sizeof shadow_ps,"%s",ps);return stub_pipeline_create(u,vs,ps,rs,l,stride,f,n);}
++static void texture(u32 unit,u32 format,u32 dim,u32 mips,u32 func,u32 filter,u32 ctl){u32 b=M_TEX_UNIT+unit*32;m(b,0x60000+unit*0x1000);m(b+4,2|(dim<<4)|(format<<8)|(mips<<16));m(b+8,(func<<28)|0x30303);m(b+12,ctl);m(b+16,0xAAE4);m(b+20,filter);m(b+24,0x40004);}
++int main(void){vm_base=calloc(1,GUEST_BYTES);if(!vm_base)return 2;ppu_vm_size=GUEST_BYTES;engine_up();rsx_draw_backend be=g_stub_backend;be.pipeline_create=capture_pipeline;rsx_draw_engine_set_backend(&be);
++ u8 vp[16];rsx_test_vp_mov_out(vp,0,RSX_TEST_VP_SWZ_IDENT,0,1);m(0x1E9C,0);for(u32 i=0;i<4;i++){u32 w;memcpy(&w,vp+i*4,4);m(0xB80+i*4,w);}m(0x1EA0,0);
++ rsx_test_fp_instr(vm_base+TEX_OFFSET,RSX_TEST_FP_OPC(0x18)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|RSX_TEST_FP_END,RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);m(0x8E4,TEX_OFFSET|2);m(0x1D60,64);
++ texture(0,0xB0,2,1,0,0x01010000,0x80000000);draw_triangle();u32 raw=stub.bound_pipeline;CHECK(stub.n_pipeline_create==1,"raw endpoint starts one shader");CHECK(!strstr(shadow_ps,"_rsx_shadow"),"endpoint leaves ordinary HLSL");
++ u32 h[8]={raw};for(u32 f=1;f<7;f++){texture(0,0xB0,2,1,f,0x01010000,0x80000000);draw_triangle();h[f]=stub.bound_pipeline;CHECK(stub.n_pipeline_create==(int)f+1,"comparison %u creates distinct shader",f);CHECK(strstr(shadow_ps,"_rsx_shadow_cmp0")!=NULL,"comparison helper is emitted");CHECK(strstr(shadow_ps,".xyz /")!=NULL,"TXP divides reference as well as coordinates");CHECK(stub.bound_mask==1,"only source sampled unit is bound");draw_triangle();CHECK(stub.bound_pipeline==h[f]&&stub.n_pipeline_create==(int)f+1,"unchanged comparison reuses shader");}
++ texture(0,0xB0,2,1,7,0x01010000,0x80000000);draw_triangle();CHECK(stub.bound_pipeline==raw&&stub.n_pipeline_create==7,"second raw endpoint reuses ordinary shader");texture(0,0xB0,2,1,3,0x01010000,0x80000000);draw_triangle();CHECK(stub.bound_pipeline==h[3]&&stub.n_pipeline_create==7,"switchback selects correct comparison shader");
++ texture(1,0xB0,2,1,4,0x02020000,0x80000000);draw_triangle();CHECK(stub.n_pipeline_create==7&&stub.bound_mask==1,"unused shadow unit creates no helper or binding");
++ texture(1,0xF0,2,1,4,0x02020000,0x80000000);draw_triangle();CHECK(stub.n_pipeline_create==7&&stub.bound_mask==1,"unused active UN unit leaves shader cache and bindings unchanged");
++ texture(0,0xB0,2,1,3,0x02020000,0x80000000);draw_triangle();u32 linear=stub.bound_pipeline;CHECK(stub.n_pipeline_create==8&&linear!=h[3],"filter specialization participates in cache");CHECK(strstr(shadow_ps,"lerp(lerp(c0")!=NULL,"compared taps are filtered");
++ texture(0,0xF0,2,1,3,0x02020000,0x80000000);draw_triangle();CHECK(stub.n_pipeline_create==9&&strstr(shadow_ps,"coordinate.xy / size"),"UN coordinates specialize and use actual texture dimensions");
++ u32 un=stub.bound_pipeline;m(M_TEX_UNIT+24,0x80008);draw_triangle();CHECK(stub.n_pipeline_create==9&&stub.bound_pipeline==un,"shadow UN dimensions are runtime resource state, not shader identity");
++ texture(0,0xB0,2,1,3,0x01010000,0x80000004);draw_triangle();CHECK(stub.bound_pipeline==raw&&stub.n_pipeline_create==9,"alpha-kill disables comparison without changing ordinary shader");
++ int n=stub.n_draw;texture(0,0xB0,2,2,3,0x01010000,0x80000000);draw_triangle();CHECK(stub.n_draw==n&&stub.n_pipeline_create==9,"unsupported mip comparison rejects draw before backend emit");draw_triangle();CHECK(stub.n_draw==n,"cached failed shader cannot emit fallback");
++ texture(0,0xB0,3,1,3,0x01010000,0x80000000);draw_triangle();CHECK(stub.n_draw==n,"unsupported 3D comparison cannot emit fallback");texture(0,0xB0,2,1,3,0x02010000,0x80000000);draw_triangle();CHECK(stub.n_draw==n,"mixed min/mag filtering cannot emit fallback");texture(0,0xB0,2,1,3,0x01010000,0x80000000);draw_triangle();CHECK(stub.n_draw==n+1&&stub.bound_pipeline==h[3],"valid cache switchback survives rejected draws");
++ engine_down();free(vm_base);printf("shadow engine failures: %d\n",g_failures);return g_failures?1:0;}
+diff --git a/libs/video/tests/test_shadow_metadata.c b/libs/video/tests/test_shadow_metadata.c
+new file mode 100644
+index 00000000..6152dd0d
+--- /dev/null
++++ b/libs/video/tests/test_shadow_metadata.c
+@@ -0,0 +1,19 @@
++/* Synthetic shadow activation/unsupported-translation contracts. */
++#include "rsx_fp_decompiler.h"
++#include "rsx_test_programs.h"
++#include <stdio.h>
++#include <string.h>
++static int checks,failures;
++#define CHECK(x,n) do{checks++;if(!(x)){failures++;fprintf(stderr,"FAIL %s\n",n);}}while(0)
++int main(void){u8 uc[512]={0};char old[65536],now[65536];rsx_fp_shadow_desc d[16]={{0}};u32 nc=0;
++ rsx_test_fp_instr(uc,RSX_TEST_FP_OPC(0x18)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|RSX_TEST_FP_END,RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);
++ CHECK(rsx_fp_decompile_buffered_ex(uc,16,64,0,old,sizeof old,&nc)>0,"old API valid");CHECK(rsx_fp_decompile_buffered_shadow_ex(uc,16,64,0,d,now,sizeof now,&nc)>0&&!strcmp(old,now),"disabled metadata preserves all HLSL bytes");
++ for(u32 f=0;f<8;f++){rsx_fp_shadow_desc_from_texture(d,0xB0,2,0,1,0x01010000,f<<28,0x80000000);CHECK(d[0].enabled==(f>0&&f<7),"eight activation controls");}
++ rsx_fp_shadow_desc_from_texture(d,0xB0,2,0,1,0x01010000,3u<<28,0x80000004);CHECK(!d[0].enabled,"alpha-kill bypass");rsx_fp_shadow_desc_from_texture(d,0xA5,2,0,1,0x01010000,3u<<28,0x80000000);CHECK(!d[0].enabled,"ordinary color bypass");rsx_fp_shadow_desc_from_texture(d,0xB0,2,0,1,0x01010000,3u<<28,0);CHECK(!d[0].enabled,"disabled unit bypass");
++ const u32 bad[6][6]={{0xB1,2,0,1,0x01010000,3},{0xB3,2,0,1,0x01010000,3},{0xB0,2,1,1,0x01010000,3},{0xB0,1,0,1,0x01010000,3},{0xB0,2,0,2,0x01010000,3},{0xB0,2,0,1,0x01010000,8}};
++ for(int i=0;i<6;i++){rsx_fp_shadow_desc_from_texture(d,bad[i][0],bad[i][1],bad[i][2],bad[i][3],bad[i][4],bad[i][5]<<28,0x80000000);CHECK(d[0].enabled==2,"unsupported metadata flagged");CHECK(rsx_fp_decompile_buffered_shadow_ex(uc,16,64,0,d,now,sizeof now,&nc)<0,"unsupported active translation rejected");}
++ const u32 ops[5]={0x19,0x2F,0x31,0x33,0x34};rsx_fp_shadow_desc_from_texture(d,0xB0,2,0,1,0x01010000,3u<<28,0x80000000);
++ for(int i=0;i<5;i++){rsx_test_fp_instr(uc,RSX_TEST_FP_OPC(ops[i])|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|RSX_TEST_FP_END,RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);CHECK(rsx_fp_texture_units(uc,16)==1,"unsupported texture fetch still participates in activation");CHECK(rsx_fp_decompile_buffered_shadow_ex(uc,16,64,0,d,now,sizeof now,&nc)<0,"unsupported fetch rejected");}
++ for(u32 u=0;u<16;u++){rsx_test_fp_instr(uc+u*16,RSX_TEST_FP_OPC(0x17)|RSX_TEST_FP_TEXU(u)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|(u==15?RSX_TEST_FP_END:0),RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);rsx_fp_shadow_desc_from_texture(&d[u],0xB0,2,0,1,0x02020000,3u<<28,0x80000000);}
++ CHECK(rsx_fp_texture_units(uc,256)==65535,"all sixteen unit mask");CHECK(rsx_fp_decompile_buffered_shadow_ex(uc,256,64,0,d,now,sizeof now,&nc)>0&&strstr(now,"_rsx_shadow_cmp15"),"bounded output supports sixteen comparison helpers");
++ printf("shadow metadata: %d checks, %d failures\n",checks,failures);return failures?1:0;}

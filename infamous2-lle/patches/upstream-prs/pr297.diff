@@ -1,0 +1,53 @@
+diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
+index 66c65e5e..1e4d621f 100644
+--- a/tools/ppu_lifter.py
++++ b/tools/ppu_lifter.py
+@@ -516,7 +516,9 @@ class LiftedFunction:
+ 
+ def _last_line_is_terminator(body_lines: list[str]) -> bool:
+     """True if the function's last instruction is an unconditional terminator
+-    (return / internal goto / direct call / syscall / unconditional tail-call)."""
++    (return / internal goto / direct call / unconditional tail-call). A syscall is
++    not one: `sc` returns to the next instruction, so a function that ends in `sc`
++    must fall through to it."""
+     for line in reversed(body_lines):
+         s = line.strip()
+         if not s or s.endswith(":") or s.startswith("loc_") and s.endswith(": ;"):
+@@ -531,7 +533,7 @@ def _last_line_is_terminator(body_lines: list[str]) -> bool:
+         if t.startswith("if ("):
+             return False
+         return (t.startswith("return") or "goto " in t or
+-                t.startswith("func_") or t.startswith("lv2_syscall") or
++                t.startswith("func_") or
+                 "{ func_" in t or t.startswith("{ g_trampoline_fn"))
+     return False
+ 
+diff --git a/tools/test_ppu_fallthrough.py b/tools/test_ppu_fallthrough.py
+index 9ebd54c6..cde3d45a 100644
+--- a/tools/test_ppu_fallthrough.py
++++ b/tools/test_ppu_fallthrough.py
+@@ -35,6 +35,8 @@
+ def w_cmpwi(bf, ra, si):  return (11 << 26) | (bf << 23) | (ra << 16) | (si & 0xFFFF)
+ def w_bc(bo, bi, rel):    return (16 << 26) | (bo << 21) | (bi << 16) | (rel & 0xFFFC)
+ def w_blr():              return (19 << 26) | (20 << 21) | (16 << 1)
++def w_li(rt, si):         return (14 << 26) | (rt << 21) | (si & 0xFFFF)
++def w_sc():               return 0x44000002
+ 
+ 
+ def lift(words):
+@@ -62,10 +64,15 @@ def main() -> int:
+     check("unconditional goto is a terminator",
+           _last_line_is_terminator(["        goto loc_00010000;"]), True)
+     check("return is a terminator", _last_line_is_terminator(["        return;"]), True)
++    check("syscall is not a terminator", _last_line_is_terminator(["        lv2_syscall(ctx);"]), False)
+ 
+     # End to end: `loop: cmpwi r3,0; bne loop` falls through to the next address.
+     func = lift([w_cmpwi(0, 3, 0), w_bc(4, 2, -4)])
+     check("function ending in bne records its fall-through", func.fallthrough_to, BASE + 8)
++    # `li r11,141; sc` (sys_timer_usleep) cut at the instruction after `sc`: the
++    # syscall returns, so the fragment must continue at the next address.
++    func = lift([w_li(11, 141), w_sc()])
++    check("function ending in sc records its fall-through", func.fallthrough_to, BASE + 8)
+     # Control: ending in blr needs no continuation.
+     func = lift([w_cmpwi(0, 3, 0), w_blr()])
+     check("function ending in blr has no fall-through", func.fallthrough_to, 0)

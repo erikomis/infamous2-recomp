@@ -1,0 +1,500 @@
+diff --git a/.github/workflows/linux.yml b/.github/workflows/linux.yml
+index 01f3ed90..15ce92b8 100644
+--- a/.github/workflows/linux.yml
++++ b/.github/workflows/linux.yml
+@@ -266,6 +266,8 @@ jobs:
+           # is where those get checked at all.
+           ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -Wall -Wextra -Wno-unused-parameter -I include -I libs/video -o /tmp/test_rsx_draw_engine libs/video/tests/test_rsx_draw_engine.c libs/video/rsx_draw_engine.c libs/video/rsx_dispatch.c libs/video/rsx_vertex_compact.c libs/video/rsx_texture_layout.c libs/video/rsx_vp_decompiler.c libs/video/rsx_fp_decompiler.c
+           /tmp/test_rsx_draw_engine
++          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -Wall -Wextra -Wno-unused-parameter -I include -I libs/video -I libs/video/tests -o /tmp/test_color_feedback_engine libs/video/tests/test_color_feedback_engine.c libs/video/rsx_dispatch.c libs/video/rsx_vertex_compact.c libs/video/rsx_texture_layout.c libs/video/rsx_vp_decompiler.c libs/video/rsx_fp_decompiler.c
++          /tmp/test_color_feedback_engine
+           # The NV4097 method decoder on its own: the vertex-constant window is
+           # 32 dwords and the registers after it are not constants.
+           ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_rsx_transform_constants libs/video/tests/test_rsx_transform_constants.c libs/video/rsx_commands.c
+diff --git a/.github/workflows/macos.yml b/.github/workflows/macos.yml
+index 339ee928..55286c11 100644
+--- a/.github/workflows/macos.yml
++++ b/.github/workflows/macos.yml
+@@ -308,6 +308,8 @@ jobs:
+           # restart cuts bounding topology expansion. Runs on Linux too.
+           clang -std=gnu17 -Wall -Wextra -Wno-unused-parameter -I include -I libs/video -o /tmp/test_rsx_draw_engine libs/video/tests/test_rsx_draw_engine.c libs/video/rsx_draw_engine.c libs/video/rsx_dispatch.c libs/video/rsx_vertex_compact.c libs/video/rsx_texture_layout.c libs/video/rsx_vp_decompiler.c libs/video/rsx_fp_decompiler.c
+           /tmp/test_rsx_draw_engine
++          clang -std=gnu17 -Wall -Wextra -Wno-unused-parameter -I include -I libs/video -I libs/video/tests -o /tmp/test_color_feedback_engine libs/video/tests/test_color_feedback_engine.c libs/video/rsx_dispatch.c libs/video/rsx_vertex_compact.c libs/video/rsx_texture_layout.c libs/video/rsx_vp_decompiler.c libs/video/rsx_fp_decompiler.c
++          /tmp/test_color_feedback_engine
+           # The NV4097 method decoder on its own: the vertex-constant window is
+           # 32 dwords and the registers after it are not constants.
+           clang -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_rsx_transform_constants libs/video/tests/test_rsx_transform_constants.c libs/video/rsx_commands.c
+diff --git a/docs/rsx-color-feedback.md b/docs/rsx-color-feedback.md
+new file mode 100644
+index 00000000..612e25fd
+--- /dev/null
++++ b/docs/rsx-color-feedback.md
+@@ -0,0 +1,72 @@
++# Ordered colour-target feedback
++
++A texture unit can name the same colour allocation the current draw writes.
++The shared engine formerly excluded the live attachment from surface binding
++and uploaded its guest-memory backing instead. GPU-only writes need not have
++updated that backing. The old path therefore sampled stale pixels.
++
++The optional backend `color_snapshot` callback now supplies a unique immutable
++copy for each referenced owned colour attachment, shared by texture units in
++that draw. Newer depth content retains priority. The copy receives the sampling unit's existing component-remap view; gamma/filter
++state stays on the ordinary shader/sampler paths. No CPU readback is required.
++Backends leaving the appended callback NULL retain their existing behaviour.
++
++Metal records a full-size colour copy between existing draw records. Encoding
++finishes earlier render work, blits the source storage without conversion, then
++opens the next draw's pass with Load for colour, depth and stencil unless an
++explicit intervening clear requests otherwise. Each copy has independent
++storage, so subsequent copies cannot overwrite an earlier queued reader.
++Retired numeric resource/view handles remain available until their records
++have acquired retained Metal objects; resize and shutdown release the last
++copy. Record/allocation failures are explicit failures, not successful fallback
++textures.
++
++The implemented aliases have the same location, offset, entire physical width
++and height, compatible native storage format, and effective source/texture row
++pitch. The original surface must declare pitch-linear raster and the matching
++RSX colour format (8, 11, 12 or 13); the host RGBA8 fallback for packed
++formats is not enough to prove storage compatibility. Eligible formats are A8R8G8B8, W16_Z16_Y16_X16_FLOAT,
++W32_Z32_Y32_X32_FLOAT and X32_FLOAT. Only linear 2D, non-cube, one-level layouts
++are copied. A zero pitch denotes packed rows; explicit matching padded pitches
++are accepted. The copy preserves the complete dimensions supplied by the
++surface decoder;
++it neither resolves nor changes their interpretation. A separate native
++integration including sample-resolution AA was tested with AA0/3/4/5, while
++this direct-master fixture uses explicitly declared AA0 physical dimensions.
++No hardware MSAA coverage is claimed.
++
++For a backend providing the callback, incompatible owned aliases or failed
++copy/view creation reject the consuming draw with a bounded diagnostic.
++Subrectangles, swizzled reinterpretation, other formats,
++mips, cubes and differing pitches require separate conversion contracts.
++Non-owned colour/depth/guest binding paths are unchanged.
++
++Synthetic validation drives the production engine and Metal translator with
++queued producer and consumer draws, asymmetric component
++remapping, alpha, EQUAL depth/stencil and a long queued retirement chain.
++CPU controls exercise descriptor rejection, MRT, repeated units, allocation
++location, depth priority, callback/view failures, resize and legacy NULL
++behaviour. Ordinary engine regression stdout and stderr remain byte-identical
++to the parent. These establish the generic feedback boundary; they do not
++establish complete game rendering, visible object identity or hardware RSX
++feedback hazard semantics within a single overlapping primitive.
++
++The existing repository's `rsx_live_draw.c` own-target snapshot path documents
++the compatibility behaviour (same-target GPU content, not stale guest VRAM).
++This implementation is independently written. PR213 also describes snapshots
++in a broad renderer change; this focused delta intentionally does not copy it.
++
++Master has no checked-completion certificate API. Copy failures use the existing
++Metal dropped-record diagnostic and reject the consuming draw when detected
++at binding. The native validation uses its separately accepted completion
++checks; this focused change does not import those unrelated interfaces.
++
++The CPU fixture is included in Linux and macOS CI. It includes the engine
++source to test the descriptor helper and uses only synthetic data. Build it
++with the same translation/fetch dependencies as the existing draw-engine
++test, without separately compiling `rsx_draw_engine.c`. The offscreen Metal
++fixture includes the backend and engine in one translation unit; link the
++existing HLSL-to-MSL translator plus the ordinary decompiler, dispatch, vertex
++compact and texture-layout objects. It needs no window or title runtime.
++Its additional native-format copy cases sample float values above one into
++RGBA32Float, so integer saturation cannot hide a conversion error.
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+index b438d877..d517dc00 100644
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -93,6 +93,7 @@ typedef struct {
+     u32 pitch;              /* guest bytes per row, from SET_SURFACE_PITCH */
+     rsx_be_format fmt;
+     u32 handle;
++    u32 feedback;          /* last immutable own-target copy, engine-owned */
+     u64 color_serial;       /* g.write_serial of the last colour write, or 0 */
+     int guest_dirty;        /* rendered since guest memory last got a copy   */
+ } eng_surface;
+@@ -568,6 +569,7 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+         return (slot < g.n_surfaces && g.surfaces[slot].handle) ? slot : ENG_INVALID;
+ 
+     eng_surface* s = &g.surfaces[slot];
++    if (s->feedback) { g.be->texture_release(g.be->user, s->feedback); s->feedback = 0; }
+     if (s->handle) g.be->color_target_release(g.be->user, s->handle);
+     s->location = location; s->offset = offset;
+     s->w = want_w; s->h = want_h; s->fmt = want_fmt;
+@@ -1630,12 +1632,54 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
+  * render-to-texture read back through a texture unit), a unit naming a
+  * tracked zeta in DEPTH24_D8 samples its snapshot, and everything else is a
+  * guest upload (rsx_live_draw.c:5986-6062). */
++/* A direct copy is valid only for the entire matching physical sample
++ * layout. Reinterpreted, swizzled, mipmapped and subrectangle aliases need a
++ * different conversion and must not silently sample stale guest bytes. */
++static int eng_color_feedback_compatible(const eng_surface* s,
++                                          const rsx_dsp_texture* t,
++                                          const rsx_dsp_surface* sf)
++{
++    const u32 base = t->format & 0x9fu;
++    u32 bpp = 0, color = 0;
++    switch (s->fmt) {
++    case RSX_BE_FMT_R8G8B8A8:        if (base == 0x85u) { bpp = 4; color = 8; } break;
++    case RSX_BE_FMT_R16G16B16A16F:   if (base == 0x9au) { bpp = 8; color = 11; } break;
++    case RSX_BE_FMT_R32G32B32A32F:   if (base == 0x9bu) { bpp = 16; color = 12; } break;
++    case RSX_BE_FMT_R32F:            if (base == 0x9cu) { bpp = 4; color = 13; } break;
++    default: break;
++    }
++    if (!bpp || sf->color_format != color || sf->raster_type != 1 ||
++        !(t->format & 0x20u) || t->dimension != 2 ||
++        t->cubemap || t->mipmaps > 1 || t->depth > 1 ||
++        t->width != s->w || t->height != s->h) return 0;
++    const u64 row = (u64)s->w * bpp;
++    const u64 sp = s->pitch ? s->pitch : row;
++    const u64 tp = t->pitch ? t->pitch : row;
++    return row && sp >= row && tp == sp;
++}
++
++static u32 eng_color_feedback_failure(u32 unit, const eng_surface* s,
++                                       const rsx_dsp_texture* t)
++{
++    static u32 logs;
++    rsx_dsp_surface sf;
++    rsx_dsp_get_surface(&g.rsx, &sf);
++    if (logs++ < 8)
++        fprintf(stderr, "[rsx engine] rejected colour feedback unit %u: "
++                "target %ux%u fmt%u pitch%u, texture %ux%u fmt%02X pitch%u "
++                "dim%u levels%u cube%u color%u raster%u\n", unit, s->w, s->h, (u32)s->fmt,
++                s->pitch, t->width, t->height, t->format, t->pitch,
++                t->dimension, t->mipmaps, t->cubemap, sf.color_format, sf.raster_type);
++    return ENG_INVALID;
++}
++
+ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+                               u32 current_zslot, u32 tex_used,
+                               u32 textures[RSX_BE_MAX_TEXTURES],
+                               rsx_be_sampler_desc samplers[RSX_BE_MAX_TEXTURES])
+ {
+     u32 mask = 0;
++    u32 feedback[RSX_BE_MAX_COLOR_TARGETS] = {0};
+     for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
+         rsx_dsp_texture t;
+         rsx_dsp_get_texture(&g.rsx, u, &t);
+@@ -1652,9 +1696,8 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+                 g.surfaces[i].offset != t.offset)
+                 continue;
+             surface_at = (int)i;
+-            /* Not one this draw writes: reading a target a pass is writing
+-             * is undefined on every API, and an MRT set writes more than
+-             * one of them. */
++            /* A current attachment requires an ordered immutable copy; it
++             * cannot be sampled directly while the host pass writes it. */
+             for (u32 k = 0; k < n_targets; k++) if (target_slots[k] == i) own = 1;
+             if (own) break;
+             sampled = (int)i;
+@@ -1686,6 +1729,32 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+                 continue;
+             }
+         }
++        if (own && zsrc < 0 && g.be->color_snapshot) {
++            eng_surface* s = &g.surfaces[surface_at];
++            rsx_dsp_surface sf;
++            rsx_dsp_get_surface(&g.rsx, &sf);
++            if (!eng_color_feedback_compatible(s, &t, &sf))
++                return eng_color_feedback_failure(u, s, &t);
++            u32 k = 0;
++            while (k < n_targets && target_slots[k] != (u32)surface_at) k++;
++            if (k == n_targets) return eng_color_feedback_failure(u, s, &t);
++            if (!feedback[k]) {
++                const u32 copy = g.be->color_snapshot(g.be->user, s->handle);
++                if (!copy) return eng_color_feedback_failure(u, s, &t);
++                if (s->feedback) g.be->texture_release(g.be->user, s->feedback);
++                s->feedback = feedback[k] = copy;
++            }
++            if (g.be->surface_view) {
++                textures[u] = g.be->surface_view(g.be->user, feedback[k],
++                                               t.remap & 0xffffu, t.format);
++                if (!textures[u]) return eng_color_feedback_failure(u, s, &t);
++            } else if ((t.remap & 0xffffu) == 0xaae4u) {
++                textures[u] = feedback[k];
++            } else {
++                return eng_color_feedback_failure(u, s, &t);
++            }
++            continue;
++        }
+         if (sampled >= 0 && zsrc < 0 &&
+             g.surfaces[sampled].fmt == RSX_BE_FMT_R8G8B8A8 &&
+             eng_format_reinterprets_rgba8(base_fmt) &&
+@@ -2134,6 +2203,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
+     memset(vsamplers, 0, sizeof vsamplers);
+     const u32 tex_mask = sink_bind_textures(targets, n_targets, zslot, tex_used,
+                                             textures, samplers);
++    if (tex_mask == ENG_INVALID) return;
+     const u32 vtex_mask = sink_bind_vertex_textures(eng_vtex_mask(), vtextures,
+                                                     vsamplers);
+ 
+@@ -2421,8 +2491,10 @@ void rsx_draw_engine_shutdown(void)
+         if (g.textures[i].handle) g.be->texture_release(g.be->user, g.textures[i].handle);
+     for (u32 i = 0; i < g.n_pipelines; i++)
+         if (g.pipelines[i].handle) g.be->pipeline_release(g.be->user, g.pipelines[i].handle);
+-    for (u32 i = 0; i < g.n_surfaces; i++)
++    for (u32 i = 0; i < g.n_surfaces; i++) {
++        if (g.surfaces[i].feedback) g.be->texture_release(g.be->user, g.surfaces[i].feedback);
+         if (g.surfaces[i].handle) g.be->color_target_release(g.be->user, g.surfaces[i].handle);
++    }
+     for (u32 i = 0; i < g.n_zdepths; i++)
+         if (g.zdepths[i].handle) g.be->depth_target_release(g.be->user, g.zdepths[i].handle);
+     if (g.ready && g.be->shutdown) g.be->shutdown(g.be->user);
+diff --git a/libs/video/rsx_draw_engine.h b/libs/video/rsx_draw_engine.h
+index 1a3bc99f..74a26b3c 100644
+--- a/libs/video/rsx_draw_engine.h
++++ b/libs/video/rsx_draw_engine.h
+@@ -106,6 +106,7 @@ typedef struct rsx_be_render_state {
+ 
+ /* ---- the backend interface ---------------------------------------------- */
+ 
++#define RSX_BE_HAS_COLOR_SNAPSHOT 1
+ typedef struct rsx_draw_backend {
+     void* user;
+ 
+@@ -218,6 +219,12 @@ typedef struct rsx_draw_backend {
+      * DEPTH16); left NULL, such a texture reads guest memory as it is. */
+     int  (*depth_readback)(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+                            float* out, u32 out_pitch);
++    /* Optional same-target colour feedback. Return a fresh, immutable texture
++     * of the target's full physical extent and storage format. Its GPU copy
++     * must execute after all preceding writes and before the next draw. The
++     * engine owns the returned handle and releases it with texture_release.
++     * 0 rejects the consuming draw; NULL retains the legacy guest-upload route. */
++    u32 (*color_snapshot)(void* user, u32 surface);
+ } rsx_draw_backend;
+ 
+ /* ---- the engine --------------------------------------------------------- */
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+index d04b34e3..aa2f066e 100644
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -2086,7 +2086,8 @@ static void release_surfaces(void)
+ static u32 s_eng_view_count;
+ 
+ typedef enum {
+-    ENG_REC_DRAW, ENG_REC_CLEAR_COLOR, ENG_REC_CLEAR_DS, ENG_REC_DEPTH_RESOLVE
++    ENG_REC_DRAW, ENG_REC_CLEAR_COLOR, ENG_REC_CLEAR_DS, ENG_REC_DEPTH_RESOLVE,
++    ENG_REC_COLOR_SNAPSHOT
+ } EngRecKind;
+ 
+ typedef struct {
+@@ -2113,7 +2114,7 @@ static void release_surfaces(void)
+     u32   clear_flags;
+     float clear_depth;
+     u8    clear_stencil;
+-    u32   resolve_dst;          /* ENG_REC_DEPTH_RESOLVE target texture */
++    u32   resolve_dst;          /* snapshot/resolve destination texture */
+ } EngRecord;
+ 
+ static EngRecord s_eng_rec[ENG_MAX_RECORDS];
+@@ -2397,6 +2398,29 @@ static u32 eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_format)
+     return handle;
+ }
+ 
++/* Allocate now, copy in command order. The returned object is unique to
++ * this draw; later snapshots never overwrite a queued draw's sampled image. */
++static u32 eng_color_snapshot(void* user, u32 surface)
++{
++    (void)user;
++    id<MTLTexture> src = eng_obj(surface);
++    if (!src || [src textureType] != MTLTextureType2D || [src sampleCount] != 1 ||
++        s_eng_rec_count >= ENG_MAX_RECORDS) { s_eng_dropped++; return 0; }
++    MTLTextureDescriptor* td =
++        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:[src pixelFormat]
++                         width:[src width] height:[src height] mipmapped:NO];
++    td.storageMode = MTLStorageModePrivate;
++    td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
++    const u32 copy = eng_obj_add([s_dev newTextureWithDescriptor:td]);
++    if (!copy) { s_eng_dropped++; return 0; }
++    EngRecord* r = &s_eng_rec[s_eng_rec_count++];
++    memset(r, 0, sizeof *r);
++    r->kind = ENG_REC_COLOR_SNAPSHOT;
++    r->rt[0] = surface;
++    r->resolve_dst = copy;
++    return copy;
++}
++
+ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
+ {
+     (void)user;
+@@ -2830,6 +2854,24 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+ {
+     u32 i = 0;
+     while (i < s_eng_rec_count) {
++        if (s_eng_rec[i].kind == ENG_REC_COLOR_SNAPSHOT) {
++            const EngRecord* r = &s_eng_rec[i++];
++            id<MTLTexture> src = eng_obj(r->rt[0]);
++            id<MTLTexture> dst = eng_obj(r->resolve_dst);
++            if (!src || !dst || [src width] != [dst width] ||
++                [src height] != [dst height] || [src pixelFormat] != [dst pixelFormat]) {
++                s_eng_dropped++; continue;
++            }
++            id<MTLBlitCommandEncoder> copy = [cb blitCommandEncoder];
++            if (!copy) { s_eng_dropped++; continue; }
++            [copy copyFromTexture:src sourceSlice:0 sourceLevel:0
++                   sourceOrigin:MTLOriginMake(0, 0, 0)
++                     sourceSize:MTLSizeMake([src width], [src height], 1)
++                      toTexture:dst destinationSlice:0 destinationLevel:0
++              destinationOrigin:MTLOriginMake(0, 0, 0)];
++            [copy endEncoding];
++            continue;
++        }
+         if (s_eng_rec[i].kind == ENG_REC_DEPTH_RESOLVE) {
+             const EngRecord* r = &s_eng_rec[i++];
+             id<MTLTexture> src = eng_obj(r->depth);
+@@ -2861,7 +2903,8 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+         float cdepth = 1.0f;
+         u8 cstencil = 0;
+         while (i < s_eng_rec_count && s_eng_rec[i].kind != ENG_REC_DRAW &&
+-               s_eng_rec[i].kind != ENG_REC_DEPTH_RESOLVE) {
++               s_eng_rec[i].kind != ENG_REC_DEPTH_RESOLVE &&
++               s_eng_rec[i].kind != ENG_REC_COLOR_SNAPSHOT) {
+             const EngRecord* r = &s_eng_rec[i];
+             if (r->kind == ENG_REC_CLEAR_COLOR) {
+                 u32 k = 0;
+@@ -3148,6 +3191,7 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+     .depth_target_create  = eng_depth_target_create,
+     .depth_target_release = eng_obj_release,
+     .depth_snapshot       = eng_depth_snapshot,
++    .color_snapshot       = eng_color_snapshot,
+     .pipeline_create      = eng_pipeline_create,
+     .pipeline_release     = eng_pipeline_release,
+     .bind_targets         = eng_bind_targets,
+diff --git a/libs/video/tests/test_color_feedback_engine.c b/libs/video/tests/test_color_feedback_engine.c
+new file mode 100644
+index 00000000..d2d870d8
+--- /dev/null
++++ b/libs/video/tests/test_color_feedback_engine.c
+@@ -0,0 +1,36 @@
++/* Production binding/descriptor/lifetime checks; synthetic addresses only. */
++#define main engine_retention_main
++#include "test_rsx_draw_engine.c"
++#undef main
++#include "rsx_draw_engine.c"
++static rsx_draw_backend feedback_backend;
++static unsigned checks, failures, copies;
++static u32 source_seen, snapshot_seen;
++static int fail_copy, fail_view;
++#define T(c,msg) do{checks++;if(!(c)){failures++;fprintf(stderr,"FAIL %s\n",msg);}}while(0)
++static u32 snapshot(void* user,u32 src){(void)user;copies++;source_seen=src;return fail_copy?0:(snapshot_seen=stub_handle());}
++static u32 view(void* user,u32 src,u32 remap,u32 fmt){return fail_view?0:stub_surface_view(user,src,remap,fmt);}
++static void up(void){engine_up();feedback_backend=g_stub_backend;rsx_draw_engine_set_backend(&feedback_backend);copies=0;fail_copy=fail_view=0;feedback_backend.color_snapshot=snapshot;feedback_backend.surface_view=view;m(M_SURFACE_FORMAT,0x148);m(M_COLOR_A_PITCH,1024);bind_texture_unit(RSX_LOCATION_LOCAL,0x40000);m(M_TEX_UNIT+0x18,(256<<16)|256);m(0x1840,1024);}
++static void down(void){engine_down();feedback_backend.color_snapshot=NULL;feedback_backend.surface_view=stub_surface_view;}
++static void rejection(u32 method,u32 value){up();m(method,value);draw_triangle();T(!stub.n_draw&&copies==0,"unsupported layout rejects before draw or copy");down();}
++int main(void){vm_base=calloc(1,GUEST_BYTES);ppu_vm_size=GUEST_BYTES;
++ up();draw_triangle();T(copies==1&&stub.n_draw==1,"own target snapshots before emitted draw");T(source_seen==stub.bound_surface&&snapshot_seen==stub.bound_tex[0]&&source_seen!=snapshot_seen,"own target binds distinct copied texture");T(stub.n_texture_create==0,"own target avoids stale guest upload");u32 prior=snapshot_seen;draw_triangle();T(copies==2&&snapshot_seen!=prior&&!stub.alive[prior],"next draw has fresh copy and retires old one");u32 last=snapshot_seen;down();T(!stub.alive[last],"shutdown releases last copy");
++ up();m(M_COLOR_A_OFFSET,0x50000);draw_triangle();T(copies==0&&stub.n_texture_create==1,"other address unchanged guest upload");down();
++ up();m(M_CONTEXT_DMA_COLOR_A,DMA_MAIN);draw_triangle();T(copies==0&&stub.n_texture_create==1,"other location unchanged guest upload");down();
++ up();m(M_TEX_UNIT+0x0C,0);draw_triangle();T(copies==0&&stub.n_draw==1,"disabled unit never snapshots");down();
++ up();feedback_backend.color_snapshot=NULL;draw_triangle();T(copies==0&&stub.n_texture_create==1&&stub.n_draw==1,"absent callback preserves legacy fallback");down();
++ up();fail_copy=1;draw_triangle();T(copies==1&&!stub.n_draw,"failed copy rejects and no emitted draw");down();
++ up();fail_view=1;draw_triangle();T(copies==1&&!stub.n_draw,"failed view rejects and no emitted draw");down();
++ up();draw_triangle();prior=snapshot_seen;m(M_SURFACE_CLIP_H,128<<16);m(M_COLOR_A_PITCH,512);m(M_TEX_UNIT+0x18,(128<<16)|256);m(0x1840,512);draw_triangle();T(copies==2&&!stub.alive[prior]&&stub.n_draw==2,"resize releases copied target before replacement");down();
++ rejection(M_SURFACE_FORMAT,0x143);rejection(M_SURFACE_FORMAT,0x248);rejection(M_TEX_UNIT+0x18,(128<<16)|256);rejection(0x1840,512);rejection(0x1840,2048);rejection(M_TEX_UNIT+4,1|(2<<4)|(0x85<<8)|(1<<16));rejection(M_TEX_UNIT+4,1|(1<<4)|(0xA5<<8)|(1<<16));rejection(M_TEX_UNIT+4,1|(2<<4)|(0xA5<<8)|(2<<16));rejection(M_TEX_UNIT+4,1|4|(2<<4)|(0xA5<<8)|(1<<16));rejection(M_TEX_UNIT+4,1|(2<<4)|(0xAC<<8)|(1<<16));rejection(0x1840,1024|(2<<20));
++ /* Direct production binding: two referenced units share one per-draw copy. */
++ up();u32 targets[4];u32 nt=eng_current_target_set(targets);for(u32 a=0;a<0x20;a+=4)m(M_TEX_UNIT+0x20+a,rsx_dsp_reg(&g.rsx,M_TEX_UNIT+a));m(0x1844,1024);u32 tx[16]={0};rsx_be_sampler_desc ss[16]={0};T(sink_bind_textures(targets,nt,ENG_INVALID,3,tx,ss)==3&&copies==1&&tx[0]==tx[1],"two units reuse one immutable copy in a draw");memset(tx,0,sizeof tx);T(sink_bind_textures(targets,nt,ENG_INVALID,0,tx,ss)==0&&copies==1,"unused enabled units make no copy");down();
++ /* Each owned MRT gets its own immutable image. */
++ up();m(M_COLOR_TARGET,CELL_GCM_SURFACE_TARGET_MRT1);m(M_CONTEXT_DMA_COLOR_B,DMA_LOCAL);m(M_COLOR_B_OFFSET,0x50000);m(0x021C,1024);for(u32 a=0;a<0x20;a+=4)m(M_TEX_UNIT+0x20+a,rsx_dsp_reg(&g.rsx,M_TEX_UNIT+a));m(0x1844,1024);m(M_TEX_UNIT+0x20,0x50000);nt=eng_current_target_set(targets);memset(tx,0,sizeof tx);T(nt==2&&sink_bind_textures(targets,nt,ENG_INVALID,3,tx,ss)==3&&copies==2&&tx[0]!=tx[1],"MRT feedback snapshots every owned member independently");down();
++ up();feedback_backend.surface_view=NULL;draw_triangle();T(copies==1&&stub.n_draw==1&&stub.bound_tex[0]==snapshot_seen,"absent view allows identity copy");down();
++ up();feedback_backend.surface_view=NULL;m(M_TEX_UNIT+0x10,0xAA6C);draw_triangle();T(copies==1&&!stub.n_draw,"absent remap view rejects instead of silently changing channels");down();
++ /* Independently newer depth at the same address keeps its established route. */
++ up();nt=eng_current_target_set(targets);u32 zs=eng_zdepth_get(RSX_LOCATION_LOCAL,0x40000,256,256);g.zdepths[zs].depth_serial=2;g.zdepths[zs].had_write=1;g.zdepths[zs].snapshot_valid=0;m(M_TEX_UNIT+4,1|(2<<4)|(0xB0<<8)|(1<<16));memset(tx,0,sizeof tx);T(sink_bind_textures(targets,nt,ENG_INVALID,1,tx,ss)==1&&copies==0&&stub.n_depth_snapshot==1,"newer depth wins over own color metadata");down();
++ /* Full physical layouts and matching formats, without reinterpretation. */
++ const rsx_be_format f[]={RSX_BE_FMT_R8G8B8A8,RSX_BE_FMT_R16G16B16A16F,RSX_BE_FMT_R32G32B32A32F,RSX_BE_FMT_R32F};const u32 b[]={0xA5,0xBA,0xBB,0xBC},bp[]={4,8,16,4};for(unsigned i=0;i<4;i++){const u32 cf[4]={8,11,12,13};rsx_dsp_surface sf={.color_format=cf[i],.raster_type=1};eng_surface s={.w=128,.h=64,.fmt=f[i],.pitch=128*bp[i]};rsx_dsp_texture t={.format=b[i],.dimension=2,.width=128,.height=64,.mipmaps=1,.pitch=128*bp[i],.depth=1};T(eng_color_feedback_compatible(&s,&t,&sf),"compatible integer/float full physical layout");t.width=64;T(!eng_color_feedback_compatible(&s,&t,&sf),"logical width must not replace AA physical width");t.width=128;s.pitch=t.pitch=0;T(eng_color_feedback_compatible(&s,&t,&sf),"zero pitch means matching packed rows");s.pitch=t.pitch=128*bp[i]+64;T(eng_color_feedback_compatible(&s,&t,&sf),"matching padded pitch supported");}
++ free(vm_base);printf("engine feedback checks=%u failures=%u\n",checks,failures);return failures?1:0;}
+diff --git a/libs/video/tests/test_color_feedback_metal.m b/libs/video/tests/test_color_feedback_metal.m
+new file mode 100644
+index 00000000..8cce3e99
+--- /dev/null
++++ b/libs/video/tests/test_color_feedback_metal.m
+@@ -0,0 +1,87 @@
++/* Synthetic real-engine same-target sampling. No title data.
++ * Explicit AA0 full extent: sample-resolution AA is a separate feature. */
++#include "rsx_metal_backend.m"
++#define eng_texture_upload test_engine_texture_upload
++#define eng_present test_engine_present
++#include "rsx_draw_engine.c"
++#undef eng_texture_upload
++#undef eng_present
++#include "rsx_test_programs.h"
++#include <math.h>
++u8* vm_base;u32 ppu_vm_size;
++u32 cellGcmResolveLocated(int local,u32 offset){(void)local;return offset;}
++u32 cellGcmResolveIO(u32 offset){return offset<ppu_vm_size?offset:0;}
++void cellGcm_replay_display_buffers_to_engine(void){}
++static unsigned checks,failures;
++#define T(x,label) do{checks++;if(!(x)){failures++;if(failures<20)fprintf(stderr,"FAIL %s\n",label);}}while(0)
++static void method(u32 a,u32 v){rsx_draw_engine_method(a,v);}
++static void bf(u8*p,float f){u32 v;memcpy(&v,&f,4);p[0]=v>>24;p[1]=v>>16;p[2]=v>>8;p[3]=v;}
++static void draw(void){method(0x1808,RSX_PRIMITIVE_TRIANGLES);method(0x1814,2u<<24);method(0x1808,0);}
++static void run(u32 aa,u32 sx,u32 sy){
++ T(rsx_draw_engine_init(64,64)==0,"initialization");
++ method(0x194,0xFEED0000);method(0x210,0x40000);method(0x20C,64*sx*4);method(0x200,64u<<16);method(0x204,64u<<16);method(0x208,0x148|(aa<<12));
++ method(0x1740,2u|(4u<<4)|(48u<<8));method(0x1680,0x80010000);method(0x1744,2u|(4u<<4)|(48u<<8));method(0x1684,0x80010010);method(0x1760,2u|(4u<<4)|(48u<<8));method(0x16A0,0x80010020);
++ const float v[36]={-1,-1,.2,1,.25,.5,.75,.125,.25,.5,0,1,3,-1,.2,1,.25,.5,.75,.125,.25,.5,0,1,-1,3,.2,1,.25,.5,.75,.125,.25,.5,0,1};for(u32 i=0;i<36;i++)bf(vm_base+0x10000+i*4,v[i]);
++ u8 vp[48];rsx_test_vp_mov_out(vp,0,RSX_TEST_VP_SWZ_IDENT,0,0);rsx_test_vp_mov_out(vp+16,1,RSX_TEST_VP_SWZ_IDENT,1,0);rsx_test_vp_mov_out(vp+32,8,RSX_TEST_VP_SWZ_IDENT,7,1);method(0x1E9C,0);for(u32 i=0;i<12;i++){u32 w;memcpy(&w,vp+i*4,4);method(0xB80+i*4,w);}method(0x1EA0,0);
++ rsx_test_fp_mov_r0_col0(vm_base+0x60000,RSX_TEST_FP_SWZ_IDENT);method(0x8E4,0x60002);method(0x1D60,64);
++ method(0xA6C,0x203);method(0xA70,1);method(0xA74,1);method(0x1D90,0xCC333366);method(0x1D8C,0xFFFFFF07);method(0x1D94,0xF3);draw();
++ /* Producer remains queued: the snapshot must see its GPU output, not this clear. */
++ T(s_eng_rec_count>=2,"producer remains queued before consumers");
++ rsx_test_fp_tex_r0_tc0(vm_base+0x60040,0);method(0x8E4,0x60042);
++ method(0x1A00,0x40000);method(0x1A04,1|(2<<4)|(0xA5<<8)|(1<<16));method(0x1A0C,0x80000000);method(0x1A10,0xAA6C);method(0x1A18,((64*sx)<<16)|(64*sy));method(0x1840,64*sx*4);
++ method(0xA6C,0x202);method(0xA70,0);method(0x328,1);method(0x330,0x202);method(0x334,7);method(0x338,255);method(0x33C,0x1E00);method(0x340,0x1E00);method(0x344,0x1E00);
++ method(0x8C0,32u<<16);method(0x8C4,64u<<16);draw();
++ /* Second copy must include the first consumer's writes; its fixed UV lies left. */
++ method(0x1A10,0xAAE4);method(0x8C0,(32u<<16)|32);draw();
++ /* Long queued chain: replacing a copy also retires its view, but neither
++  * numeric handle may disappear until prior records are encoded. */
++#ifdef RSX_BE_HAS_COLOR_SNAPSHOT
++ if (aa==0) {
++  const u32 old_copy=g.surfaces[0].feedback;
++  const u32 old_view=s_eng_pending.tex[0];
++  for(u32 q=0;q<256;q++)draw();
++  T(s_eng_obj_retired[old_copy-1]&&eng_obj(old_copy)!=nil,"released queued source retains texture until encoding");
++  T(s_eng_obj_retired[old_view-1]&&eng_obj(old_view)!=nil,"released queued view retains texture until encoding");
++ }
++#endif
++ s_engine_backend.submit_and_wait(NULL,0);T(s_eng_rec_count==0,"headless GPU submission finished encoding");
++ u8 pixels[128*128*4];float z[128*128];s_engine_backend.readback(NULL,g.surfaces[0].handle,0,0,64*sx,64*sy,pixels,64*sx*4);
++ const u32 ds=eng_depth_snapshot(NULL,g.zdepths[0].handle,64*sx,64*sy);T(ds!=0,"existing depth snapshot");s_engine_backend.submit_and_wait(NULL,0);[eng_obj(ds) getBytes:z bytesPerRow:64*sx*4 fromRegion:MTLRegionMake2D(0,0,64*sx,64*sy) mipmapLevel:0];eng_obj_release(NULL,ds);
++ for(u32 i=0;i<64*sx*64*sy;i++){T(pixels[4*i]==191&&pixels[4*i+1]==128&&pixels[4*i+2]==64&&pixels[4*i+3]==32,"ordered self sampling preserves producer and prior consumer RGBA");T(fabsf(z[i]-.2f)<1e-6f,"encoder restart preserves depth");}
++ T(s_eng_dropped==0,"no dropped records");
++#ifdef RSX_BE_HAS_COLOR_SNAPSHOT
++ if(aa==0){const u32 old_count=s_eng_obj_count;s_eng_rec_count=ENG_MAX_RECORDS;
++  T(!eng_color_snapshot(NULL,g.surfaces[0].handle),"full record queue rejects snapshot");
++  T(s_eng_obj_count==old_count,"queue rejection allocates no texture");
++  T(s_eng_dropped>0,"queue rejection records explicit backend failure");
++  s_eng_rec_count=0;}
++#endif
++ rsx_draw_engine_shutdown();
++}
++
++#ifdef RSX_BE_HAS_COLOR_SNAPSHOT
++static void formats(void){
++ const rsx_be_format ff[4]={RSX_BE_FMT_R8G8B8A8,RSX_BE_FMT_R16G16B16A16F,RSX_BE_FMT_R32G32B32A32F,RSX_BE_FMT_R32F};
++ const float c[4]={.125f,.5f,1.5f,.75f};
++ for(u32 f=0;f<4;f++){
++  T(!eng_init(NULL,8,4),"format fixture initialization");
++  u32 source=eng_color_target_create(NULL,ff[f],8,4,NULL,0);
++  eng_clear_color(NULL,source,c);u32 copy=eng_color_snapshot(NULL,source);
++  u32 dest=eng_color_target_create(NULL,RSX_BE_FMT_R32G32B32A32F,8,4,NULL,0);
++  T(source&&copy&&dest&&source!=copy,"format copy has distinct storage");
++  id<MTLCommandBuffer> cb=[s_queue commandBuffer];eng_encode_records(cb,nil);
++  eng_blit_to_display(cb,eng_obj(copy),eng_obj(dest));T(s_eng_blit_pso!=nil,"sample copied storage into float target");
++  [cb commit];[cb waitUntilCompleted];T([cb status]==MTLCommandBufferStatusCompleted&&![cb error],"format GPU completion");
++  float pixels[8*4*4];[eng_obj(dest) getBytes:pixels bytesPerRow:8*16 fromRegion:MTLRegionMake2D(0,0,8,4) mipmapLevel:0];
++  const float expected[4]={f==0?32.f/255:.125f,f==3?0:f==0?128.f/255:.5f,f==3?0:f==0?1:1.5f,f==3?1:f==0?191.f/255:.75f};
++  for(u32 i=0;i<8*4;i++)for(u32 lane=0;lane<4;lane++)T(fabsf(pixels[i*4+lane]-expected[lane])<1e-6f,"copy preserves format/float magnitude/alpha");
++  s_eng_rec_count=0;eng_shutdown(NULL);
++ }
++}
++#endif
++
++int main(void){@autoreleasepool{s_dev=MTLCreateSystemDefaultDevice();if(!s_dev)return 2;s_queue=[s_dev newCommandQueue];s_headless=1;s_guest_shaders=1;vm_base=calloc(1,1u<<20);ppu_vm_size=1u<<20;rsx_draw_engine_set_backend(&s_engine_backend);run(0,1,1);
++#ifdef RSX_BE_HAS_COLOR_SNAPSHOT
++formats();
++#endif
++rsx_draw_engine_set_backend(NULL);free(vm_base);printf("GPU feedback checks=%u failures=%u\n",checks,failures);return failures?1:0;}}
