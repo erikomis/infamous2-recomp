@@ -597,10 +597,15 @@ index ea160aa..a2318a0 100644
  void sceNpSetFakeUsername(const char* username);
  
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..8394da7 100644
+index 73b7e71..478fd86 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -782,6 +782,9 @@ static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
+@@ -778,10 +778,14 @@ unsigned long long ps3_ms_now(void)
+ }
+ 
+ static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
++static int s_sema_blocked_pass = 0;   /* this drain stopped on a semaphore acquire */
+ /* Backlog past which the drain stops honouring one-flip-per-tick and
   * catches up instead. Sized well above a frame's command list so a
   * title that keeps up never sees this path. */
  #define GCM_FIFO_CATCHUP_BYTES 0x10000u
@@ -610,7 +615,20 @@ index 73b7e71..8394da7 100644
  /* How close `current` must get to `end` before the runtime will recycle a ring
   * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
   * title that is merely near the end from being touched. */
-@@ -1332,8 +1335,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+@@ -864,6 +868,12 @@ static void nv3089_blit(void)
+     u32 in_pitch = s_nv3089.in_fmt & 0xFFFF;
+     u32 dst_pitch = s_gcm2d.pitch >> 16;
+     if (!out_w || !out_h || !in_pitch || !dst_pitch) return;
++    /* The source may be a target the register-file engine drew, which exists
++     * only on the GPU until it is written back: bring guest memory up to date
++     * before the copies below read it. */
++    { static int eng = -1;
++      if (eng < 0) eng = rsx_draw_engine_enabled();
++      if (eng) rsx_draw_engine_write_back(s_nv3089.src_dma != 0xFEED0001u, s_nv3089.in_off, in_pitch); }
+     /* NV3089_GATE=<file>: log every blit's geometry while <file> exists, so a
+      * capture covers the scene of interest instead of the first N since boot. */
+     { static const char* gate = (const char*)-1; static unsigned poll; static int open_gate;
+@@ -1332,8 +1342,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
  
  static void gcm_fifo_dump_around(u32 getoff)
  {
@@ -624,7 +642,7 @@ index 73b7e71..8394da7 100644
      for (u32 t = 0; t < GCM_TRACE_N; t++) {
          u32 k = (s_tr_i + t) % GCM_TRACE_N;
          if (!s_tr_w[k]) continue;
-@@ -1690,8 +1697,32 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1690,8 +1704,32 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -659,7 +677,73 @@ index 73b7e71..8394da7 100644
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -2310,9 +2341,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -1754,8 +1792,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                     u32 m = (type == 0) ? method + i * 4 : method;
+                     u32 v = vm_read32(dea);
+                     u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
+-                    { static int sn = 0; if (getenv("GCM_RECDBG") && __atomic_fetch_add(&sn, 1, __ATOMIC_RELAXED) < 12)
+-                        fprintf(stderr, "[SEMA] m=0x%02X v=0x%08X off=0x%X\n", m, v, s_sema_offset); }
++                    /* GCM_SEMA_TRACE=<n>: the first n NV406E semaphore methods with
++                     * the label's current value, to read a title's RSX<->SPU/PPU
++                     * sync protocol (GCM_RECDBG alone shows 12). */
++                    { static int sn = 0, cap = -1;
++                      if (cap < 0) { const char* e = getenv("GCM_SEMA_TRACE"); cap = e ? atoi(e) : (getenv("GCM_RECDBG") ? 12 : 0); }
++                      if (cap && __atomic_fetch_add(&sn, 1, __ATOMIC_RELAXED) < cap)
++                        fprintf(stderr, "[SEMA] m=0x%02X v=0x%08X off=0x%X label=0x%08X\n", m, v,
++                                m == 0x64u ? v : s_sema_offset,
++                                vm_read32(GCM_LABEL_GUEST_BASE + ((m == 0x64u ? v : s_sema_offset) & 0xFFFFu))); }
+                     if (m == 0x64u)      s_sema_offset = v;
+                     else if (m == 0x6Cu) vm_write32(la, v);
+                     else if (m == 0x68u && vm_read32(la) != v) {
+@@ -1763,12 +1808,29 @@ static void gcm_rsx_process_fifo_unlocked(void)
+              * the hardware does. Off by default: a title whose label nothing
+              * ever writes would wedge the drain permanently, and RELEASE on
+              * its own is the half that unblocks a waiting guest. */
+-            static int blk = -1;
+-            if (blk < 0) { const char* e = getenv("GCM_SEMA_ACQUIRE"); blk = e ? atoi(e) : 0; }
+-            if (blk) { sem_blocked = 1; break; }
++            static int blk = -1; static unsigned blk_ms;
++            if (blk < 0) { const char* e = getenv("GCM_SEMA_ACQUIRE"); blk = e ? atoi(e) : 0;
++                           const char* t = getenv("GCM_SEMA_ACQUIRE_MS"); blk_ms = t ? (unsigned)atoi(t) : 0; }
++            if (blk) {
++                /* GCM_SEMA_ACQUIRE_MS=<ms>: a bounded wait. The hardware waits
++                 * for ever; an emulated producer that never comes (a boot-time
++                 * label nobody services yet) would wedge the drain, so after
++                 * <ms> on the same acquire it is consumed and said so. inFAMOUS 2
++                 * acquires the label its SPU lighting writes each frame: waiting
++                 * here is what orders the RSX's sampling after that write. */
++                static u32 b_off, b_val; static unsigned long long b_t0;
++                extern unsigned long long ps3_ms_now(void);
++                const unsigned long long now = ps3_ms_now();
++                if (!b_t0 || b_off != s_sema_offset || b_val != v) { b_off = s_sema_offset; b_val = v; b_t0 = now; }
++                if (!blk_ms || now - b_t0 < blk_ms) { sem_blocked = 1; break; }
++                { static int tn; if (tn++ < 12)
++                    fprintf(stderr, "[SEMA] acquire off=0x%X == 0x%08X gave up after %u ms (label 0x%08X)\n",
++                            s_sema_offset, v, blk_ms, vm_read32(la)); }
++                b_t0 = 0;
++            }
+         }
+                 }
+-                if (sem_blocked) break;
++                if (sem_blocked) { s_sema_blocked_pass = 1; break; }
+                 s_fifo_getoff += 4 + count * 4;
+                 continue;
+             }
+@@ -1964,8 +2026,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
+           }
+       } else burned = 0; }
+ 
++    /* A drain parked on a semaphore acquire (GCM_SEMA_ACQUIRE) holds `get`
++     * on purpose: that is the wait, not a stuck walker. The acquire's own
++     * bound (GCM_SEMA_ACQUIRE_MS) is what ends it. */
+     { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+-      if (s_fifo_getoff == last && s_fifo_getoff != put) {
++      if (s_sema_blocked_pass) { stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; }
++      else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+           if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
+                              gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
+       } else { stuck = 0; last = s_fifo_getoff; } }
+@@ -2310,9 +2376,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of
@@ -682,7 +766,7 @@ index 73b7e71..8394da7 100644
          vm_write32(cur + 4, 0x20000000u | io_begin);   /* JUMP -> begin */
          vm_write32(ctx + 8, begin);
 diff --git a/libs/video/rsx_commands.c b/libs/video/rsx_commands.c
-index 7718d14..1b04e12 100644
+index 7718d14..0e689ed 100644
 --- a/libs/video/rsx_commands.c
 +++ b/libs/video/rsx_commands.c
 @@ -19,6 +19,7 @@
@@ -693,10 +777,11 @@ index 7718d14..1b04e12 100644
  #include "../../runtime/memory/vm.h"    /* VM_HLE_INJECT_BASE */
  
  /* ---------------------------------------------------------------------------
-@@ -365,6 +366,21 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
+@@ -365,7 +366,24 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
           * Apply the same swap the hardware does so the pre-swap cancels out. */
          u32 val = (data & 0xff00ff00u) | ((data >> 16) & 0xffu) | ((data & 0xffu) << 16);
          vm_write32(VM_HLE_INJECT_BASE + (s_sem_off & 0x00FFFFFFu), val);
+-        { static int _l=0; if(__atomic_fetch_add(&_l, 1, __ATOMIC_RELAXED)<8) fprintf(stderr,"[RSX] label write @0x%08X = 0x%08X (sync fence, raw 0x%08X)\n", VM_HLE_INJECT_BASE+(s_sem_off&0xFFFFFF), val, data); }
 +        /* RSX_LABELSTAT=1: label writes per ~5 s with the last one, so an SPU
 +         * job spinning on a label (Edge's output ring) can be checked against
 +         * what the RSX side is still producing. */
@@ -712,18 +797,42 @@ index 7718d14..1b04e12 100644
 +                          n, (now - t0) / 1000.0, VM_HLE_INJECT_BASE + (last_off & 0x00FFFFFFu), last_val);
 +                  n = 0; t0 = now;
 +              } } }
-         { static int _l=0; if(__atomic_fetch_add(&_l, 1, __ATOMIC_RELAXED)<8) fprintf(stderr,"[RSX] label write @0x%08X = 0x%08X (sync fence, raw 0x%08X)\n", VM_HLE_INJECT_BASE+(s_sem_off&0xFFFFFF), val, data); }
++        { static int _l=0, _cap=-1;
++          if (_cap < 0) { const char* e = getenv("GCM_SEMA_TRACE"); _cap = e ? atoi(e) : 8; }
++          if(__atomic_fetch_add(&_l, 1, __ATOMIC_RELAXED)<_cap) fprintf(stderr,"[RSX] label write @0x%08X (off 0x%X) = 0x%08X (sync fence, raw 0x%08X)\n", VM_HLE_INJECT_BASE+(s_sem_off&0xFFFFFF), s_sem_off & 0xFFFFFF, val, data); }
          return 0;
        }
+       if (method == 0x1D74) {
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..6f6a3cc 100644
+index 9a76e67..259e863 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
-@@ -586,9 +586,9 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+@@ -95,6 +95,7 @@ typedef struct {
+     rsx_be_format fmt;
+     u32 handle;
+     u32 stamp;           /* last time it was bound as a target (LRU, newest-wins) */
++    u32 wb_stamp;        /* stamp at the last write-back into guest memory */
+ } eng_surface;
+ static u32 s_surf_clock;
+ 
+@@ -108,6 +109,8 @@ typedef struct {
+     int snapshot_valid;
+     u32 snapshot_rgba;     /* colour-format (depth bytes) copy, or 0      */
+     int snapshot_rgba_valid;
++    u32 stamp;             /* last depth write (s_surf_clock)             */
++    u32 wb_stamp;          /* stamp at the last write-back into guest memory */
+ } eng_zdepth;
+ 
+ typedef struct {
+@@ -585,10 +588,12 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+     s->handle = handle;
      s->stamp = ++s_surf_clock;
      if (slot == g.n_surfaces) g.n_surfaces++;
-     { static u32 logs = 0; if (__atomic_fetch_add(&logs, 1, __ATOMIC_RELAXED) < 16)
+-    { static u32 logs = 0; if (__atomic_fetch_add(&logs, 1, __ATOMIC_RELAXED) < 16)
 -        fprintf(stderr, "[rsx engine] surface %u:0x%08X %ux%u fmt %d%s\n",
++    { static u32 logs = 0, cap = 0;
++      if (!cap) cap = getenv("PS3RECOMP_ENG_TEXLOG") ? 256u : 16u;   /* TEXLOG: the whole set */
++      if (__atomic_fetch_add(&logs, 1, __ATOMIC_RELAXED) < cap)
 +        fprintf(stderr, "[rsx engine] surface %u:0x%08X %ux%u fmt %d%s -> h%u\n",
                  location, offset, want_w, want_h, (int)want_fmt,
 -                seed ? " (seeded from guest memory)" : ""); }
@@ -731,7 +840,16 @@ index 9a76e67..6f6a3cc 100644
      return slot;
  }
  
-@@ -925,6 +925,12 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -683,6 +688,8 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+     z->had_write = 0;
+     z->snapshot_valid = 0;
+     z->snapshot_rgba_valid = 0;
++    z->stamp = ++s_surf_clock;
++    z->wb_stamp = 0;
+     if (slot == g.n_zdepths) g.n_zdepths++;
+     return slot;
+ }
+@@ -925,6 +932,12 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
        e.content_hash = eng_texture_content_hash(location, offset, span, &readable); }
      e.handle = eng_texture_upload(location, offset, fmt, w, h, levels, pitch,
                                    cube, remap);
@@ -744,7 +862,7 @@ index 9a76e67..6f6a3cc 100644
      if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
      if (e.handle || !evicted) { g.textures[index] = e; eng_tidx_rebuild(); }
      return e.handle;
-@@ -1225,8 +1231,45 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1225,8 +1238,45 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vp_instrs = fixed ? 0 : vp->instrs, fp_size = fixed ? 0 : fp->size;
  
      const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
@@ -790,7 +908,7 @@ index 9a76e67..6f6a3cc 100644
  
      static const rsx_fp_constant_block no_constants;
      g.fp_constants = fixed ? &no_constants : &fp->constants;
-@@ -1247,6 +1290,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1247,6 +1297,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          int valid, fixed;
          u64 vp_hash, fp_struct;
          u32 fp_ctrl_key, cube_mask, vtex_mask, layout_mask, layout_stride, rt_count;
@@ -800,7 +918,7 @@ index 9a76e67..6f6a3cc 100644
          rsx_be_format rt_fmt;
          rsx_be_render_state rs;
          u64 key;
-@@ -1259,7 +1305,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1259,7 +1312,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          kmemo.fp_ctrl_key == fp_ctrl_key && kmemo.cube_mask == cube_mask &&
          kmemo.vtex_mask == vtex_mask && kmemo.layout_mask == layout->mask &&
          kmemo.layout_stride == layout->stride && kmemo.rt_count == rt_count &&
@@ -813,7 +931,7 @@ index 9a76e67..6f6a3cc 100644
          key = kmemo.key;
          goto key_done;
      }
-@@ -1271,7 +1321,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1271,7 +1328,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          key = eng_fnv1a(&vp->hash, sizeof vp->hash, key);
          key = eng_fnv1a(&fp->structural, sizeof fp->structural, key);
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
@@ -827,7 +945,7 @@ index 9a76e67..6f6a3cc 100644
          key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
-@@ -1285,6 +1341,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1285,6 +1348,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      kmemo.fp_ctrl_key = fp_ctrl_key; kmemo.cube_mask = cube_mask; kmemo.vtex_mask = vtex_mask;
      kmemo.layout_mask = layout->mask; kmemo.layout_stride = layout->stride;
      kmemo.rt_count = rt_count; kmemo.rt_fmt = rt_fmt; memcpy(&kmemo.rs, rs, sizeof *rs);
@@ -837,7 +955,7 @@ index 9a76e67..6f6a3cc 100644
      kmemo.key = key;
  key_done:;
  
-@@ -1317,9 +1376,13 @@ key_done:;
+@@ -1317,9 +1383,13 @@ key_done:;
          vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
                                           layout->mask, s_vs_hlsl,
                                           sizeof s_vs_hlsl);
@@ -853,7 +971,7 @@ index 9a76e67..6f6a3cc 100644
          if (fi > 0 && rs->alpha_test_enable &&
              rsx_fp_apply_alpha_test_buffered(s_ps_hlsl, sizeof s_ps_hlsl,
                                               rs->alpha_func) < 0)
-@@ -1805,6 +1868,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1805,6 +1875,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                       t.remap & 0xFFFFu, t.format)
                  : 0;
              textures[u] = view ? view : g.surfaces[sampled].handle;
@@ -871,6 +989,124 @@ index 9a76e67..6f6a3cc 100644
              continue;
          }
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
+@@ -2126,8 +2207,10 @@ static void sink_end(void* user, const rsx_dispatch* r)
+         ds.ns_rest += eng_ds_now() - ds_t0;
+     }
+ 
+-    if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write)
++    if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write) {
+         g.zdepths[zslot].had_write = 1;
++        g.zdepths[zslot].stamp = ++s_surf_clock;
++    }
+ }
+ 
+ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2531,6 +2614,83 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+     d->valid = width && height;
+ }
+ 
++/* ---- GPU -> guest memory ------------------------------------------------- */
++
++/* Host R,G,B,A rows into the guest's A8R8G8B8 (bytes A,R,G,B, the big-endian
++ * 0xAARRGGBB word). The depth decode uses the same shuffle: its RGBA8 is
++ * a = D[23:16], r = D[15:8], g = D[7:0], b = stencil, which lands as the
++ * big-endian Z24S8 word D << 8 | S. */
++static void eng_rgba_to_guest_argb(u8* dst, u32 dst_pitch, const u8* src,
++                                   u32 w, u32 h)
++{
++    for (u32 y = 0; y < h; y++) {
++        const u8* sp = src + (size_t)y * w * 4u;
++        u8* dp = dst + (size_t)y * dst_pitch;
++        for (u32 x = 0; x < w; x++, sp += 4, dp += 4) {
++            dp[0] = sp[3]; dp[1] = sp[0]; dp[2] = sp[1]; dp[3] = sp[2];
++        }
++    }
++}
++
++int rsx_draw_engine_write_back(int local, u32 offset, u32 pitch)
++{
++    if (!g.ready || !g.be->readback || !g.be->submit_and_wait) return 0;
++    const u32 location = local ? RSX_LOCATION_LOCAL : RSX_LOCATION_MAIN;
++    int wrote = 0;
++    static int log_on = -1, logged;
++    if (log_on < 0) log_on = getenv("PS3RECOMP_ENG_TEXLOG") ? 1 : 0;
++
++    /* The newest colour target whose rows cover the offset: a blit may start
++     * inside a row (inFAMOUS 2 copies its 1280-wide G-buffer as 1024 + 256
++     * columns). Only 8-bit targets are stored the way the guest expects. */
++    u32 best = ENG_INVALID;
++    for (u32 i = 0; i < g.n_surfaces; i++) {
++        const eng_surface* sf = &g.surfaces[i];
++        if (!sf->handle || sf->location != location || sf->fmt != RSX_BE_FMT_R8G8B8A8) continue;
++        const u32 row = pitch ? pitch : sf->w * 4u;
++        if (offset < sf->offset || offset >= sf->offset + row * sf->h) continue;
++        if (best == ENG_INVALID || sf->stamp > g.surfaces[best].stamp) best = i;
++    }
++    if (best != ENG_INVALID && g.surfaces[best].wb_stamp != g.surfaces[best].stamp) {
++        eng_surface* sf = &g.surfaces[best];
++        const u32 row = pitch ? pitch : sf->w * 4u;
++        u8* dst = (u8*)eng_guest_ptr(NULL, location, sf->offset, row * sf->h);
++        if (dst && eng_staging_reserve(sf->w * sf->h * 4u)) {
++            g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
++            g.be->readback(g.be->user, sf->handle, 0, 0, sf->w, sf->h, g.tex_staging, sf->w * 4u);
++            eng_rgba_to_guest_argb(dst, row, g.tex_staging, sf->w, sf->h);
++            sf->wb_stamp = sf->stamp;
++            wrote = 1;
++            if (log_on && logged < 40) { logged++;
++                fprintf(stderr, "[rsx engine] write-back colour %u:0x%08X %ux%u pitch %u -> guest\n",
++                        location, sf->offset, sf->w, sf->h, row); }
++        }
++    }
++
++    /* The depth buffer at the offset, stored as the RSX stores Z24S8. */
++    for (u32 i = 0; i < g.n_zdepths; i++) {
++        eng_zdepth* z = &g.zdepths[i];
++        if (!z->handle || !z->had_write || z->location != location) continue;
++        const u32 row = pitch ? pitch : z->w * 4u;
++        if (offset < z->offset || offset >= z->offset + row * z->h) continue;
++        if (z->wb_stamp == z->stamp) break;
++        z->snapshot_rgba_valid = 0;   /* the decode must follow the latest depth write */
++        const u32 snap = eng_zdepth_snapshot_rgba8(i);   /* queues the decode */
++        u8* dst = (u8*)eng_guest_ptr(NULL, location, z->offset, row * z->h);
++        if (!snap || !dst || !eng_staging_reserve(z->w * z->h * 4u)) break;
++        g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
++        g.be->readback(g.be->user, snap, 0, 0, z->w, z->h, g.tex_staging, z->w * 4u);
++        eng_rgba_to_guest_argb(dst, row, g.tex_staging, z->w, z->h);
++        z->wb_stamp = z->stamp;
++        wrote = 1;
++        if (log_on && logged < 40) { logged++;
++            fprintf(stderr, "[rsx engine] write-back depth %u:0x%08X %ux%u pitch %u -> guest\n",
++                    location, z->offset, z->w, z->h, row); }
++        break;
++    }
++    return wrote;
++}
++
+ void rsx_draw_engine_flush(void)
+ {
+     if (g.ready && g.be->submit_and_wait)
+diff --git a/libs/video/rsx_draw_engine.h b/libs/video/rsx_draw_engine.h
+index e54d615..8b42bd9 100644
+--- a/libs/video/rsx_draw_engine.h
++++ b/libs/video/rsx_draw_engine.h
+@@ -261,6 +261,17 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+  * on its fence sees the GPU catch up. */
+ void rsx_draw_engine_flush(void);
+ 
++/* GPU -> guest memory. The 2D engine's reads and the SPUs see guest memory,
++ * which never holds what the GPU drew. Write the newest colour target or the
++ * depth buffer whose rows cover (local, offset) back into it as the RSX would
++ * have stored it -- A8R8G8B8 as bytes A,R,G,B, Z24S8 as the big-endian
++ * D << 8 | S word -- `pitch` bytes per row (0: the target's own width). Pending
++ * work is submitted and waited for first. A target already written back since
++ * it was last drawn is skipped. Returns 1 when guest memory was written.
++ * inFAMOUS 2 NV3089-copies its normal and depth buffers to main memory every
++ * frame for the SPUs' deferred lighting; without this the SPUs lit nothing. */
++int rsx_draw_engine_write_back(int local, u32 offset, u32 pitch);
++
+ /* Present whatever the frame has recorded, for a host that drives the flip
+  * itself rather than through the FIFO's 0xE944. */
+ void rsx_draw_engine_present(void);
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
 index 933abcb..8408f72 100644
 --- a/libs/video/rsx_fp_decompiler.c
@@ -2452,6 +2688,26 @@ index 3addd48..427d640 100644
              uint32_t p0 = ctx->pc & SPU_LS_MASK;
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
+diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
+index 142931a..a938da9 100644
+--- a/runtime/spu/spu_dma.h
++++ b/runtime/spu/spu_dma.h
+@@ -834,7 +834,14 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
+                       spu_ls_read32(spu, 0x4014), spu_ls_read32(spu, 0x4018), spu_ls_read32(spu, 0x4020));
+           if (on < 0) { const char* e = getenv("SPU_PUT_EA"); on = e != 0;
+               if (e) { char* d; lo = (uint32_t)strtoul(e, &d, 16); hi = (uint32_t)strtoul(d + 1, 0, 16); } }
+-          if (on && !(base_cmd & 0x40) && (base_cmd & 0x20) == 0x20 && eal < hi && eal + xfer_size > lo)
++          /* SPU_PUT_EA_AFTER=<sec> starts the PUT log that many seconds in,
++           * and SPU_PUT_EA_MAX=<n> (default 4000) caps it: a title lighting a
++           * frame on the SPUs writes a million list elements a second. */
++          static _Atomic int pafter = -1; static _Atomic long pmax; static _Atomic long pn;
++          if (pafter < 0) { const char* e = getenv("SPU_PUT_EA_AFTER"); pafter = e ? atoi(e) : 0;
++                            const char* m = getenv("SPU_PUT_EA_MAX"); pmax = m ? atol(m) : 4000; }
++          if (on && !(base_cmd & 0x40) && (base_cmd & 0x20) == 0x20 && eal < hi && eal + xfer_size > lo &&
++              ps3_ms_now() >= (unsigned long long)pafter * 1000ull && pn++ < pmax)
+               fprintf(stderr, "[mfc-list] PUTL-elem ea=0x%08x size=0x%x lsa=0x%05x job@4000: %08x %08x %08x %08x\n",
+                       eal, xfer_size, (dest_lsa & ~15u) | (eal & 15u), spu_ls_read32(spu, 0x4010),
+                       spu_ls_read32(spu, 0x4014), spu_ls_read32(spu, 0x4018), spu_ls_read32(spu, 0x4020)); }
 diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
 index 7c1089c..ced848c 100644
 --- a/runtime/spu/spu_drain.c

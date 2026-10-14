@@ -18,3 +18,5 @@ out/
 build/
 
 .DS_Store
+/ps3recomp-pr/
+/ps3recomp-up/

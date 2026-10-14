@@ -69,6 +69,28 @@ reference.
   #247 for `cellFsGetDirectoryEntries`).
 - **`libs/input/cellPad.c`.** `PAD_STICK` takes several `lx,ly,rx,ry,from,until`
   holds separated by `;`.
+- **`libs/video/rsx_texture_layout.c`, one-channel crossbar.** X16, X32_FLOAT and
+  the DEPTH16/24 texture formats are one real channel uploaded as R16/R32F, and
+  the sampler presents it on every lane (as B8 already was). This title binds
+  its 1024x8 X16 lighting ramp with crossbar 0xAAEE (R from B), which read the
+  empty B component: zero. Unit test `test_remap_one_channel_lanes`.
+- **`libs/video/rsx_draw_engine.c`, GPU -> guest write-back.** Every frame the
+  game NV3089-copies its normal and depth targets into main memory for the
+  SPUs' lighting; the copy ran on the CPU from guest memory, which never holds
+  what the GPU drew, so the SPUs lit an empty G-buffer. `rsx_draw_engine_write_back()`
+  (called from `nv3089_blit()`) submits the pending work and reads the target
+  (or the depth buffer, as Z24S8 bytes) back into guest memory first. No
+  measurable frame-rate cost in the menu.
+- **`libs/video/cellGcmSys.c`, semaphore waits.** `GCM_SEMA_ACQUIRE=1` with
+  `GCM_SEMA_ACQUIRE_MS=<ms>` blocks the FIFO walker on an NV406E ACQUIRE for at
+  most that long (the stuck-get watchdog no longer resyncs while it waits), so
+  the RSX samples the SPUs' output after they wrote it. Off by default: this
+  title's menu looks the same either way. `GCM_SEMA_TRACE=<n>` prints the
+  semaphore methods with the label's value, and the RSX's own label writes.
+- **`PS3RECOMP_ENG_TEXLOG=1`.** One line per texture the engine creates (guest
+  address, format, size, crossbar, handle), which render target a unit's
+  address aliases on each draw, every surface with its handle, and each
+  write-back. Pass-log `tex=` numbers drift between runs; addresses do not.
 - **`libs/video/rsx_metal_backend.m`, diagnostics.** `PS3RECOMP_METAL_PASS_LOG=2`
   splits a pass at every pipeline/texture change; `_MIN` and `_EVERY` set the
   record threshold and period for the pass log, `PS3RECOMP_METAL_SURF_DUMP_MIN`

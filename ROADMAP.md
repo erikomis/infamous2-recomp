@@ -31,7 +31,7 @@ execução com janela.
 - [x] Boot pelo `module_start` da liblv2, como no console.
 - [x] FIOS, `.psarc`, descompressão em SPU.
 - [x] Aviso de saúde, vídeo Bink, tela de loading.
-- [x] Menu principal 3D.
+- [x] Menu principal 3D. Conferido contra o vídeo do título original (2026-10-14): é um vazio preto com o Cole de costas quase em silhueta, um raio, faíscas e a barra "START A NEW GAME"; o nosso é igual. Diferenças que restam: o Cole tem um contorno cinza-azulado fraco no original (no nosso é preto puro), os destroços escuros não aparecem, e há um borrão cinza estático sob a barra que não existe no original.
 - [x] Jogo novo, vídeo de abertura, cutscene no motor do jogo.
 - [x] Menu de pausa e tela de opções.
 - [x] Iluminação dos personagens nas cutscenes (comparação de profundidade das sombras).
@@ -54,6 +54,10 @@ Feitas neste port:
 - [x] `sys_lwcond_t` com layout errado (FIOS recusava toda espera). Só no upstream; o fork já tinha.
 - [x] Metal: command buffers que terminam com erro (GPU travada, recurso inválido) são reportados com o código, em vez de passarem em silêncio.
 - [x] cellGcm: o dump das palavras do FIFO numa recuperação (branch inválido, `get` parado) sai sem precisar de `GCM_RECDBG`, que é barulhento demais para uma execução longa.
+- [x] Texturas de um canal (X16, X32_FLOAT, DEPTH16/24): o crossbar lia a lane vazia; o LUT 1024×8 X16 da iluminação deste jogo (crossbar "R ← B") dava zero. Com teste unitário.
+- [x] Write-back GPU → memória do jogo nos blits NV3089: o jogo copia os buffers de normais e de profundidade para a XDR a cada frame (entrada da iluminação nas SPUs) e a cópia era feita pela CPU a partir de uma memória que nunca recebia o que a GPU desenhou. Agora o motor submete o trabalho pendente e lê o render target (ou o depth, em bytes Z24S8) de volta antes da cópia.
+- [x] `GCM_SEMA_ACQUIRE=1` + `GCM_SEMA_ACQUIRE_MS`: o walker do FIFO espera o ACQUIRE de semáforo (com limite), e o watchdog "stuck-get" não ressincroniza enquanto espera. Desligado por padrão. `GCM_SEMA_TRACE=<n>` mostra o protocolo de labels.
+- [ ] "SPU Light Task": roda a cada frame e escreve o label 137 (0x890), mas no menu não escreve nada nos buffers XDR que o passe ambiente amostra (só no boot). Falta entender o que ele deveria produzir e se cutscenes/gameplay mudam com isso. Ver a nota de memória do assistente ou `PS3RECOMP_ENG_TEXLOG`/`GCM_SEMA_TRACE`.
 
 PRs abertos do upstream aplicados:
 
@@ -124,10 +128,35 @@ PRs abertos do upstream aplicados:
 
 ## Contribuir de volta
 
-- [ ] Enviar as correções deste port para o fork do inFamous 1 (NoahBPeterson, upstream PR #213).
-- [ ] Enviar a correção de jump table do lifter para o upstream (sp00nznet).
-- [ ] Enviar os opcodes de pack/unpack do decompilador para o fork e para o upstream.
-- [ ] Pedir para listar o port no README do ps3recomp.
+Branches em [github.com/erikomis/ps3recomp](https://github.com/erikomis/ps3recomp);
+cada correção é um PR, com teste onde dava para ter um.
+
+- [x] Correções deste port enviadas ao fork do inFamous 1 (NoahBPeterson, base do
+  upstream PR #213): jump table atrás de tail-call no lifter ([#1](https://github.com/NoahBPeterson/ps3recomp/pull/1)),
+  FIFO estacionado do cellGcm e dump da recuperação ([#2](https://github.com/NoahBPeterson/ps3recomp/pull/2)),
+  overlay residente no lookup do SPU ([#3](https://github.com/NoahBPeterson/ps3recomp/pull/3)),
+  overflow do decrementer ([#4](https://github.com/NoahBPeterson/ps3recomp/pull/4)),
+  opcodes de pack/unpack ([#5](https://github.com/NoahBPeterson/ps3recomp/pull/5)),
+  texturas de um canal no crossbar ([#6](https://github.com/NoahBPeterson/ps3recomp/pull/6)),
+  cellGem/cellCamera ([#7](https://github.com/NoahBPeterson/ps3recomp/pull/7)),
+  PAD_SCRIPT com botão segurado e PAD_STICK com vários intervalos ([#8](https://github.com/NoahBPeterson/ps3recomp/pull/8)),
+  command buffer do Metal com erro ([#9](https://github.com/NoahBPeterson/ps3recomp/pull/9)),
+  diagnósticos do travamento ([#10](https://github.com/NoahBPeterson/ps3recomp/pull/10)).
+- [x] Jump table do lifter enviada ao upstream ([sp00nznet/ps3recomp#311](https://github.com/sp00nznet/ps3recomp/pull/311)).
+- [x] Opcodes de pack/unpack: fork (#5) e upstream ([#314](https://github.com/sp00nznet/ps3recomp/pull/314)).
+  Também no upstream, porque o código é o mesmo no master: FIFO estacionado
+  ([#312](https://github.com/sp00nznet/ps3recomp/pull/312)), decrementer
+  ([#313](https://github.com/sp00nznet/ps3recomp/pull/313)), cellGem/cellCamera
+  ([#315](https://github.com/sp00nznet/ps3recomp/pull/315)) e command buffer do Metal
+  ([#316](https://github.com/sp00nznet/ps3recomp/pull/316)).
+- [ ] Pedir para listar o port no README do ps3recomp (só quando este repositório for público).
+- [ ] Ficaram de fora: o layout do `sys_lwcond_t` para o upstream (o PR #213 já o traz) e o
+  write-back de render targets para a memória do guest (`rsx_draw_engine_write_back`),
+  que ainda está em teste no working tree do `ps3recomp-fork/` e fora do patch.
+
+Os branches vivem em dois worktrees do `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
+para o fork) e `ps3recomp-up/` (base no master do upstream); o remote `mine` aponta para
+o fork no GitHub.
 
 ---
 
