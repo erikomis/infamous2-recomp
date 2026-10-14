@@ -21,8 +21,10 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Boot, firmware em LLE, SPURS, áudio Wwise (jobs SPU) | ✅ |
 | Aviso de saúde, vídeos Bink, telas de loading | ✅ |
 | Menu principal 3D, menu de pausa, opções | ✅ |
-| Jogo novo → vídeo de abertura → cutscene no motor do jogo | ✅ ~17 fps |
-| Gameplay controlável | ⏳ ainda não alcançado |
+| Jogo novo → vídeo de abertura → cutscene no motor do jogo | ✅ |
+| Fim da cutscene → tutorial do primeiro combate | ✅ |
+| Gameplay controlável | ⏳ em teste (entrada por script) |
+| Áudio (mixagem), DLC, todos os imports do firmware | ✅ |
 | T-pose do Cole no fundo do menu de opções | 🐞 conhecido |
 
 Detalhes e próximos passos em [ROADMAP.md](ROADMAP.md).

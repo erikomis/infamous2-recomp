@@ -24,11 +24,16 @@ Not checked: whether a press of ✕ starts a new game. Every run that tried it
 had the Mac go to sleep part-way, which stretches all of the timing.
 
 Fixed since: the saturated-green patch on Cole's scalp (untranslated
-pack/unpack opcodes, see below).
+pack/unpack opcodes, see below). The intro cutscene ends on its own after
+about 7 minutes at this frame rate and the first combat tutorial comes up
+("Use the right stick to look up"). The mixer produces sound (`AUDIO_WAV`);
+every firmware import the title makes is answered; the reviewer DLC decrypts
+once `tools/rap2rifkey.py` has written its key.
 
-Known slow path: an SPU job enters LS `0x6C64` unlifted and runs about 22,000
-instructions on the interpreter each time before it returns to `0x56B8` /
-`0x56D0`. Which image holds that code is still open.
+The slow path that interpreted 22,000 SPU instructions at a time from LS
+`0x6C64` is gone: those were the EBOOT's five `DA7ABA5E` modules, a second
+kind of WWS job module the job manager streams to LS 0x6C00, now lifted by
+`tools/lift_datamods.py` (menu frame rate went from ~17 to ~30 fps).
 
 ## Fixes in `patches/` (against the fork)
 
@@ -58,6 +63,12 @@ reference.
   green and skin tones were off. Implemented after RPCS3's
   FragmentProgramDecompiler (`_builtin_pkg`/`_builtin_upg`). An unhandled
   opcode now prints its number and raw words in the dumped shader.
+- **`libs/hardware/cellGem.c`, `cellCamera.c`.** `cellGemGetMemorySize`,
+  `cellCameraSetNotifyEventQueue2` and `RemoveNotifyEventQueue2`, the three
+  imports that still fell through to the unresolved stub (with upstream PR
+  #247 for `cellFsGetDirectoryEntries`).
+- **`libs/input/cellPad.c`.** `PAD_STICK` takes several `lx,ly,rx,ry,from,until`
+  holds separated by `;`.
 - **`libs/video/rsx_metal_backend.m`, diagnostics.** `PS3RECOMP_METAL_PASS_LOG=2`
   splits a pass at every pipeline/texture change; `_MIN` and `_EVERY` set the
   record threshold and period for the pass log, `PS3RECOMP_METAL_SURF_DUMP_MIN`
@@ -75,6 +86,9 @@ reference.
 | `tools/boot.sh` | Timed headless run |
 | `tools/capture.sh` | Headless run that keeps a PNG of the presented frame every 10 s |
 | `tools/lldb_barrier.py` | Prints the WWS job barrier lanes (attach did not work here; kept for a debug launch) |
+| `tools/rap2rifkey.py` | Derives an EDAT's RIF key from the player's own `.rap` and writes the `<edat>.rifkey` sidecar |
+| `tools/relift_jobmod.py` | Re-lifts one WWS job module with extra entry addresses |
+| `tools/lift_datamods.py` | Extracts, lifts and registers the five `DA7ABA5E` modules the job manager streams to LS 0x6C00 |
 | `tools/passlog.py` | Summarises a `PS3RECOMP_METAL_PASS_LOG` log: passes, targets, pipelines, textures |
 | `tools/psfeatures.py` | One line per dumped pixel shader: units sampled, targets, risky ops |
 | `tools/surfstats.py`, `tools/greenshare.py` | Fill/green/brightness stats of dumped render targets and captured frames |
@@ -104,6 +118,8 @@ $P $T/build_spu_workloads.py --images spu/images --lifted spu --out spu/spu_work
     --eboot ../infamous2/game/EBOOT.elf --extra-funcs wwsjob_pm_at_008E5B00=0xA2C
 $P $T/lift_jobmods.py --jobmods spu/jobmods --out spu \
     --register spu/jobmods_register.c --symbol-prefix infamous2
+$P tools/lift_datamods.py ../infamous2/game/EBOOT.elf --extra 0x6C44,0x6C64
+$P tools/rap2rifkey.py ../infamous2/vfs/dev_hdd0/game/NPUA80638/USRDIR/dlc/ulf/unlock_review.edat
 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS3RECOMP_DIR="$PWD/../ps3recomp-fork" -DPython3_EXECUTABLE="$PWD/$P"

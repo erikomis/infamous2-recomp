@@ -7,8 +7,10 @@ a seguir. `[x]` = feito e verificado; `[ ]` = a fazer.
 
 Menu → jogo novo → vídeo de abertura → cutscene no motor do jogo nas docas de
 Empire City (Cole, Zeke, Lucy Kuo), com menu de pausa e opções funcionando.
-Personagens com iluminação e cor de pele corretas. Média de ~17 fps numa
-execução de 330 s que inclui o boot. Ainda não chegou ao gameplay controlável.
+Personagens com iluminação e cor de pele corretas. A cutscene termina sozinha
+(~7 min a ~17 fps) e o jogo entra no primeiro tutorial de combate ("Use the
+right stick to look up"). Média de ~17 fps numa execução de 330 s que inclui o
+boot. O gameplay em si ainda não foi exercitado.
 
 ## Fase 1 — Boot e pipeline ✅
 
@@ -43,12 +45,14 @@ Feitas neste port:
 - [x] cellGcm: o FIFO pulava comandos quando o jogo "estacionava" a GPU antes de religar o bloco; o menu congelava.
 - [x] SPU: o interpretador não voltava ao código traduzido dentro dos módulos de job WWS; o menu rodava a ~0,4 fps.
 - [x] Fragment shaders: opcodes de pack/unpack do NV40 (PK4UB, UP4UB, PKG, UPG, PK4B, UP4B, PK2H, UP2H, PK2US, UP2US).
+- [x] HLE: `cellGemGetMemorySize`, `cellCameraSetNotifyEventQueue2`/`RemoveNotifyEventQueue2`.
+- [x] Entrada programada: `PAD_STICK` com vários intervalos numa execução.
 - [x] `sys_lwcond_t` com layout errado (FIOS recusava toda espera). Só no upstream; o fork já tinha.
 
 PRs abertos do upstream aplicados:
 
 - [x] #297, #275, #274, #278, #293, #303.
-- [x] #266 e #302, portados à mão para o motor do fork.
+- [x] #266 e #302, portados à mão para o motor do fork; #247 com uma adaptação de assinatura.
 - [x] #268 já estava no fork.
 
 ## Ferramentas e infraestrutura ✅
@@ -57,17 +61,19 @@ PRs abertos do upstream aplicados:
 - [x] Execução sem janela com tempo limite (`boot.sh`) e captura de um frame a cada 10 s (`capture.sh`).
 - [x] Entrada de controle por script (`PAD_SCRIPT`) para testar menus sem controle.
 - [x] Diagnóstico do renderizador: pass log por material, limiares configuráveis, dump de shaders e render targets, e análise com `passlog.py`, `psfeatures.py`, `surfstats.py` e `greenshare.py`.
-- [x] Extrator dos 27 módulos de job do EBOOT (`extract_eboot_jobmods.py`) e tradução dos jobs SPURS capturados (`lift_spu_jobs.sh`).
+- [x] Extrator dos 27 módulos de job do EBOOT (`extract_eboot_jobmods.py`), tradução dos jobs SPURS capturados (`lift_spu_jobs.sh`), re-tradução de um módulo com entradas extras (`relift_jobmod.py`) e tradução dos cinco módulos `DA7ABA5E` (`lift_datamods.py`).
+- [x] `rap2rifkey.py`: chave RIF de um EDAT a partir do `.rap` do jogador.
 - [x] Repositório no GitHub com README, créditos, licença e `.gitignore` que bloqueia dados do jogo e do firmware.
 
 ## Fase 3 — Gameplay
 
-- [ ] Passar da cutscene das docas para a primeira missão e corrigir o que quebrar.
+- [x] Passar da cutscene das docas para a primeira missão: o tutorial do primeiro combate aparece sem intervenção.
+- [ ] Exercitar o gameplay: responder aos prompts do tutorial (analógico direito, disparos), ver o que quebra.
 - [ ] Cole em T-pose no fundo do menu de opções (animação; o inFamous 1 no fork tem o mesmo sintoma).
-- [ ] Trecho SPU que ainda roda interpretado (`LS 0x6C64`, ~22 mil instruções por vez): achar a imagem dona e traduzir esse ponto de entrada.
-- [ ] Áudio real: até agora todos os testes usaram `SDL_AUDIODRIVER=dummy`.
-- [ ] 3 imports sem implementação: `0x2E0A170D`, `0xA7FD2F5B`, `0x9B882495`.
-- [ ] DLC `unlock_review.edat`: derivar a chave RIF do `.rap` do jogador.
+- [x] Trecho SPU interpretado (`LS 0x6C64`): eram cinco módulos `DA7ABA5E` embutidos no EBOOT que o gerenciador de jobs carrega em LS 0x6C00 e ninguém traduzia. `tools/lift_datamods.py` os traduz e registra como regiões de código; zero trechos longos no menu e ~30 fps nesse trecho (eram ~17).
+- [x] Áudio: a mixagem produz som (146 s gravados com `AUDIO_WAV`, pico 0,61, primeiro som aos 6 s). Falta só ouvir pelo alto-falante numa execução com janela.
+- [x] Imports sem implementação: `cellGemGetMemorySize` e `cellCameraSetNotifyEventQueue2` implementados no toolkit; `cellFsGetDirectoryEntries` veio do PR #247 do upstream.
+- [x] DLC `unlock_review.edat`: `tools/rap2rifkey.py` deriva a chave RIF do `.rap` do jogador e grava o sidecar que o runtime lê; o EDAT é decifrado.
 
 ## Fase 4 — Controles
 
