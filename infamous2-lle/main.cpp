@@ -37,6 +37,10 @@
  * passthrough to <windows.h>; off Windows the toolkit's shim supplies the same
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <pthread.h>
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
@@ -379,7 +383,46 @@ int main(int argc, char** argv)
     printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n",
            entry, STACK_TOP);
 
+#if defined(__APPLE__)
+    /* AppKit only runs on the process's main thread: the backend creates the
+     * window and pumps its events with dispatch_sync onto the main queue. With
+     * the guest on the main thread nothing ever serviced that queue, so the
+     * frame clock blocked in its first event pump, the FIFO stopped draining
+     * and the title spun for ever on a fence -- a grey window that never drew.
+     * Windowed, the guest runs on its own thread (the 256 MB host stack every
+     * guest thread gets) and the main thread turns the run loop, which drains
+     * the main queue. Headless never touches AppKit and keeps the old layout. */
+    int rc;
+    if (!getenv("HEADLESS") && !getenv("PS3RECOMP_METAL_HEADLESS")) {
+        struct boot_args { uint32_t entry; int rc; volatile int done; };
+        static boot_args ba;
+        ba.entry = entry; ba.rc = 0; ba.done = 0;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 256u * 1024u * 1024u);
+        pthread_t th;
+        auto body = [](void* a) -> void* {
+            boot_args* b = (boot_args*)a;
+            b->rc = ppu_run(b->entry, STACK_TOP);
+            __atomic_store_n(&b->done, 1, __ATOMIC_RELEASE);
+            CFRunLoopStop(CFRunLoopGetMain());
+            return nullptr;
+        };
+        if (pthread_create(&th, &attr, body, &ba) != 0) {
+            fprintf(stderr, "[boot] could not start the guest thread\n");
+            return 1;
+        }
+        pthread_attr_destroy(&attr);
+        while (!__atomic_load_n(&ba.done, __ATOMIC_ACQUIRE))
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+        pthread_join(th, nullptr);
+        rc = ba.rc;
+    } else {
+        rc = ppu_run(entry, STACK_TOP);
+    }
+#else
     int rc = ppu_run(entry, STACK_TOP);
+#endif
     printf("\n[boot] ppu_run returned %d (entry function unwound)\n", rc);
 
     /* A title that called sys_process_exit never reaches this line: that path
