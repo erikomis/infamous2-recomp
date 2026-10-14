@@ -681,6 +681,40 @@ index 73b7e71..8394da7 100644
          s_fifo_getoff >= io_begin + GCM_RECYCLE_MARGIN) {
          vm_write32(cur + 4, 0x20000000u | io_begin);   /* JUMP -> begin */
          vm_write32(ctx + 8, begin);
+diff --git a/libs/video/rsx_commands.c b/libs/video/rsx_commands.c
+index 7718d14..1b04e12 100644
+--- a/libs/video/rsx_commands.c
++++ b/libs/video/rsx_commands.c
+@@ -19,6 +19,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>   /* getenv -- an implicit decl returns int, truncating the pointer */
+ #include <string.h>
++#include <time.h>     /* RSX_LABELSTAT */
+ #include "../../runtime/memory/vm.h"    /* VM_HLE_INJECT_BASE */
+ 
+ /* ---------------------------------------------------------------------------
+@@ -365,6 +366,21 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
+          * Apply the same swap the hardware does so the pre-swap cancels out. */
+         u32 val = (data & 0xff00ff00u) | ((data >> 16) & 0xffu) | ((data & 0xffu) << 16);
+         vm_write32(VM_HLE_INJECT_BASE + (s_sem_off & 0x00FFFFFFu), val);
++        /* RSX_LABELSTAT=1: label writes per ~5 s with the last one, so an SPU
++         * job spinning on a label (Edge's output ring) can be checked against
++         * what the RSX side is still producing. */
++        { static int s_on = -1; if (s_on < 0) s_on = getenv("RSX_LABELSTAT") ? 1 : 0;
++          if (s_on) {
++              static unsigned n; static u32 last_off, last_val; static unsigned long long t0;
++              struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++              const unsigned long long now = (unsigned long long)ts.tv_sec * 1000ull + (unsigned long long)ts.tv_nsec / 1000000ull;
++              n++; last_off = s_sem_off; last_val = val;
++              if (!t0) t0 = now;
++              if (now - t0 >= 5000) {
++                  fprintf(stderr, "[label-stat] %u label writes in %.1fs, last @0x%08X = 0x%08X\n",
++                          n, (now - t0) / 1000.0, VM_HLE_INJECT_BASE + (last_off & 0x00FFFFFFu), last_val);
++                  n = 0; t0 = now;
++              } } }
+         { static int _l=0; if(__atomic_fetch_add(&_l, 1, __ATOMIC_RELAXED)<8) fprintf(stderr,"[RSX] label write @0x%08X = 0x%08X (sync fence, raw 0x%08X)\n", VM_HLE_INJECT_BASE+(s_sem_off&0xFFFFFF), val, data); }
+         return 0;
+       }
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
 index 9a76e67..3b4aaa1 100644
 --- a/libs/video/rsx_draw_engine.c
@@ -2170,10 +2204,66 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..b68175f 100644
+index 3addd48..032d5f8 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
-@@ -1705,6 +1705,15 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
+@@ -709,6 +709,38 @@ static int spu_mfc_atomic_body(spu_context* ctx, uint32_t cmd)
+       } }
+     switch (cmd) {
+     case MFC_GETLLAR_CMD:
++        /* SPU_ATOMICSTAT=1: GETLLARs per SPU every ~5 s with the last line
++         * polled and its first words. A job spinning on a line it reads but
++         * nobody writes (Edge's output ring waiting for an RSX label) shows up
++         * as one SPU with a huge rate and a constant line. */
++        { static _Atomic int s_on = -1; if (s_on < 0) s_on = getenv("SPU_ATOMICSTAT") ? 1 : 0;
++          if (s_on) {
++              enum { ASTAT_MAX = 8 };
++              static struct { spu_context* c; unsigned n; uint32_t ea; } s_st[ASTAT_MAX];
++              static uint64_t s_last_ns;
++              static pthread_mutex_t s_mx = PTHREAD_MUTEX_INITIALIZER;
++              pthread_mutex_lock(&s_mx);
++              int k = 0;
++              for (; k < ASTAT_MAX; k++) if (s_st[k].c == ctx || !s_st[k].c) break;
++              if (k < ASTAT_MAX) { s_st[k].c = ctx; s_st[k].n++; s_st[k].ea = ea; }
++              const uint64_t now = spu_host_ns();
++              if (!s_last_ns) s_last_ns = now;
++              if (now - s_last_ns >= 5000000000ull) {
++                  const double secs = (double)(now - s_last_ns) / 1e9;
++                  for (int i = 0; i < ASTAT_MAX; i++) {
++                      if (!s_st[i].c || !s_st[i].n) continue;
++                      const uint8_t* p = vm_base + s_st[i].ea;
++                      fprintf(stderr, "[atomic-stat] spu=%X img=%d pc=0x%05X %.0f getllar/s, last line 0x%08X: "
++                              "%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
++                              s_st[i].c->spu_id, s_st[i].c->image_id, (unsigned)(s_st[i].c->pc & SPU_LS_MASK),
++                              s_st[i].n / secs, s_st[i].ea,
++                              p[0],p[1],p[2],p[3], p[4],p[5],p[6],p[7], p[8],p[9],p[10],p[11], p[12],p[13],p[14],p[15]);
++                      s_st[i].n = 0;
++                  }
++                  s_last_ns = now;
++              }
++              pthread_mutex_unlock(&s_mx);
++          } }
+         /* Lockstep tick: a guest GETLLAR..PUTLLC poll loop is intra-function
+          * (all gotos), so it never crosses the SPU_DRAIN tick site -- without a
+          * tick here a polling SPU would hold the run token forever while the
+@@ -1294,8 +1326,14 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+          * read the decrementer before writing it. */
+         if (!ctx->dec_base_ns) ctx->dec_base_ns = spu_host_ns();
+         uint64_t elapsed = spu_host_ns() - ctx->dec_base_ns;
+-        uint32_t ticks   = (uint32_t)((elapsed * SPU_DECREMENTER_HZ)
+-                                      / 1000000000ull);
++        /* Split seconds from the remainder before scaling: elapsed_ns * 79.8M
++         * overflows 64 bits 231 s after the base stamp, and a context that
++         * never writes its decrementer (the SPURS kernel's) keeps the stamp
++         * from boot, so every timed loop on that SPU saw the counter jump
++         * forward by ~16 s of ticks at 231 s, 462 s, 693 s... */
++        const uint64_t secs = elapsed / 1000000000ull, rem = elapsed % 1000000000ull;
++        uint32_t ticks   = (uint32_t)(secs * SPU_DECREMENTER_HZ +
++                                      (rem * SPU_DECREMENTER_HZ) / 1000000000ull);
+         v = ctx->decrementer - ticks;
+         break;
+     }
+@@ -1705,6 +1743,15 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
          for (unsigned slot = 0; slot < 4 && !f; ++slot)
              if (ctx->resident_code[slot].image_id)
                  f = (spu_lifted_fn)spu_lookup(lsa, ctx->resident_code[slot].image_id);
@@ -2189,7 +2279,7 @@ index 3addd48..b68175f 100644
      return f;
  }
  
-@@ -2366,7 +2375,21 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2366,7 +2413,21 @@ static int spu_smc_microstep(spu_context* ctx)
          /* Stop at the drain's return point too: it sits mid-function, so it is
           * no lifted entry, and a job's return would otherwise run on through
           * the caller's code (GH3's song-freeze; see drain_ret_pc). */
@@ -2212,7 +2302,7 @@ index 3addd48..b68175f 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
-@@ -2633,15 +2656,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2633,15 +2694,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      }
  
      if (!fn && !ctx->policy_mode && ctx->pc >= SPU_JM2_KERNEL_BASE) {
@@ -2238,8 +2328,61 @@ index 3addd48..b68175f 100644
              uint32_t p0 = ctx->pc & SPU_LS_MASK;
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 7c1089c..ced848c 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -7,6 +7,8 @@
+  * place -- later milestones only replace the bodies. */
+ #include "spu_context.h"
+ #include <setjmp.h>
++#include <pthread.h>   /* SPU_IRQSTAT counters */
++#include <time.h>
+ 
+ /* See spu_context.h `irq_frame`. */
+ typedef struct spu_irq_frame {
+@@ -316,6 +318,39 @@ void (*spu_take_interrupt(spu_context* ctx,
+     ctx->srr0 = ctx->pc;             /* resume point for iret */
+     ctx->int_enable = 0;
+     spu_irq_regs_save(ctx);          /* hardware contract: handler preserves regs */
++    /* SPU_IRQSTAT=1: interrupt rate per SPU, a line every ~5 s while any are
++     * taken. The TAKE/IRET traces above are capped and spent on boot; an
++     * interrupt storm ten minutes in (a handler that resumes a job the same
++     * event interrupts again at once) only shows as a rate. */
++    { static _Atomic int s_on = -1; if (s_on < 0) s_on = getenv("SPU_IRQSTAT") ? 1 : 0;
++      if (s_on) {
++          enum { IRQSTAT_MAX = 8 };
++          static struct { spu_context* c; unsigned takes; uint32_t srr0, ev; } s_st[IRQSTAT_MAX];
++          static uint64_t s_last_ns;
++          static pthread_mutex_t s_mx = PTHREAD_MUTEX_INITIALIZER;
++          pthread_mutex_lock(&s_mx);
++          int k = 0;
++          for (; k < IRQSTAT_MAX; k++) if (s_st[k].c == ctx || !s_st[k].c) break;
++          if (k < IRQSTAT_MAX) {
++              s_st[k].c = ctx; s_st[k].takes++;
++              s_st[k].srr0 = ctx->srr0 & SPU_LS_MASK; s_st[k].ev = spu_ev_get(ctx);
++          }
++          struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++          const uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
++          if (!s_last_ns) s_last_ns = now;
++          if (now - s_last_ns >= 5000000000ull) {
++              const double secs = (double)(now - s_last_ns) / 1e9;
++              for (int i = 0; i < IRQSTAT_MAX; i++) {
++                  if (!s_st[i].c || !s_st[i].takes) continue;
++                  fprintf(stderr, "[irq-stat] spu=%X img=%d %.0f takes/s, last srr0=0x%05X events=0x%X stall=0x%X\n",
++                          s_st[i].c->spu_id, s_st[i].c->image_id, s_st[i].takes / secs,
++                          s_st[i].srr0, s_st[i].ev, s_st[i].c->list_stall_stat);
++                  s_st[i].takes = 0;
++              }
++              s_last_ns = now;
++          }
++          pthread_mutex_unlock(&s_mx);
++      } }
+     { static _Atomic int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
+       if (s_it) { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 200)
+         fprintf(stderr, "[irq] TAKE srr0=0x%05X depth=%d r13=%08X r15=%08X\n",
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
-index 772c2d6..968282b 100644
+index 772c2d6..a53c516 100644
 --- a/runtime/spu/spu_interp.c
 +++ b/runtime/spu/spu_interp.c
 @@ -524,10 +524,39 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
@@ -2296,6 +2439,23 @@ index 772c2d6..968282b 100644
              spu_xfer_log(ctx, "rejoin", g_spu_interp_last_pc, ctx->pc);
              g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
          g_spu_interp_last_pc = ctx->pc;
+@@ -602,6 +634,16 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+                     ctx->pc, (unsigned long long)steps, rn);
+             for(int k=rn;k>0;k--) fprintf(stderr," %05X", ring[(rc-k)&63]);
+             fprintf(stderr,"\n");
++            /* The loop's code words, so the module it belongs to can be found
++             * by byte search when the LS address alone is ambiguous (every WWS
++             * job module loads at 0x4000). */
++            { uint32_t lo = ctx->pc & SPU_LS_MASK;
++              for (int k = 0; k < rn; k++) { uint32_t q = ring[(rc-1-k)&63]; if (q < lo) lo = q; }
++              lo &= ~15u;
++              fprintf(stderr,"[spu-trace] img=%d ovl=%d LS[0x%05X]:", ctx->image_id, ctx->resident_ovl, lo);
++              for (uint32_t o = 0; o < 32 && lo + o + 3 < SPU_LS_SIZE; o += 4)
++                  fprintf(stderr," %02X%02X%02X%02X", ctx->ls[lo+o], ctx->ls[lo+o+1], ctx->ls[lo+o+2], ctx->ls[lo+o+3]);
++              fprintf(stderr,"\n"); }
+             /* dump the LS 0x2700 SpursTasksetContext the poll reads -- compare to the
+              * working RPCS3 SPU0 dump (RUNNING/READY/ENABLED=0x80000000, SIGNALLED=0). */
+             #define LB(o) (((uint32_t)ctx->ls[(o)]<<24)|((uint32_t)ctx->ls[(o)+1]<<16)|((uint32_t)ctx->ls[(o)+2]<<8)|ctx->ls[(o)+3])
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
 index ab59cbe..6f63368 100644
 --- a/tools/ppu_lifter.py
