@@ -531,71 +531,6 @@ index 621d53e..322ef3b 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
-diff --git a/libs/network/sceNp.c b/libs/network/sceNp.c
-index 8bb66db..764c79f 100644
---- a/libs/network/sceNp.c
-+++ b/libs/network/sceNp.c
-@@ -12,6 +12,7 @@
- #include "../../runtime/ppu/ppu_memory.h"   /* vm_write*: guest EA -> host, byte-swapped */
- #include "np_psnr.h"
- #include "../system/cellSysutil.h"
-+#include "../filesystem/edat.h"
- 
- 
- /* ---------------------------------------------------------------------------
-@@ -308,3 +309,35 @@ s32 sceNpScoreTerm(void)
-     s_score_initialized = 0;
-     return CELL_OK;
- }
-+
-+/* ---------------------------------------------------------------------------
-+ * NPDRM
-+ *
-+ * On hardware sceNpDrmIsAvailable[2](klicensee, path) checks the licence for an
-+ * NPDRM file and leaves the klicensee with the kernel, so later cellFsOpen calls
-+ * on EDATs return plaintext. Free (license type 3) and disc-bound game data use a
-+ * title-specific klicensee that only the game knows; record it for the EDAT
-+ * reader (libs/filesystem/edat.c), which verifies it against each file's
-+ * dev_hash before using it. The two calls differ only in licence-check details
-+ * that do not apply here.
-+ * -----------------------------------------------------------------------*/
-+
-+static s32 np_drm_is_available(const u8* k_licensee, const char* drm_path)
-+{
-+    const u8* k = GUEST_PTR(k_licensee, const u8*);
-+    const char* path = GUEST_PTR(drm_path, const char*);
-+    /* A NULL klicensee is legal for content that needs none; nothing to record. */
-+    if (k) edat_add_klicensee(k);
-+    fprintf(stderr, "[sceNp] DRM availability check: %s\n", path ? path : "(null)");
-+    return CELL_OK;
-+}
-+
-+s32 sceNpDrmIsAvailable(const u8* k_licensee, const char* drm_path)
-+{
-+    return np_drm_is_available(k_licensee, drm_path);
-+}
-+
-+s32 sceNpDrmIsAvailable2(const u8* k_licensee, const char* drm_path)
-+{
-+    return np_drm_is_available(k_licensee, drm_path);
-+}
-diff --git a/libs/network/sceNp.h b/libs/network/sceNp.h
-index ea160aa..a2318a0 100644
---- a/libs/network/sceNp.h
-+++ b/libs/network/sceNp.h
-@@ -133,6 +133,12 @@ s32 sceNpManagerGetOnlineId(SceNpOnlineId* onlineId);
- s32 sceNpManagerGetOnlineName(SceNpOnlineName* onlineName);
- s32 sceNpManagerGetAccountAge(s32* age);
- 
-+/* NPDRM availability checks. The guest passes its klicensee (16 bytes) and the
-+ * path of an EDAT/SELF; the klicensee is handed to the EDAT reader, which then
-+ * decrypts that title's files on open. Always CELL_OK (licence present). */
-+s32 sceNpDrmIsAvailable(const u8* k_licensee, const char* drm_path);
-+s32 sceNpDrmIsAvailable2(const u8* k_licensee, const char* drm_path);
-+
- /* Set the fake PSN username (call before sceNpInit if desired) */
- void sceNpSetFakeUsername(const char* username);
- 
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 index 73b7e71..478fd86 100644
 --- a/libs/video/cellGcmSys.c
@@ -2417,7 +2352,7 @@ index 5a825a0..11c7af6 100644
      test_remap_rejects_null();
  
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index 4c03372..51bfb18 100644
+index 4c03372..10d4e7f 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
 @@ -26,6 +26,7 @@
@@ -2428,7 +2363,30 @@ index 4c03372..51bfb18 100644
  #include <sys/stat.h>
  #include "../platform/win32_dirent.h"   /* <dirent.h>, or a Win32 stand-in */
  
-@@ -663,6 +664,61 @@ static void cellFsReaddir(ppu_context* ctx)
+@@ -425,9 +426,10 @@ static void cellFsRead(ppu_context* ctx)
+       if (fd>=0 && fd<64) { per_fd[fd]+=n; cnt_fd[fd]++; }
+       int first_for_fd = (fd>=0 && fd<64 && cnt_fd[fd]==1);
+       if(__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED)<50 || first_for_fd || getenv("FS_READ_ALL"))
+-        fprintf(stderr,"[fs] read fd=%d nbytes=%llu -> %zu (magic=%02X%02X%02X%02X, total=%llu)%s\n",
++        fprintf(stderr,"[fs] read fd=%d nbytes=%llu -> %zu (magic=%02X%02X%02X%02X, total=%llu) tid=%llu%s\n",
+                 fd,(unsigned long long)nbytes,n,vm_base[buf],vm_base[buf+1],vm_base[buf+2],vm_base[buf+3],
+-                (unsigned long long)tot, first_for_fd?"  <= FIRST READ ON THIS FD":"");
++                (unsigned long long)tot, (unsigned long long)ctx->thread_id,
++                first_for_fd?"  <= FIRST READ ON THIS FD":"");
+       if (getenv("FS_READ_PATH") && fd>=0 && fd<64 && g_fd_path[fd][0])
+           fprintf(stderr, "        from %s\n", g_fd_path[fd]);
+ #ifndef _WIN32
+@@ -545,7 +547,8 @@ static void cellFsLseek(ppu_context* ctx)
+     uint32_t pos_ptr = (uint32_t)ctx->gpr[6];
+     if (fd < 0 || fd >= FS_MAX || !g_files[fd]) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
+     if (getenv("FS_CALLER")) { char w[64]="?"; ppu_guest_caller(w,sizeof w);
+-        fprintf(stderr, "[fs] lseek fd=%d off=%lld whence=%u  (by %s)\n", fd, (long long)off, wh, w); }
++        fprintf(stderr, "[fs] lseek fd=%d off=%lld whence=%u tid=%llu  (by %s)\n", fd, (long long)off, wh,
++                (unsigned long long)ctx->thread_id, w); }
+     int worigin = (wh == CELL_FS_SEEK_END) ? SEEK_END : (wh == CELL_FS_SEEK_CUR) ? SEEK_CUR : SEEK_SET;
+     fseek(g_files[fd], (long)off, worigin);
+     long p = ftell(g_files[fd]);
+@@ -663,6 +666,61 @@ static void cellFsReaddir(ppu_context* ctx)
      ctx->gpr[3] = CELL_OK;
  }
  
@@ -2490,7 +2448,7 @@ index 4c03372..51bfb18 100644
  static void cellFsClosedir(ppu_context* ctx)
  {
      int fd = (int)(uint32_t)ctx->gpr[3];
-@@ -808,6 +864,7 @@ extern "C" void ppu_fs_register(void)
+@@ -808,6 +866,7 @@ extern "C" void ppu_fs_register(void)
      ps3_hle_register_ctx(ps3_compute_nid("cellFsStat"),     "cellFsStat",     cellFsStat);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsFstat"),    "cellFsFstat",    cellFsFstat);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsOpendir"),  "cellFsOpendir",  cellFsOpendir);
@@ -2848,6 +2806,47 @@ index 772c2d6..a53c516 100644
              /* dump the LS 0x2700 SpursTasksetContext the poll reads -- compare to the
               * working RPCS3 SPU0 dump (RUNNING/READY/ENABLED=0x80000000, SIGNALLED=0). */
              #define LB(o) (((uint32_t)ctx->ls[(o)]<<24)|((uint32_t)ctx->ls[(o)+1]<<16)|((uint32_t)ctx->ls[(o)+2]<<8)|ctx->ls[(o)+3])
+diff --git a/runtime/syscalls/lv2_register.c b/runtime/syscalls/lv2_register.c
+index d756b8d..328a170 100644
+--- a/runtime/syscalls/lv2_register.c
++++ b/runtime/syscalls/lv2_register.c
+@@ -45,6 +45,7 @@ extern void spu_raw_note_image(uint32_t src_ea, uint32_t entry);
+ #include "sys_event.h"
+ 
+ #include <stdio.h>
++#include <time.h>    /* nanosleep: SPU event push retry on a full queue */
+ #include <string.h>
+ 
+ #include "../platform/win32_compat.h"   /* QueryPerformanceCounter shim for the SPU_SPEED timing */
+@@ -1970,6 +1971,28 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
+         if (queue) {
+             int rc = sys_event_queue_push_by_id(queue, 0xFFFFFFFF53505501ull,
+                 spu->spu_id, ((uint64_t)port << 32) | (value & 0xFFFFFFu), data);
++            /* A full queue. lv2 hands the SPU EBUSY and expects it to retry;
++             * Wwise's SPU mixer (inFAMOUS 2, a raw SPU thread posting one
++             * completion per job to an 8-deep queue) does not, so when the
++             * PPU drains late the completion is lost and the sound engine
++             * thread blocks on sys_event_queue_receive for it forever -- the
++             * "cityfalls" cutscene froze that way two runs in three, right
++             * where the city's collapse starts a burst of sounds. On the
++             * console the PPU drains fast enough that the queue never fills;
++             * give the consumer the same chance: wait up to a quarter second
++             * for a slot before reporting the failure. */
++            if (rc != 0) {
++                static int n_full;
++                for (int tries = 0; rc != 0 && tries < 5000; tries++) {
++                    struct timespec ts = { 0, 50000 };   /* 50 us */
++                    nanosleep(&ts, NULL);
++                    rc = sys_event_queue_push_by_id(queue, 0xFFFFFFFF53505501ull,
++                        spu->spu_id, ((uint64_t)port << 32) | (value & 0xFFFFFFu), data);
++                }
++                if (__atomic_fetch_add(&n_full, 1, __ATOMIC_RELAXED) < 16)
++                    fprintf(stderr, "[spu-evt] queue %u full for an SPU %X event on port %u -- %s\n",
++                            queue, spu->spu_id, port, rc == 0 ? "delivered after waiting" : "DROPPED (EBUSY to the SPU)");
++            }
+             result = rc == 0 ? CELL_OK : CELL_EBUSY;
+         }
+     }
 diff --git a/runtime/syscalls/sys_lwsync.c b/runtime/syscalls/sys_lwsync.c
 index f55cfa5..22671fe 100644
 --- a/runtime/syscalls/sys_lwsync.c
