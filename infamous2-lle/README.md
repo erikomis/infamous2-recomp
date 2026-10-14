@@ -79,8 +79,14 @@ reference.
   SPUs' lighting; the copy ran on the CPU from guest memory, which never holds
   what the GPU drew, so the SPUs lit an empty G-buffer. `rsx_draw_engine_write_back()`
   (called from `nv3089_blit()`) submits the pending work and reads the target
-  (or the depth buffer, as Z24S8 bytes) back into guest memory first. No
-  measurable frame-rate cost in the menu.
+  (or the depth buffer, as Z24S8 bytes) back into guest memory first. Only a
+  target that starts at the blit's offset, or within whose first row it lies,
+  qualifies (the phantom target at offset 0 must not claim the depth buffer at
+  0x10000), and the depth decode it queues is invalidated again afterwards so a
+  fog or depth-of-field pass later in the frame still resolves at its own point
+  -- reusing the early decode blacked out every cutscene. No measurable
+  frame-rate cost. `PS3RECOMP_ENG_WRITEBACK=0` turns it off, 1 colour only,
+  2 depth only.
 - **`libs/video/cellGcmSys.c`, semaphore waits.** `GCM_SEMA_ACQUIRE=1` with
   `GCM_SEMA_ACQUIRE_MS=<ms>` blocks the FIFO walker on an NV406E ACQUIRE for at
   most that long (the stuck-get watchdog no longer resyncs while it waits), so

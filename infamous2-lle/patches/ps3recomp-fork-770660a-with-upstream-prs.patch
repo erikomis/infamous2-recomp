@@ -804,7 +804,7 @@ index 7718d14..0e689ed 100644
        }
        if (method == 0x1D74) {
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..259e863 100644
+index 9a76e67..8753832 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -95,6 +95,7 @@ typedef struct {
@@ -1001,7 +1001,7 @@ index 9a76e67..259e863 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2531,6 +2614,83 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +2614,95 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
@@ -1026,23 +1026,31 @@ index 9a76e67..259e863 100644
 +int rsx_draw_engine_write_back(int local, u32 offset, u32 pitch)
 +{
 +    if (!g.ready || !g.be->readback || !g.be->submit_and_wait) return 0;
++    /* PS3RECOMP_ENG_WRITEBACK=0 turns the write-back off, 1 writes colour
++     * targets only, 2 depth only (bisecting); unset or 3 is both. */
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_WRITEBACK"); on = e ? atoi(e) : 3; }
++    if (!on) return 0;
 +    const u32 location = local ? RSX_LOCATION_LOCAL : RSX_LOCATION_MAIN;
 +    int wrote = 0;
 +    static int log_on = -1, logged;
 +    if (log_on < 0) log_on = getenv("PS3RECOMP_ENG_TEXLOG") ? 1 : 0;
 +
-+    /* The newest colour target whose rows cover the offset: a blit may start
-+     * inside a row (inFAMOUS 2 copies its 1280-wide G-buffer as 1024 + 256
-+     * columns). Only 8-bit targets are stored the way the guest expects. */
++    /* The newest colour target that starts at the offset, or within whose
++     * first row it lies: a blit may start inside a row (inFAMOUS 2 copies its
++     * 1280-wide G-buffer as 1024 + 256 columns) but never deeper, and a looser
++     * match let the phantom 1280x720 target at offset 0 (the zeroed surface
++     * registers at boot) claim the depth buffer at 0x10000 and overwrite VRAM
++     * 0..0x384000. Only 8-bit targets are stored the way the guest expects. */
 +    u32 best = ENG_INVALID;
 +    for (u32 i = 0; i < g.n_surfaces; i++) {
 +        const eng_surface* sf = &g.surfaces[i];
 +        if (!sf->handle || sf->location != location || sf->fmt != RSX_BE_FMT_R8G8B8A8) continue;
 +        const u32 row = pitch ? pitch : sf->w * 4u;
-+        if (offset < sf->offset || offset >= sf->offset + row * sf->h) continue;
++        if (offset < sf->offset || offset >= sf->offset + row) continue;
 +        if (best == ENG_INVALID || sf->stamp > g.surfaces[best].stamp) best = i;
 +    }
-+    if (best != ENG_INVALID && g.surfaces[best].wb_stamp != g.surfaces[best].stamp) {
++    if ((on & 1) && best != ENG_INVALID && g.surfaces[best].wb_stamp != g.surfaces[best].stamp) {
 +        eng_surface* sf = &g.surfaces[best];
 +        const u32 row = pitch ? pitch : sf->w * 4u;
 +        u8* dst = (u8*)eng_guest_ptr(NULL, location, sf->offset, row * sf->h);
@@ -1059,11 +1067,11 @@ index 9a76e67..259e863 100644
 +    }
 +
 +    /* The depth buffer at the offset, stored as the RSX stores Z24S8. */
-+    for (u32 i = 0; i < g.n_zdepths; i++) {
++    for (u32 i = 0; (on & 2) && i < g.n_zdepths; i++) {
 +        eng_zdepth* z = &g.zdepths[i];
 +        if (!z->handle || !z->had_write || z->location != location) continue;
 +        const u32 row = pitch ? pitch : z->w * 4u;
-+        if (offset < z->offset || offset >= z->offset + row * z->h) continue;
++        if (offset < z->offset || offset >= z->offset + row) continue;
 +        if (z->wb_stamp == z->stamp) break;
 +        z->snapshot_rgba_valid = 0;   /* the decode must follow the latest depth write */
 +        const u32 snap = eng_zdepth_snapshot_rgba8(i);   /* queues the decode */
@@ -1072,6 +1080,10 @@ index 9a76e67..259e863 100644
 +        g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
 +        g.be->readback(g.be->user, snap, 0, 0, z->w, z->h, g.tex_staging, z->w * 4u);
 +        eng_rgba_to_guest_argb(dst, row, g.tex_staging, z->w, z->h);
++        /* This decode served the write-back only: a texture consumer later in
++         * the frame must resolve at its own point in the stream, after the
++         * depth written in between, as it did before. */
++        z->snapshot_rgba_valid = 0;
 +        z->wb_stamp = z->stamp;
 +        wrote = 1;
 +        if (log_on && logged < 40) { logged++;
@@ -2836,6 +2848,95 @@ index 772c2d6..a53c516 100644
              /* dump the LS 0x2700 SpursTasksetContext the poll reads -- compare to the
               * working RPCS3 SPU0 dump (RUNNING/READY/ENABLED=0x80000000, SIGNALLED=0). */
              #define LB(o) (((uint32_t)ctx->ls[(o)]<<24)|((uint32_t)ctx->ls[(o)+1]<<16)|((uint32_t)ctx->ls[(o)+2]<<8)|ctx->ls[(o)+3])
+diff --git a/runtime/syscalls/sys_lwsync.c b/runtime/syscalls/sys_lwsync.c
+index f55cfa5..22671fe 100644
+--- a/runtime/syscalls/sys_lwsync.c
++++ b/runtime/syscalls/sys_lwsync.c
+@@ -21,6 +21,10 @@
+ #include "../platform/win32_compat.h"
+ #include <limits.h>
+ #include <string.h>
++#include <stdio.h>    /* LWCOND_TRACE */
++#include <stdlib.h>
++static int lwc_trace_on(void);
++static int lwc_is_traced(uint32_t id);
+ 
+ extern uint8_t* vm_base;
+ int32_t ppu_thread_priority_of(uint64_t tid);   /* sys_ppu_thread.c */
+@@ -340,6 +344,10 @@ static int64_t sys_lwcond_signal(ppu_context* ctx)
+     } else {
+         w = schedule(&c->sq, c->protocol);
+     }
++    if (lwc_trace_on() && lwc_is_traced(id))
++        fprintf(stderr, "[lwc] signal cond=%u mtx=%u mode=%u by tid=%llu -> %s%llu\n", id, mid, mode,
++                (unsigned long long)ctx->thread_id, w ? "woke tid=" : "NO WAITER ",
++                w ? (unsigned long long)w->tid : 0ull);
+     if (!w) {
+         ReleaseSRWLockExclusive(&s_lock);
+         if (tid != 0xFFFFFFFFu) return (int32_t)CELL_EPERM;
+@@ -376,6 +384,9 @@ static int64_t sys_lwcond_signal_all(ppu_context* ctx)
+         if (mode == 2) { w->ret = (int32_t)CELL_EBUSY; awake(w); }
+         else enqueue(&m->sq, w);
+     }
++    if (lwc_trace_on() && lwc_is_traced(id))
++        fprintf(stderr, "[lwc] signal_all cond=%u mode=%u by tid=%llu -> %d woken\n",
++                id, mode, (unsigned long long)ctx->thread_id, n);
+     ReleaseSRWLockExclusive(&s_lock);
+     return mode == 1 ? n : CELL_OK;
+ }
+@@ -384,6 +395,34 @@ static int64_t sys_lwcond_signal_all(ppu_context* ctx)
+  * condition and release the mutex (handing it to its next sleeper, or leaving
+  * a signal), then sleep until signalled -- woken owning the mutex, or with
+  * EBUSY if signalled in mode 2 -- or until the timeout (ETIMEDOUT). */
++/* LWCOND_TRACE=<lo>-<hi>: trace every wait and signal on the lwconds that
++ * guest threads with ids in [lo, hi] ever wait on -- a streaming library's
++ * worker/scheduler handshake, say -- so a lost wake-up (a signal that found
++ * no waiter, then a wait that nothing follows) can be read off the log.
++ * Off unless set; conds nobody in the range waits on stay silent. */
++static int lwc_trace_lo = -1, lwc_trace_hi = -1;
++static uint32_t lwc_traced[32]; static int lwc_traced_n;
++static int lwc_trace_on(void)
++{
++    if (lwc_trace_lo == -1) {
++        const char* e = getenv("LWCOND_TRACE");
++        int lo = 0, hi = 0;
++        if (e && sscanf(e, "%d-%d", &lo, &hi) == 2) { lwc_trace_lo = lo; lwc_trace_hi = hi; }
++        else { lwc_trace_lo = -2; lwc_trace_hi = -2; }
++    }
++    return lwc_trace_lo >= 0;
++}
++static int lwc_is_traced(uint32_t id)            /* under s_lock */
++{
++    for (int i = 0; i < lwc_traced_n; i++) if (lwc_traced[i] == id) return 1;
++    return 0;
++}
++static void lwc_mark(uint32_t id, uint64_t tid)   /* under s_lock */
++{
++    if ((int64_t)tid < lwc_trace_lo || (int64_t)tid > lwc_trace_hi || lwc_is_traced(id)) return;
++    if (lwc_traced_n < 32) lwc_traced[lwc_traced_n++] = id;
++}
++
+ static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
+ {
+     const uint32_t id = LV2_ARG_U32(ctx, 0), mid = LV2_ARG_U32(ctx, 1);
+@@ -394,6 +433,9 @@ static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
+     lwcond* c = find_cnd(id);
+     lwmutex* m = find_mtx(mid);
+     if (!c || !m) { ReleaseSRWLockExclusive(&s_lock); return (int32_t)CELL_ESRCH; }
++    const int traced = lwc_trace_on() && (lwc_mark(id, w.tid), lwc_is_traced(id));
++    if (traced) fprintf(stderr, "[lwc] wait cond=%u mtx=%u tid=%llu timeout=%llu (mtx sleepers=%s)\n",
++                        id, mid, (unsigned long long)w.tid, (unsigned long long)timeout, m->sq ? "yes" : "no");
+     m->lwcond_waiters++;
+     c->lwmutex_waiters++;
+     enqueue(&c->sq, &w);
+@@ -402,6 +444,7 @@ static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
+ 
+     if (!sleep_on(&w, timeout) && (unqueue(&c->sq, &w) || unqueue(&m->sq, &w)))
+         w.ret = (int32_t)CELL_ETIMEDOUT;
++    if (traced) fprintf(stderr, "[lwc] woke cond=%u tid=%llu ret=%d\n", id, (unsigned long long)w.tid, w.ret);
+ 
+     if (--m->lwcond_waiters == INT_MIN) WakeAllConditionVariable(&s_destroy_cv);
+     if (--c->lwmutex_waiters == INT_MIN) WakeAllConditionVariable(&s_destroy_cv);
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
 index ab59cbe..6f63368 100644
 --- a/tools/ppu_lifter.py
