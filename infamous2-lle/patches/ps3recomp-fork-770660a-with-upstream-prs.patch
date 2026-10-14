@@ -682,25 +682,10 @@ index 73b7e71..8394da7 100644
          vm_write32(cur + 4, 0x20000000u | io_begin);   /* JUMP -> begin */
          vm_write32(ctx + 8, begin);
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..d152cdd 100644
+index 9a76e67..3b4aaa1 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
-@@ -979,6 +979,14 @@ static u32 eng_cube_mask(void)
-          * failure, not a wrong pixel. */
-         if (t.enabled && t.cubemap && t.width && t.width == t.height)
-             mask |= 1u << u;
-+        /* Texture input gamma (TEXTURE_ADDRESS bits 20..23, upstream PR #305)
-+         * is not honoured by this engine yet; say once whether the title asks
-+         * for it, so a too-dark frame can be blamed on it or not. */
-+        { static int said = 0;
-+          const u32 gamma = (rsx_dsp_reg(&g.rsx, 0x1A08u + u * 0x20u) >> 20) & 0xFu;
-+          if (t.enabled && gamma && !said) { said = 1;
-+              fprintf(stderr, "[rsx engine] texture gamma decode requested (unit %u, mask 0x%X) -- not implemented\n",
-+                      u, gamma); } }
-     }
-     return mask;
- }
-@@ -1225,8 +1233,30 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1225,8 +1225,45 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vp_instrs = fixed ? 0 : vp->instrs, fp_size = fixed ? 0 : fp->size;
  
      const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
@@ -715,6 +700,21 @@ index 9a76e67..d152cdd 100644
 +                  rsx_dsp_reg(&g.rsx, 0x1FECu), rs->alpha_ref_format & 0x1Fu); } }
      const u32 cube_mask = eng_cube_mask();
      const u32 vtex_mask = eng_vtex_mask();
++    /* Texture input gamma (upstream PR #305, ported): TEXTURE_ADDRESS bits
++     * 20..23 ask for sRGB-to-linear on the sampled lanes. Only units the
++     * program actually fetches through count, so an idle unit's state does
++     * not fork the pipeline. */
++    u8 gamma_masks[RSX_DSP_NUM_TEXTURES] = {0};
++    if (!fixed) for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u) {
++        rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
++        if (t.enabled) gamma_masks[u] = rsx_texture_gamma_mask(t.format, t.remap, t.filter, t.wrap);
++    }
++    const u32 gamma_units = fixed ? 0 : rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
++    for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
++        if (!(gamma_units & (1u << u))) gamma_masks[u] = 0;
++    { static int said = 0;
++      if (gamma_units && !said) { said = 1;
++          fprintf(stderr, "[rsx engine] texture gamma decode in use (units 0x%X)\n", gamma_units); } }
 +    /* Depth textures with comparison enabled return visibility, not raw
 +     * depth (upstream PR #302, adapted: this engine has no UN-unit scaling). */
 +    rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES] = {{0}};
@@ -731,31 +731,35 @@ index 9a76e67..d152cdd 100644
  
      static const rsx_fp_constant_block no_constants;
      g.fp_constants = fixed ? &no_constants : &fp->constants;
-@@ -1247,6 +1277,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1247,6 +1284,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          int valid, fixed;
          u64 vp_hash, fp_struct;
          u32 fp_ctrl_key, cube_mask, vtex_mask, layout_mask, layout_stride, rt_count;
-+        u32 shadow_mask, srgb_output;
++        u32 shadow_mask, srgb_output, gamma_units;
++        u8 gamma_masks[RSX_DSP_NUM_TEXTURES];
 +        rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES];
          rsx_be_format rt_fmt;
          rsx_be_render_state rs;
          u64 key;
-@@ -1259,7 +1291,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1259,7 +1299,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          kmemo.fp_ctrl_key == fp_ctrl_key && kmemo.cube_mask == cube_mask &&
          kmemo.vtex_mask == vtex_mask && kmemo.layout_mask == layout->mask &&
          kmemo.layout_stride == layout->stride && kmemo.rt_count == rt_count &&
 -        kmemo.rt_fmt == rt_fmt && !memcmp(&kmemo.rs, rs, sizeof *rs)) {
 +        kmemo.rt_fmt == rt_fmt && !memcmp(&kmemo.rs, rs, sizeof *rs) &&
 +        kmemo.shadow_mask == shadow_mask && kmemo.srgb_output == srgb_output &&
++        kmemo.gamma_units == gamma_units &&
++        (!gamma_units || !memcmp(kmemo.gamma_masks, gamma_masks, sizeof gamma_masks)) &&
 +        (!shadow_mask || !memcmp(kmemo.shadow, shadow, sizeof shadow))) {
          key = kmemo.key;
          goto key_done;
      }
-@@ -1271,7 +1305,12 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1271,7 +1315,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          key = eng_fnv1a(&vp->hash, sizeof vp->hash, key);
          key = eng_fnv1a(&fp->structural, sizeof fp->structural, key);
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
 +        if (srgb_output) key = eng_fnv1a(&srgb_output, sizeof srgb_output, key);
++        if (gamma_units) key = eng_fnv1a(gamma_masks, sizeof gamma_masks, key);
          key = eng_fnv1a(&cube_mask, sizeof cube_mask, key);
 +        if (shadow_mask) {
 +            key = eng_fnv1a(&shadow_mask, sizeof shadow_mask, key);
@@ -764,23 +768,25 @@ index 9a76e67..d152cdd 100644
          key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
-@@ -1285,6 +1324,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1285,6 +1335,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      kmemo.fp_ctrl_key = fp_ctrl_key; kmemo.cube_mask = cube_mask; kmemo.vtex_mask = vtex_mask;
      kmemo.layout_mask = layout->mask; kmemo.layout_stride = layout->stride;
      kmemo.rt_count = rt_count; kmemo.rt_fmt = rt_fmt; memcpy(&kmemo.rs, rs, sizeof *rs);
 +    kmemo.shadow_mask = shadow_mask; memcpy(kmemo.shadow, shadow, sizeof shadow);
 +    kmemo.srgb_output = srgb_output;
++    kmemo.gamma_units = gamma_units; memcpy(kmemo.gamma_masks, gamma_masks, sizeof gamma_masks);
      kmemo.key = key;
  key_done:;
  
-@@ -1317,9 +1358,12 @@ key_done:;
+@@ -1317,9 +1370,13 @@ key_done:;
          vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
                                           layout->mask, s_vs_hlsl,
                                           sizeof s_vs_hlsl);
 -        fi = rsx_fp_decompile_buffered_ex(fp_uc, fp_size, fp_ctrl, cube_mask,
 -                                          s_ps_hlsl, sizeof s_ps_hlsl, &nconst);
-+        fi = rsx_fp_decompile_buffered_shadow_ex(fp_uc, fp_size, fp_ctrl, cube_mask,
-+                shadow_mask ? shadow : NULL, s_ps_hlsl, sizeof s_ps_hlsl, &nconst);
++        fi = rsx_fp_decompile_buffered_shadow_color_ex(fp_uc, fp_size, fp_ctrl, cube_mask,
++                shadow_mask ? shadow : NULL, gamma_units ? gamma_masks : NULL,
++                s_ps_hlsl, sizeof s_ps_hlsl, &nconst);
          if (fi > 0 && nconst != g.fp_constants->count) fi = -1;
 +        if (fi > 0 && srgb_output &&
 +            rsx_fp_apply_srgb_output(s_ps_hlsl, sizeof s_ps_hlsl) < 0)
@@ -789,7 +795,7 @@ index 9a76e67..d152cdd 100644
              rsx_fp_apply_alpha_test_buffered(s_ps_hlsl, sizeof s_ps_hlsl,
                                               rs->alpha_func) < 0)
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index 933abcb..be4bdab 100644
+index 933abcb..8408f72 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
 @@ -71,8 +71,8 @@ enum {
@@ -827,7 +833,7 @@ index 933abcb..be4bdab 100644
      case 0x3: return "input.fog";      /* FOGC */
      default:
          if (input_src >= 0x4 && input_src <= 0xB) return tc[input_src - 0x4]; /* TC0..7 */
-@@ -445,12 +451,104 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+@@ -445,12 +451,148 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
      return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
  }
  
@@ -912,13 +918,58 @@ index 933abcb..be4bdab 100644
 +    out_puts(p, "    return (float4)lerp(lerp(c0, c1, fraction.x), lerp(c2, c3, fraction.x), fraction.y);\n}\n");
 +}
 +
++/* Texture input gamma (upstream PR #305, ported): which units have a fetch
++ * that decodes. EXP_TEX (DWORD0 bit 21) overrides gamma on compatible
++ * normalized color formats; the metadata has already excluded formats
++ * without gamma support. */
++u32 rsx_fp_texture_gamma_units(const u8* ucode, u32 max_bytes,
++                                const u8 gamma_masks[16])
++{
++    if (!ucode || !gamma_masks) return 0;
++    u32 units = 0;
++    for (u32 off = 0; off + 16 <= max_bytes;) {
++        const u32 w0 = rsx_fp_read_word(ucode + off);
++        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
++        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
++        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        const u32 op = (w0 >> 24) & 63u, unit = (w0 >> FP_TEX_UNIT_SHIFT) & 15u;
++        if (!(w2 & FP_BRANCH) && !(w0 & (1u << 21)) && gamma_masks[unit] &&
++            (op == OP_TEX || op == OP_TXP || op == OP_TXB || op == OP_TXL ||
++             op == OP_TXD || op == OP_TEXBEM || op == OP_TXPBEM))
++            units |= 1u << unit;
++        off += 16;
++        if (!(w2 & FP_BRANCH) && ((w1 & 3u) == 2 || (w2 & 3u) == 2 || (w3 & 3u) == 2)) off += 16;
++        if (w0 & FP_END) return units;
++    }
++    return 0;
++}
++
++static void fp_gamma_helper(Out* out)
++{
++    out_puts(out,
++        "float4 _rsx_gamma_input(float4 v, uint mask) {\n"
++        "    float4 lo = v / 12.92;\n"
++        "    float4 hi = pow(max((v + 0.055) / 1.055, (float4)0), (float4)2.4);\n"
++        "    float4 decoded = float4(v.r > 0.04045 ? hi.r : lo.r,\n"
++        "                            v.g > 0.04045 ? hi.g : lo.g,\n"
++        "                            v.b > 0.04045 ? hi.b : lo.b,\n"
++        "                            v.a > 0.04045 ? hi.a : lo.a);\n"
++        "    return float4((mask & 1u) ? decoded.r : v.r,\n"
++        "                  (mask & 2u) ? decoded.g : v.g,\n"
++        "                  (mask & 4u) ? decoded.b : v.b,\n"
++        "                  (mask & 8u) ? decoded.a : v.a);\n}\n");
++}
++
  static int rsx_fp_decompile_internal(
      const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
 -    int buffered, char* out, u32 out_size, u32* out_constant_count)
-+    int buffered, const rsx_fp_shadow_desc* shadow, char* out, u32 out_size, u32* out_constant_count)
++    int buffered, const rsx_fp_shadow_desc* shadow, const u8* gamma_masks,
++    char* out, u32 out_size, u32* out_constant_count)
  {
      if (!ucode || !out || out_size == 0) return -1;
- 
+-
++    const u32 gamma_units = rsx_fp_texture_gamma_units(ucode, max_bytes, gamma_masks);
++
 +    const u32 sampled_units = rsx_fp_texture_units(ucode, max_bytes);
 +    if (shadow) for (u32 u = 0; u < 16; u++)
 +        if ((sampled_units & (1u << u)) && shadow[u].enabled &&
@@ -933,7 +984,7 @@ index 933abcb..be4bdab 100644
      u32 buffered_constant_count = 0;
      if (buffered) {
          rsx_fp_constant_block constants;
-@@ -517,6 +615,14 @@ static int rsx_fp_decompile_internal(
+@@ -517,6 +659,14 @@ static int rsx_fp_decompile_internal(
          u32 opcode    = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
          u32 input_src = (w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT;
          u32 tex_unit  = (w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT;
@@ -948,7 +999,7 @@ index 933abcb..be4bdab 100644
          int is_branch = (w2 & FP_BRANCH) ? 1 : 0;
  
          /* Execution condition (exec_if) + condition-code write (set_cond).
-@@ -655,6 +761,18 @@ static int rsx_fp_decompile_internal(
+@@ -655,6 +805,18 @@ static int rsx_fp_decompile_internal(
          case OP_FRC: snprintf(rhs, sizeof(rhs), "frac(%s)", a); break;
          case OP_FLR: snprintf(rhs, sizeof(rhs), "floor(%s)", a); break;
          case OP_RCP: snprintf(rhs, sizeof(rhs), "(1.0 / (%s).x)", a); break;
@@ -967,7 +1018,7 @@ index 933abcb..be4bdab 100644
          /* Real RSX RSQ ignores the input's sign — 1/sqrt(|x|), not 1/sqrt(x)
           * (oracle: RPCS3 FragmentProgramDecompiler.cpp, "RSQ ignores the sign
           * of the inputs (Metro Last Light, GTA4)"). The strict form NaN'd the
-@@ -702,6 +820,10 @@ static int rsx_fp_decompile_internal(
+@@ -702,6 +864,10 @@ static int rsx_fp_decompile_internal(
          case OP_SNE: snprintf(rhs, sizeof(rhs), "(float4)((%s) != (%s))", a, b); break;
          case OP_SEQ: snprintf(rhs, sizeof(rhs), "(float4)((%s) == (%s))", a, b); break;
          case OP_TEX:
@@ -978,7 +1029,7 @@ index 933abcb..be4bdab 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Cubemap: sample with the full 3-component direction vector. */
                  snprintf(rhs, sizeof(rhs),
-@@ -714,6 +836,10 @@ static int rsx_fp_decompile_internal(
+@@ -714,6 +880,10 @@ static int rsx_fp_decompile_internal(
                           "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
              break;
          case OP_TXP:
@@ -989,7 +1040,7 @@ index 933abcb..be4bdab 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Projective divide is meaningless for a cube lookup; sample
                   * the direction directly. */
-@@ -760,11 +886,16 @@ static int rsx_fp_decompile_internal(
+@@ -760,14 +930,37 @@ static int rsx_fp_decompile_internal(
              }
              handled = 0;   /* no destination write */
              break;
@@ -1010,7 +1061,28 @@ index 933abcb..be4bdab 100644
              break;
          }
  
-@@ -817,13 +948,17 @@ static int rsx_fp_decompile_internal(
++        /* Texture input gamma (upstream PR #305): decode the filtered,
++         * remapped sample on the lanes the unit's mask names, before result
++         * scaling and saturation. EXP_TEX fetches bypass it. */
++        if (gamma_masks && gamma_masks[tex_unit] && !(w0 & (1u << 21)) &&
++            (opcode == OP_TXD || opcode == OP_TEXBEM || opcode == OP_TXPBEM)) {
++            static u32 reported;
++            if (reported++ < 32)
++                fprintf(stderr, "[RSX fp] gamma fetch opcode %u unsupported on unit %u\n", opcode, tex_unit);
++            return -1;
++        }
++        if (gamma_masks && gamma_masks[tex_unit] && !(w0 & (1u << 21)) &&
++            (opcode == OP_TEX || opcode == OP_TXP || opcode == OP_TXB || opcode == OP_TXL)) {
++            char sample[sizeof rhs]; memcpy(sample, rhs, sizeof sample);
++            const int length = snprintf(rhs, sizeof rhs, "_rsx_gamma_input(%s, %uu)",
++                                        sample, gamma_masks[tex_unit] & 15u);
++            if (length < 0 || (size_t)length >= sizeof rhs) return -1;
++        }
++
+         int has_dest = !(w0 & FP_OUT_NONE);
+         if (handled && (has_dest || set_cond)) {
+             u32 dst_idx = (w0 & FP_OUT_REG_MASK) >> FP_OUT_REG_SHIFT;
+@@ -817,13 +1010,17 @@ static int rsx_fp_decompile_internal(
                                   "      /* exec_if=none: write suppressed */\n");
                      } else {
                          /* Per-component select gated by the CC sign test.
@@ -1032,7 +1104,7 @@ index 933abcb..be4bdab 100644
                      }
                      out_puts(&o, buf);
                  }
-@@ -907,7 +1042,7 @@ static int rsx_fp_decompile_internal(
+@@ -907,7 +1104,7 @@ static int rsx_fp_decompile_internal(
      /* Preamble: PSInput matches the backend's placeholder layout; temp/half
       * register files; texture+sampler banks for TEX. Built here, in front of
       * the body, now that the return type is known. */
@@ -1041,7 +1113,7 @@ index 933abcb..be4bdab 100644
      Out p = { preamble, sizeof(preamble), 0, 1 };
      preamble[0] = '\0';
      out_puts(&p,
-@@ -945,6 +1080,25 @@ static int rsx_fp_decompile_internal(
+@@ -945,6 +1142,26 @@ static int rsx_fp_decompile_internal(
              buffered_constant_count ? buffered_constant_count : 1u);
          out_puts(&p, constants_decl);
      }
@@ -1064,24 +1136,25 @@ index 933abcb..be4bdab 100644
 +    if (shadow) for (u32 u = 0; u < 16; u++)
 +        if ((sampled_units & (1u << u)) && shadow[u].enabled)
 +            fp_shadow_helper(&p, u, tex_cube_mask, &shadow[u]);
++    if (gamma_units) fp_gamma_helper(&p);
      if (targets == 1) {
          out_puts(&p, "float4 main(PSInput input) : SV_TARGET {\n");
      } else {
-@@ -970,7 +1124,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
+@@ -970,7 +1187,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
                          u32 tex_cube_mask, char* out, u32 out_size)
  {
      return rsx_fp_decompile_internal(
 -        ucode, max_bytes, ctrl, tex_cube_mask, 0, out, out_size, NULL);
-+        ucode, max_bytes, ctrl, tex_cube_mask, 0, NULL, out, out_size, NULL);
++        ucode, max_bytes, ctrl, tex_cube_mask, 0, NULL, NULL, out, out_size, NULL);
  }
  
  int rsx_fp_decompile_buffered_ex(
-@@ -978,10 +1132,19 @@ int rsx_fp_decompile_buffered_ex(
+@@ -978,10 +1195,28 @@ int rsx_fp_decompile_buffered_ex(
      char* out, u32 out_size, u32* out_constant_count)
  {
      return rsx_fp_decompile_internal(
 -        ucode, max_bytes, ctrl, tex_cube_mask, 1, out, out_size,
-+        ucode, max_bytes, ctrl, tex_cube_mask, 1, NULL, out, out_size,
++        ucode, max_bytes, ctrl, tex_cube_mask, 1, NULL, NULL, out, out_size,
          out_constant_count);
  }
  
@@ -1091,13 +1164,22 @@ index 933abcb..be4bdab 100644
 +    char* out, u32 out_size, u32* out_constant_count)
 +{
 +    return rsx_fp_decompile_internal(ucode, max_bytes, ctrl, tex_cube_mask,
-+        1, shadow, out, out_size, out_constant_count);
++        1, shadow, NULL, out, out_size, out_constant_count);
++}
++
++int rsx_fp_decompile_buffered_shadow_color_ex(
++    const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
++    const rsx_fp_shadow_desc shadow[16], const u8 gamma_masks[16],
++    char* out, u32 out_size, u32* out_constant_count)
++{
++    return rsx_fp_decompile_internal(ucode, max_bytes, ctrl, tex_cube_mask,
++        1, shadow, gamma_masks, out, out_size, out_constant_count);
 +}
 +
  static float fp_half_to_float(u16 h)
  {
      const u32 sign = (u32)(h & 0x8000u) << 16;
-@@ -1294,3 +1457,74 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
+@@ -1294,3 +1529,74 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
      }
      return patched;
  }
@@ -1173,7 +1255,7 @@ index 933abcb..be4bdab 100644
 +    return 1;
 +}
 diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
-index 7161c4e..c72d0a6 100644
+index 7161c4e..0302ff3 100644
 --- a/libs/video/rsx_fp_decompiler.h
 +++ b/libs/video/rsx_fp_decompiler.h
 @@ -116,6 +116,27 @@ int rsx_fp_decompile_buffered_ex(
@@ -1204,10 +1286,21 @@ index 7161c4e..c72d0a6 100644
  /* Extract the exact runtime inline-CONST payload. Returns the slot count on
   * success or -1 for an unterminated/truncated/oversized program. */
  int rsx_fp_collect_constants(
-@@ -150,6 +171,18 @@ int rsx_fp_constant_ring_plan(
+@@ -150,6 +171,29 @@ int rsx_fp_constant_ring_plan(
  int rsx_vertex_constant_ring_plan(
      u32 used, u32 capacity, u32 block_bytes, u32* out_offset);
  
++/* Texture input gamma (upstream PR #305). gamma_masks[u] is a post-filter,
++ * post-remap RGBA lane mask for unit u (rsx_texture_gamma_mask); the units
++ * whose fetches decode are the pipeline's identity. EXP_TEX overrides gamma
++ * per fetch. The older entry points pass NULL and keep their output. */
++u32 rsx_fp_texture_gamma_units(const u8* ucode, u32 max_bytes,
++                                const u8 gamma_masks[16]);
++int rsx_fp_decompile_buffered_shadow_color_ex(
++    const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
++    const rsx_fp_shadow_desc shadow[16], const u8 gamma_masks[16],
++    char* out, u32 out_size, u32* out_constant_count);
++
 +/* Integer framebuffer sRGB conversion (NV4097_SET_SHADER_PACKER / 0x1FEC),
 + * upstream PR #304. Pass the decoded surface color format. Any nonzero packer
 + * enables it for half exports; floating surfaces and 32-bit exports bypass
@@ -1498,6 +1591,54 @@ index 98db285..c76ebe4 100644
  }
  
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+diff --git a/libs/video/rsx_texture_layout.c b/libs/video/rsx_texture_layout.c
+index b32a702..53acd91 100644
+--- a/libs/video/rsx_texture_layout.c
++++ b/libs/video/rsx_texture_layout.c
+@@ -333,3 +333,27 @@ void rsx_texture_component_remap(u32 control1, u32 rsx_fmt, u8 out[4])
+                            : src2res[s];
+     }
+ }
++
++/* Texture input gamma (upstream PR #305, ported). ADDRESS gamma flags name
++ * final RGBA lanes, after remapping. Signed input interpretation wins; its
++ * FILTER ARGB flags follow the source crossbar. */
++u8 rsx_texture_gamma_mask(u32 format, u32 control1, u32 filter, u32 address)
++{
++    switch (format & 0x9Fu) {
++    case 0x81: case 0x82: case 0x83: case 0x84: case 0x85:
++    case 0x86: case 0x87: case 0x88: case 0x8B: case 0x8D: case 0x8E: case 0x8F:
++    case 0x97: case 0x9D: case 0x9E: break;
++    default: return 0;
++    }
++    u8 gamma = (u8)((address >> 20) & 15u);
++    if (!gamma) return 0;
++    if (!(control1 & 0xFFFFu)) control1 = 0xAAE4u;
++    u8 remap[4]; rsx_texture_component_remap(control1, format, remap);
++    static const u8 rgba_lane[4] = {3, 0, 1, 2};
++    for (u32 i = 0; i < 4; ++i) {
++        const u32 source = (control1 >> (2u * i)) & 3u;
++        if (remap[i] < RSX_REMAP_ZERO && ((filter >> (28u + source)) & 1u))
++            gamma &= (u8)~(1u << rgba_lane[i]);
++    }
++    return gamma;
++}
+diff --git a/libs/video/rsx_texture_layout.h b/libs/video/rsx_texture_layout.h
+index ce99e68..24963a8 100644
+--- a/libs/video/rsx_texture_layout.h
++++ b/libs/video/rsx_texture_layout.h
+@@ -206,6 +206,11 @@ void rsx_texture_decode(void* dst, u32 dst_pitch,
+  * not, which is precisely that regression. */
+ void rsx_texture_component_remap(u32 control1, u32 rsx_fmt, u8 out[4]);
+ 
++/* Per-final-RGBA-lane gamma flags from TEXTURE_ADDRESS bits 20..23 (upstream
++ * PR #305). Float/depth/non-gamma formats return zero; source signed flags
++ * take precedence after the existing crossbar. No texture bytes are converted. */
++u8 rsx_texture_gamma_mask(u32 format, u32 control1, u32 filter, u32 address);
++
+ /* TEX_RGBA: treat A8R8G8B8 source bytes as already R,G,B,A and copy them
+  * straight through.
+  *
 diff --git a/libs/video/tests/test_color_input_metal.m b/libs/video/tests/test_color_input_metal.m
 new file mode 100644
 index 0000000..9b069a1
@@ -2098,10 +2239,10 @@ index 3addd48..b68175f 100644
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
-index 772c2d6..6b4fb66 100644
+index 772c2d6..968282b 100644
 --- a/runtime/spu/spu_interp.c
 +++ b/runtime/spu/spu_interp.c
-@@ -524,6 +524,13 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
+@@ -524,10 +524,39 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
      return spu_interp_run_until(ctx, start_lsa, 0);
  }
  
@@ -2115,7 +2256,33 @@ index 772c2d6..6b4fb66 100644
  uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
      ctx->pc = start_lsa & 0x3FFFC;
      ctx->status = SPU_STATUS_RUNNING;
-@@ -563,8 +570,11 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+     uint64_t steps = 0;
++    /* SPU_INTERP_ENTRY_LOG=1: every distinct (image, start pc) the interpreter
++     * is entered at, once each, up to 512. The "branched into unlifted" report
++     * only covers one dispatch path and the "interpreting unlifted" one stops
++     * after eight, so a lift missing a whole region of a job module showed two
++     * or three entries per run; this lists them all for one re-lift. */
++    { static _Atomic int s_el = -1; if (s_el < 0) s_el = getenv("SPU_INTERP_ENTRY_LOG") ? 1 : 0;
++      if (s_el) {
++          enum { ENTRY_LOG_MAX = 512 };
++          static uint64_t s_keys[ENTRY_LOG_MAX]; static int s_n = 0;
++          const uint64_t key = ((uint64_t)(uint32_t)ctx->image_id << 32) | (start_lsa & SPU_LS_MASK);
++          int n = __atomic_load_n(&s_n, __ATOMIC_ACQUIRE), known = 0;
++          for (int i = 0; i < n && i < ENTRY_LOG_MAX; i++)
++              if (s_keys[i] == key) { known = 1; break; }
++          if (!known) {
++              const int slot = __atomic_fetch_add(&s_n, 1, __ATOMIC_ACQ_REL);
++              if (slot < ENTRY_LOG_MAX) {
++                  s_keys[slot] = key;
++                  fprintf(stderr, "[interp-entry] img=%d ovl=%d pc=0x%05X lr=0x%05X\n",
++                          ctx->image_id, ctx->resident_ovl, start_lsa & SPU_LS_MASK,
++                          ctx->gpr[0]._u32[0] & SPU_LS_MASK);
++              }
++          } } }
+     /* YDKJ_SPU_TRACE=N: log the last N PCs into a ring buffer and dump them when the
+      * interp halts -- shows the path to a branch-to-0 (the cri task/policy wall). */
+     static _Atomic int _tr=-1; if(_tr<0){const char*e=getenv("YDKJ_SPU_TRACE");_tr=e?atoi(e):0;}
+@@ -563,8 +592,11 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
          /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
          if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) {
              { static _Atomic int s_rj = -1; if (s_rj < 0) { const char* e = getenv("SPU_REJOIN_DBG"); s_rj = e ? atoi(e) : 0; }

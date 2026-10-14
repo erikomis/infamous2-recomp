@@ -103,7 +103,8 @@ No toolkit (em `infamous2-lle/patches/`, aplicadas pelo `setup_toolkit.sh`):
 - **cellGcm:** o FIFO pulava comandos quando o jogo "estacionava" a GPU antes de religar o bloco; o menu congelava.
 - **SPU:** o interpretador não voltava ao código traduzido dentro dos módulos de job WWS; o menu rodava a ~0,4 fps.
 - **Fragment shaders:** os opcodes de pack/unpack do NV40 (PK4UB, UP4UB, PKG, UPG e os irmãos de 16 bits) não existiam no decompilador e eram pulados; o jogo os usa como conversão sRGB↔linear nos materiais de personagem, e sem eles o couro cabeludo do Cole saía verde e a pele com tons errados. Implementados seguindo o RPCS3.
-- **Upstream:** PRs abertos aplicados — #297, #275, #274, #278, #293, #303; #266 e #302 portados à mão (créditos em [CREDITS.md](CREDITS.md)).
+- **Brilho:** a imagem saía escura e lamacenta, com personagens quase pretos em contraluz. O jogo pede ao RSX a conversão linear→sRGB ao escrever o framebuffer e a decodificação sRGB→linear ao ler texturas, e o motor ignorava as duas; portados os PRs #304 e #305 do upstream.
+- **Upstream:** PRs abertos aplicados — #297, #275, #274, #278, #293, #303; #266, #302, #304 e #305 portados à mão (créditos em [CREDITS.md](CREDITS.md)).
 
 No port: extrator dos 27 módulos de job embutidos no EBOOT, registro do
 policy module `Wws_Job`, PARAM.SFO no boot e scripts de execução e captura.

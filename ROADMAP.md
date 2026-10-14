@@ -36,6 +36,7 @@ execução com janela.
 - [x] Menu de pausa e tela de opções.
 - [x] Iluminação dos personagens nas cutscenes (comparação de profundidade das sombras).
 - [x] Cor dos materiais de personagem: o decompilador pulava os opcodes de pack/unpack (PK4UB, UP4UB, PKG, UPG) que o jogo usa como conversão sRGB↔linear; era a mancha verde no couro cabeludo do Cole e tons de pele errados.
+- [x] Brilho e contraste: a imagem saía escura e lamacenta (personagens quase pretos nas cenas de contraluz, sombras esmagadas). O jogo pede ao RSX a conversão linear→sRGB na escrita do framebuffer (`SET_SHADER_PACKER`) e a decodificação sRGB→linear ao ler texturas (bits de gamma do `TEXTURE_ADDRESS`), e o motor do fork ignorava as duas. PRs #304 e #305 do upstream portados à mão para o motor do fork.
 
 ## Correções no toolkit ✅
 
@@ -57,7 +58,7 @@ Feitas neste port:
 PRs abertos do upstream aplicados:
 
 - [x] #297, #275, #274, #278, #293, #303.
-- [x] #266 e #302, portados à mão para o motor do fork; #247 com uma adaptação de assinatura.
+- [x] #266, #302, #304 e #305, portados à mão para o motor do fork; #247 com uma adaptação de assinatura.
 - [x] #268 já estava no fork.
 
 ## Ferramentas e infraestrutura ✅
@@ -103,7 +104,8 @@ PRs abertos do upstream aplicados:
 - [ ] Tela cheia, janela redimensionável e alternância por atalho.
 - [ ] Widescreen/ultrawide (21:9): FOV e HUD corretos.
 - [ ] Taxa de quadros: desbloquear de 30 fps onde a lógica do jogo permitir.
-- [ ] Ganhar do upstream os PRs de renderização que hoje não aplicam no fork: #304 (sRGB), #305 (gamma de textura), #307 (snapshot de render target). Exige terminar o merge do motor de desenho (`rsx_draw_engine.c`).
+- [x] #304 (sRGB do framebuffer) e #305 (gamma de textura) portados à mão para o motor do fork (ver Fase 2).
+- [ ] #307 (snapshot de render target) do upstream: exige terminar o merge do motor de desenho (`rsx_draw_engine.c`).
 
 ## Fase 6 — Desempenho e qualidade
 

@@ -31,6 +31,8 @@ Diffs originais em `infamous2-lle/patches/upstream-prs/`.
 - [@tekulvw](https://github.com/tekulvw) —
   [#266](https://github.com/sp00nznet/ps3recomp/pull/266) (retomar código SPU traduzido após o interpretador),
   [#302](https://github.com/sp00nznet/ps3recomp/pull/302) (comparação de profundidade / sombras),
+  [#304](https://github.com/sp00nznet/ps3recomp/pull/304) (sRGB na escrita do framebuffer),
+  [#305](https://github.com/sp00nznet/ps3recomp/pull/305) (gamma de textura por canal),
   [#293](https://github.com/sp00nznet/ps3recomp/pull/293) (clears no Metal),
   [#303](https://github.com/sp00nznet/ps3recomp/pull/303) (clamp das cores de entrada).
 
