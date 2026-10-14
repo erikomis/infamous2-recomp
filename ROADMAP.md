@@ -7,8 +7,8 @@ a seguir. `[x]` = feito e verificado; `[ ]` = a fazer.
 
 Menu → jogo novo → vídeo de abertura → cutscene no motor do jogo nas docas de
 Empire City (Cole, Zeke, Lucy Kuo), com menu de pausa e opções funcionando.
-Média de ~17 fps numa execução de 330 s que inclui o boot. Ainda não chegou ao
-gameplay controlável.
+Personagens com iluminação e cor de pele corretas. Média de ~17 fps numa
+execução de 330 s que inclui o boot. Ainda não chegou ao gameplay controlável.
 
 ## Fase 1 — Boot e pipeline ✅
 
@@ -31,6 +31,34 @@ gameplay controlável.
 - [x] Menu de pausa e tela de opções.
 - [x] Iluminação dos personagens nas cutscenes (comparação de profundidade das sombras).
 - [x] Cor dos materiais de personagem: o decompilador pulava os opcodes de pack/unpack (PK4UB, UP4UB, PKG, UPG) que o jogo usa como conversão sRGB↔linear; era a mancha verde no couro cabeludo do Cole e tons de pele errados.
+
+## Correções no toolkit ✅
+
+Aplicadas pelo `tools/setup_toolkit.sh` a partir de
+`infamous2-lle/patches/ps3recomp-fork-770660a-with-upstream-prs.patch`.
+
+Feitas neste port:
+
+- [x] Lifter PPU: jump tables perdidas atrás de um epílogo com tail-call.
+- [x] cellGcm: o FIFO pulava comandos quando o jogo "estacionava" a GPU antes de religar o bloco; o menu congelava.
+- [x] SPU: o interpretador não voltava ao código traduzido dentro dos módulos de job WWS; o menu rodava a ~0,4 fps.
+- [x] Fragment shaders: opcodes de pack/unpack do NV40 (PK4UB, UP4UB, PKG, UPG, PK4B, UP4B, PK2H, UP2H, PK2US, UP2US).
+- [x] `sys_lwcond_t` com layout errado (FIOS recusava toda espera). Só no upstream; o fork já tinha.
+
+PRs abertos do upstream aplicados:
+
+- [x] #297, #275, #274, #278, #293, #303.
+- [x] #266 e #302, portados à mão para o motor do fork.
+- [x] #268 já estava no fork.
+
+## Ferramentas e infraestrutura ✅
+
+- [x] `tools/setup_toolkit.sh`: clona o fork do inFAMOUS 1 no commit usado e aplica o patch; testado num checkout limpo.
+- [x] Execução sem janela com tempo limite (`boot.sh`) e captura de um frame a cada 10 s (`capture.sh`).
+- [x] Entrada de controle por script (`PAD_SCRIPT`) para testar menus sem controle.
+- [x] Diagnóstico do renderizador: pass log por material, limiares configuráveis, dump de shaders e render targets, e análise com `passlog.py`, `psfeatures.py`, `surfstats.py` e `greenshare.py`.
+- [x] Extrator dos 27 módulos de job do EBOOT (`extract_eboot_jobmods.py`) e tradução dos jobs SPURS capturados (`lift_spu_jobs.sh`).
+- [x] Repositório no GitHub com README, créditos, licença e `.gitignore` que bloqueia dados do jogo e do firmware.
 
 ## Fase 3 — Gameplay
 
@@ -69,7 +97,8 @@ gameplay controlável.
 - [ ] Reduzir o que ainda passa pelo interpretador SPU.
 - [ ] `libgcm_sys` e `libfs` em LLE (o RPCS3 roda os dois assim).
 - [ ] Saves: conferir criação, carregamento e local dos arquivos.
-- [ ] Um único script de rebuild do zero (hoje a receita está no README do port).
+- [x] Montagem do toolkit por script (`tools/setup_toolkit.sh`).
+- [ ] Um único script para o resto do rebuild do zero: descriptografar, traduzir e compilar (hoje a receita está no README do port).
 
 ## Fase 7 — Outras plataformas
 
@@ -80,6 +109,7 @@ gameplay controlável.
 
 - [ ] Enviar as correções deste port para o fork do inFamous 1 (NoahBPeterson, upstream PR #213).
 - [ ] Enviar a correção de jump table do lifter para o upstream (sp00nznet).
+- [ ] Enviar os opcodes de pack/unpack do decompilador para o fork e para o upstream.
 - [ ] Pedir para listar o port no README do ps3recomp.
 
 ---
