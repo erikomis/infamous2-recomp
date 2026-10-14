@@ -1036,7 +1036,7 @@ index 7161c4e..5f4019d 100644
   * success or -1 for an unterminated/truncated/oversized program. */
  int rsx_fp_collect_constants(
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..ce544ac 100644
+index 98db285..c76ebe4 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -742,6 +742,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
@@ -1282,7 +1282,23 @@ index 98db285..ce544ac 100644
          pt = eng_pt_now();
          id<MTLCommandBuffer> cb = [s_queue commandBuffer];
          eng_encode_records(cb, stage);
-@@ -3672,7 +3763,10 @@ static void eng_present(void* user, u32 surface)
+@@ -3521,6 +3612,15 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+         } else {
+             [cb commit];
+             [cb waitUntilCompleted];
++            /* A faulted command buffer (GPU hang, a bad resource) completes
++             * with an error and nothing says so; the next frame then renders
++             * on a device that may have been lost. Name it, with its code. */
++            if ([cb status] == MTLCommandBufferStatusError) {
++                static int n;
++                if (n++ < 8)
++                    fprintf(stderr, "[rsx engine/metal] command buffer failed: %s (code %ld)\n",
++                            [[[cb error] localizedDescription] UTF8String], (long)[[cb error] code]);
++            }
+         }
+ 
+ 
+@@ -3672,7 +3772,10 @@ static void eng_present(void* user, u32 surface)
      const u32 nrec = s_eng_rec_count;
      eng_encode_and_commit(src);
      eng_dump_frame(src);

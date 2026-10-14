@@ -69,7 +69,7 @@ PRs abertos do upstream aplicados:
 
 - [x] Passar da cutscene das docas para a primeira missão: o tutorial do primeiro combate aparece sem intervenção.
 - [ ] Exercitar o gameplay: responder aos prompts do tutorial (analógico direito, disparos), ver o que quebra.
-- [ ] Cole em T-pose no fundo do menu de opções (animação; o inFamous 1 no fork tem o mesmo sintoma).
+- [x] "Cole em T-pose no menu de opções": não é visível. Pausar a cutscene (START) mostra o menu de pausa com a cena congelada na pose correta ao fundo, e a tela de opções usa a arte estilizada da cidade, como no original; a figura em T-pose que eu tinha visto estava num render target intermediário que nunca vai para a tela.
 - [x] Trecho SPU interpretado (`LS 0x6C64`): eram cinco módulos `DA7ABA5E` embutidos no EBOOT que o gerenciador de jobs carrega em LS 0x6C00 e ninguém traduzia. `tools/lift_datamods.py` os traduz e registra como regiões de código; zero trechos longos no menu e ~30 fps nesse trecho (eram ~17).
 - [x] Áudio: a mixagem produz som (146 s gravados com `AUDIO_WAV`, pico 0,61, primeiro som aos 6 s). Falta só ouvir pelo alto-falante numa execução com janela.
 - [x] Imports sem implementação: `cellGemGetMemorySize` e `cellCameraSetNotifyEventQueue2` implementados no toolkit; `cellFsGetDirectoryEntries` veio do PR #247 do upstream.
