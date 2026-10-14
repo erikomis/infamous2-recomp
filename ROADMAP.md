@@ -150,9 +150,13 @@ cada correção é um PR, com teste onde dava para ter um.
   ([#315](https://github.com/sp00nznet/ps3recomp/pull/315)) e command buffer do Metal
   ([#316](https://github.com/sp00nznet/ps3recomp/pull/316)).
 - [ ] Pedir para listar o port no README do ps3recomp (só quando este repositório for público).
-- [ ] Ficaram de fora: o layout do `sys_lwcond_t` para o upstream (o PR #213 já o traz) e o
-  write-back de render targets para a memória do guest (`rsx_draw_engine_write_back`),
-  que ainda está em teste no working tree do `ps3recomp-fork/` e fora do patch.
+- [x] Write-back dos render targets para a memória do guest antes dos blits NV3089
+  ([#11](https://github.com/NoahBPeterson/ps3recomp/pull/11)), na versão validada
+  (linha própria do blit, snapshot de profundidade invalidado, `PS3RECOMP_ENG_WRITEBACK`).
+- [ ] Ficaram de fora, por enquanto: o layout do `sys_lwcond_t` para o upstream (o PR #213
+  já o traz) e as ferramentas da investigação do travamento ainda em aberto
+  (`GCM_SEMA_ACQUIRE`/`GCM_SEMA_TRACE`, limites de `SPU_PUT_EA`, `LWCOND_TRACE`, a espera de
+  250 ms do push de evento do SPU), que vão quando a causa estiver fechada.
 
 Os branches vivem em dois worktrees do `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
 para o fork) e `ps3recomp-up/` (base no master do upstream); o remote `mine` aponta para
