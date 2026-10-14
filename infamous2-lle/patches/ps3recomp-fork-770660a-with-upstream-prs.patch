@@ -531,6 +531,71 @@ index 621d53e..322ef3b 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
+diff --git a/libs/network/sceNp.c b/libs/network/sceNp.c
+index 8bb66db..764c79f 100644
+--- a/libs/network/sceNp.c
++++ b/libs/network/sceNp.c
+@@ -12,6 +12,7 @@
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_write*: guest EA -> host, byte-swapped */
+ #include "np_psnr.h"
+ #include "../system/cellSysutil.h"
++#include "../filesystem/edat.h"
+ 
+ 
+ /* ---------------------------------------------------------------------------
+@@ -308,3 +309,35 @@ s32 sceNpScoreTerm(void)
+     s_score_initialized = 0;
+     return CELL_OK;
+ }
++
++/* ---------------------------------------------------------------------------
++ * NPDRM
++ *
++ * On hardware sceNpDrmIsAvailable[2](klicensee, path) checks the licence for an
++ * NPDRM file and leaves the klicensee with the kernel, so later cellFsOpen calls
++ * on EDATs return plaintext. Free (license type 3) and disc-bound game data use a
++ * title-specific klicensee that only the game knows; record it for the EDAT
++ * reader (libs/filesystem/edat.c), which verifies it against each file's
++ * dev_hash before using it. The two calls differ only in licence-check details
++ * that do not apply here.
++ * -----------------------------------------------------------------------*/
++
++static s32 np_drm_is_available(const u8* k_licensee, const char* drm_path)
++{
++    const u8* k = GUEST_PTR(k_licensee, const u8*);
++    const char* path = GUEST_PTR(drm_path, const char*);
++    /* A NULL klicensee is legal for content that needs none; nothing to record. */
++    if (k) edat_add_klicensee(k);
++    fprintf(stderr, "[sceNp] DRM availability check: %s\n", path ? path : "(null)");
++    return CELL_OK;
++}
++
++s32 sceNpDrmIsAvailable(const u8* k_licensee, const char* drm_path)
++{
++    return np_drm_is_available(k_licensee, drm_path);
++}
++
++s32 sceNpDrmIsAvailable2(const u8* k_licensee, const char* drm_path)
++{
++    return np_drm_is_available(k_licensee, drm_path);
++}
+diff --git a/libs/network/sceNp.h b/libs/network/sceNp.h
+index ea160aa..a2318a0 100644
+--- a/libs/network/sceNp.h
++++ b/libs/network/sceNp.h
+@@ -133,6 +133,12 @@ s32 sceNpManagerGetOnlineId(SceNpOnlineId* onlineId);
+ s32 sceNpManagerGetOnlineName(SceNpOnlineName* onlineName);
+ s32 sceNpManagerGetAccountAge(s32* age);
+ 
++/* NPDRM availability checks. The guest passes its klicensee (16 bytes) and the
++ * path of an EDAT/SELF; the klicensee is handed to the EDAT reader, which then
++ * decrypts that title's files on open. Always CELL_OK (licence present). */
++s32 sceNpDrmIsAvailable(const u8* k_licensee, const char* drm_path);
++s32 sceNpDrmIsAvailable2(const u8* k_licensee, const char* drm_path);
++
+ /* Set the fake PSN username (call before sceNpInit if desired) */
+ void sceNpSetFakeUsername(const char* username);
+ 
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 index 73b7e71..478fd86 100644
 --- a/libs/video/cellGcmSys.c
@@ -2352,31 +2417,36 @@ index 5a825a0..11c7af6 100644
      test_remap_rejects_null();
  
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index 4c03372..10d4e7f 100644
+index 4c03372..e71e799 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
-@@ -26,6 +26,7 @@
+@@ -24,8 +24,10 @@
+ #include "sdata_decrypt.h"   /* SDATA/EDAT (NPD) decryption for cellFsSdataOpen */
+ #include <stdint.h>
  #include <stdio.h>
++#include <time.h>    /* trace timestamps */
  #include <string.h>
  #include <stdlib.h>
 +#include <errno.h>
  #include <sys/stat.h>
  #include "../platform/win32_dirent.h"   /* <dirent.h>, or a Win32 stand-in */
  
-@@ -425,9 +426,10 @@ static void cellFsRead(ppu_context* ctx)
+@@ -425,9 +427,12 @@ static void cellFsRead(ppu_context* ctx)
        if (fd>=0 && fd<64) { per_fd[fd]+=n; cnt_fd[fd]++; }
        int first_for_fd = (fd>=0 && fd<64 && cnt_fd[fd]==1);
        if(__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED)<50 || first_for_fd || getenv("FS_READ_ALL"))
 -        fprintf(stderr,"[fs] read fd=%d nbytes=%llu -> %zu (magic=%02X%02X%02X%02X, total=%llu)%s\n",
-+        fprintf(stderr,"[fs] read fd=%d nbytes=%llu -> %zu (magic=%02X%02X%02X%02X, total=%llu) tid=%llu%s\n",
++        { struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts);   /* t= lines up with [lwc]/[ww] */
++        fprintf(stderr,"[fs] read fd=%d nbytes=%llu -> %zu (magic=%02X%02X%02X%02X, total=%llu) tid=%llu t=%.3f%s\n",
                  fd,(unsigned long long)nbytes,n,vm_base[buf],vm_base[buf+1],vm_base[buf+2],vm_base[buf+3],
 -                (unsigned long long)tot, first_for_fd?"  <= FIRST READ ON THIS FD":"");
 +                (unsigned long long)tot, (unsigned long long)ctx->thread_id,
-+                first_for_fd?"  <= FIRST READ ON THIS FD":"");
++                (double)_ts.tv_sec + _ts.tv_nsec / 1e9,
++                first_for_fd?"  <= FIRST READ ON THIS FD":""); }
        if (getenv("FS_READ_PATH") && fd>=0 && fd<64 && g_fd_path[fd][0])
            fprintf(stderr, "        from %s\n", g_fd_path[fd]);
  #ifndef _WIN32
-@@ -545,7 +547,8 @@ static void cellFsLseek(ppu_context* ctx)
+@@ -545,7 +550,8 @@ static void cellFsLseek(ppu_context* ctx)
      uint32_t pos_ptr = (uint32_t)ctx->gpr[6];
      if (fd < 0 || fd >= FS_MAX || !g_files[fd]) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
      if (getenv("FS_CALLER")) { char w[64]="?"; ppu_guest_caller(w,sizeof w);
@@ -2386,7 +2456,7 @@ index 4c03372..10d4e7f 100644
      int worigin = (wh == CELL_FS_SEEK_END) ? SEEK_END : (wh == CELL_FS_SEEK_CUR) ? SEEK_CUR : SEEK_SET;
      fseek(g_files[fd], (long)off, worigin);
      long p = ftell(g_files[fd]);
-@@ -663,6 +666,61 @@ static void cellFsReaddir(ppu_context* ctx)
+@@ -663,6 +669,61 @@ static void cellFsReaddir(ppu_context* ctx)
      ctx->gpr[3] = CELL_OK;
  }
  
@@ -2448,7 +2518,7 @@ index 4c03372..10d4e7f 100644
  static void cellFsClosedir(ppu_context* ctx)
  {
      int fd = (int)(uint32_t)ctx->gpr[3];
-@@ -808,6 +866,7 @@ extern "C" void ppu_fs_register(void)
+@@ -808,6 +869,7 @@ extern "C" void ppu_fs_register(void)
      ps3_hle_register_ctx(ps3_compute_nid("cellFsStat"),     "cellFsStat",     cellFsStat);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsFstat"),    "cellFsFstat",    cellFsFstat);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsOpendir"),  "cellFsOpendir",  cellFsOpendir);
@@ -2456,6 +2526,34 @@ index 4c03372..10d4e7f 100644
      ps3_hle_register_ctx(ps3_compute_nid("cellFsReaddir"),  "cellFsReaddir",  cellFsReaddir);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsClosedir"), "cellFsClosedir", cellFsClosedir);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsMkdir"),    "cellFsMkdir",    cellFsMkdir);
+diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index 11c3470..482dd5d 100644
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -27,6 +27,7 @@
+ #endif
+ #include <stdint.h>
+ #include <stdio.h>
++#include <time.h>    /* trace timestamps */
+ #include <stdlib.h>
+ #include <string.h>
+ #ifdef _WIN32
+@@ -2021,11 +2022,13 @@ static inline void barrier_watch_hit(uint32_t a, uint32_t v, int width, void* ra
+                * as three different guest functions. ctx->lr is written by the
+                * lifter at every direct call site, so it names the real caller. */
+               extern PPU_THREAD_LOCAL ppu_context* g_active_ctx;
++              struct timespec _wts; clock_gettime(CLOCK_MONOTONIC, &_wts);   /* t= lines up with [fs]/[lwc] */
+               fprintf(stderr, "[ww] 0x%08X <- 0x%X (w%d) guest-fn=0x%08X"
+-                              " lr=0x%08X tid=%u\n",
++                              " lr=0x%08X tid=%u t=%.3f\n",
+                       a, v, width, ppu_prof_resolve_host(ra),
+                       g_active_ctx ? (uint32_t)g_active_ctx->lr : 0u,
+-                      g_active_ctx ? (unsigned)g_active_ctx->thread_id : 0u);
++                      g_active_ctx ? (unsigned)g_active_ctx->thread_id : 0u,
++                      (double)_wts.tv_sec + _wts.tv_nsec / 1e9);
+               /* On the first write to the watched word, dump the guest caller
+                * chain so the origin of a null field can be walked up-stack. */
+               extern void ppu_dump_guest_stack(ppu_context*, const char*);
 diff --git a/runtime/ppu/tests/test_ppu_directory.cpp b/runtime/ppu/tests/test_ppu_directory.cpp
 new file mode 100644
 index 0000000..42ed073
@@ -2848,21 +2946,22 @@ index d756b8d..328a170 100644
          }
      }
 diff --git a/runtime/syscalls/sys_lwsync.c b/runtime/syscalls/sys_lwsync.c
-index f55cfa5..22671fe 100644
+index f55cfa5..f7944d6 100644
 --- a/runtime/syscalls/sys_lwsync.c
 +++ b/runtime/syscalls/sys_lwsync.c
-@@ -21,6 +21,10 @@
+@@ -21,6 +21,11 @@
  #include "../platform/win32_compat.h"
  #include <limits.h>
  #include <string.h>
 +#include <stdio.h>    /* LWCOND_TRACE */
 +#include <stdlib.h>
++#include <time.h>
 +static int lwc_trace_on(void);
 +static int lwc_is_traced(uint32_t id);
  
  extern uint8_t* vm_base;
  int32_t ppu_thread_priority_of(uint64_t tid);   /* sys_ppu_thread.c */
-@@ -340,6 +344,10 @@ static int64_t sys_lwcond_signal(ppu_context* ctx)
+@@ -340,6 +345,10 @@ static int64_t sys_lwcond_signal(ppu_context* ctx)
      } else {
          w = schedule(&c->sq, c->protocol);
      }
@@ -2873,7 +2972,7 @@ index f55cfa5..22671fe 100644
      if (!w) {
          ReleaseSRWLockExclusive(&s_lock);
          if (tid != 0xFFFFFFFFu) return (int32_t)CELL_EPERM;
-@@ -376,6 +384,9 @@ static int64_t sys_lwcond_signal_all(ppu_context* ctx)
+@@ -376,6 +385,9 @@ static int64_t sys_lwcond_signal_all(ppu_context* ctx)
          if (mode == 2) { w->ret = (int32_t)CELL_EBUSY; awake(w); }
          else enqueue(&m->sq, w);
      }
@@ -2883,7 +2982,7 @@ index f55cfa5..22671fe 100644
      ReleaseSRWLockExclusive(&s_lock);
      return mode == 1 ? n : CELL_OK;
  }
-@@ -384,6 +395,34 @@ static int64_t sys_lwcond_signal_all(ppu_context* ctx)
+@@ -384,6 +396,34 @@ static int64_t sys_lwcond_signal_all(ppu_context* ctx)
   * condition and release the mutex (handing it to its next sleeper, or leaving
   * a signal), then sleep until signalled -- woken owning the mutex, or with
   * EBUSY if signalled in mode 2 -- or until the timeout (ETIMEDOUT). */
@@ -2918,17 +3017,19 @@ index f55cfa5..22671fe 100644
  static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
  {
      const uint32_t id = LV2_ARG_U32(ctx, 0), mid = LV2_ARG_U32(ctx, 1);
-@@ -394,6 +433,9 @@ static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
+@@ -394,6 +434,11 @@ static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
      lwcond* c = find_cnd(id);
      lwmutex* m = find_mtx(mid);
      if (!c || !m) { ReleaseSRWLockExclusive(&s_lock); return (int32_t)CELL_ESRCH; }
 +    const int traced = lwc_trace_on() && (lwc_mark(id, w.tid), lwc_is_traced(id));
-+    if (traced) fprintf(stderr, "[lwc] wait cond=%u mtx=%u tid=%llu timeout=%llu (mtx sleepers=%s)\n",
-+                        id, mid, (unsigned long long)w.tid, (unsigned long long)timeout, m->sq ? "yes" : "no");
++    if (traced) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++        fprintf(stderr, "[lwc] wait cond=%u mtx=%u tid=%llu timeout=%llu (mtx sleepers=%s) t=%.3f\n",
++                id, mid, (unsigned long long)w.tid, (unsigned long long)timeout, m->sq ? "yes" : "no",
++                (double)ts.tv_sec + ts.tv_nsec / 1e9); }
      m->lwcond_waiters++;
      c->lwmutex_waiters++;
      enqueue(&c->sq, &w);
-@@ -402,6 +444,7 @@ static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
+@@ -402,6 +447,7 @@ static int64_t sys_lwcond_queue_wait(ppu_context* ctx)
  
      if (!sleep_on(&w, timeout) && (unqueue(&c->sq, &w) || unqueue(&m->sq, &w)))
          w.ret = (int32_t)CELL_ETIMEDOUT;
