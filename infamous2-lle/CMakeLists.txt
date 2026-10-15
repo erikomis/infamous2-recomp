@@ -149,7 +149,7 @@ if(PORT_ENABLE_SPU)
         # Generated beside the lift; each is present only once its generator
         # has been run, so each is included only if it is actually here.
         # spu_jobs.c: the raw SPURS job binaries (tools/lift_spu_jobs.sh).
-        foreach(gen IN ITEMS spu_workloads.c spu_jobs.c jobmods_register.c datamods_register.c taskset_policy_bytes.c)
+        foreach(gen IN ITEMS spu_workloads.c spu_jobs.c jobmods_register.c datamods_register.c relocmods_register.c taskset_policy_bytes.c)
             if(EXISTS "${SPU_DIR}/${gen}")
                 list(APPEND SPU_SOURCES "${SPU_DIR}/${gen}")
             else()

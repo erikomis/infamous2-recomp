@@ -117,6 +117,7 @@ reference.
 | `tools/rap2rifkey.py` | Derives an EDAT's RIF key from the player's own `.rap` and writes the `<edat>.rifkey` sidecar |
 | `tools/relift_jobmod.py` | Re-lifts one WWS job module with extra entry addresses |
 | `tools/lift_datamods.py` | Extracts, lifts and registers the five `DA7ABA5E` modules the job manager streams to LS 0x6C00 |
+| `tools/lift_relocmods.py` | Lifts the ~30 position-independent SPU job blobs New Marais streams from the EBOOT to varying LS addresses (`spu_lifter.py --relocatable`), registered with `spu_overlay_register_region_reloc`; `PS3_RELOCMODS=0` turns them off |
 | `tools/passlog.py` | Summarises a `PS3RECOMP_METAL_PASS_LOG` log: passes, targets, pipelines, textures |
 | `tools/psfeatures.py` | One line per dumped pixel shader: units sampled, targets, risky ops |
 | `tools/surfstats.py`, `tools/greenshare.py` | Fill/green/brightness stats of dumped render targets and captured frames |
@@ -147,6 +148,7 @@ $P $T/build_spu_workloads.py --images spu/images --lifted spu --out spu/spu_work
 $P $T/lift_jobmods.py --jobmods spu/jobmods --out spu \
     --register spu/jobmods_register.c --symbol-prefix infamous2
 $P tools/lift_datamods.py ../infamous2/game/EBOOT.elf --extra 0x6C44,0x6C64
+$P tools/lift_relocmods.py ../infamous2/game/EBOOT.elf
 $P tools/rap2rifkey.py ../infamous2/vfs/dev_hdd0/game/NPUA80638/USRDIR/dlc/ulf/unlock_review.edat
 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
