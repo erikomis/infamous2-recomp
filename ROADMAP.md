@@ -91,7 +91,7 @@ PRs abertos do upstream aplicados:
 
 ## Fase 4 — Controles
 
-- [x] Teclado como controle (já existe no toolkit): setas = D-pad, X/espaço = ✕, Return = START, WASD = analógico esquerdo, IJKL = analógico direito.
+- [x] Teclado como controle (já existe no toolkit, `cellPad.c`): analógico esquerdo W/A/S/D, direito I/J/K/L, D-pad nas setas; ✕ Espaço, ○ Q, □ E, △ R; L1 U, R1 O, L2 Y, R2 P, L3 G, R3 H; START Return, SELECT Tab. A tecla X não faz nada. O mouse ainda não está mapeado.
 - [ ] Testar o teclado com janela (`./run.sh`) do menu ao gameplay.
 - [ ] Mouse para a câmera: mapear o movimento para o analógico direito, com sensibilidade e inversão configuráveis; botões do mouse para R1/R2 (raios e granadas).
 - [ ] Captura do cursor na janela e atalho para soltá-lo.
