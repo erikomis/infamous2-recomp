@@ -2947,7 +2947,7 @@ index 3addd48..427d640 100644
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
 diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
-index 142931a..a938da9 100644
+index 142931a..f3e3d08 100644
 --- a/runtime/spu/spu_dma.h
 +++ b/runtime/spu/spu_dma.h
 @@ -834,7 +834,14 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
@@ -2966,6 +2966,24 @@ index 142931a..a938da9 100644
                fprintf(stderr, "[mfc-list] PUTL-elem ea=0x%08x size=0x%x lsa=0x%05x job@4000: %08x %08x %08x %08x\n",
                        eal, xfer_size, (dest_lsa & ~15u) | (eal & 15u), spu_ls_read32(spu, 0x4010),
                        spu_ls_read32(spu, 0x4014), spu_ls_read32(spu, 0x4018), spu_ls_read32(spu, 0x4020)); }
+@@ -981,6 +988,17 @@ static inline int mfc_submit_body(mfc_engine* mfc, spu_context* spu, uint32_t cm
+     uint32_t tag  = spu->mfc_tag & 0x1F;
+     int rc = 0;
+ 
++    /* SPU_GET1_EA=<lo>:<hi>: single (non-list) GETs whose source lies in
++     * [lo,hi), with the LS destination and size (capped at 400 lines) -- where a
++     * job or task streams raw code from, so it can be lifted at that LSA. */
++    { static _Atomic int on = -1; static _Atomic uint32_t lo, hi; static _Atomic int n;
++      if (on < 0) { const char* e = getenv("SPU_GET1_EA"); on = e != 0;
++          if (e) { char* d2; lo = (uint32_t)strtoul(e, &d2, 16); hi = (uint32_t)strtoul(d2 + 1, 0, 16); } }
++      if (on && (cmd & 0x40) && !(cmd & 0x04) && (uint32_t)ea < hi && (uint32_t)ea + size > lo && n < 400) {
++          n++;
++          fprintf(stderr, "[get1] spu img=%d ovl=%d cmd=0x%02X ea=0x%08X -> lsa=0x%05X size=0x%X pc=0x%05X\n",
++                  spu->image_id, spu->resident_ovl, cmd, (uint32_t)ea, lsa, size, spu->pc);
++      } }
+     /* SPU_WATCHEA=<hex guest addr>: report every DMA whose destination range
+      * covers one word, with the SPU id, its pc and the value the word holds
+      * after the transfer.
 diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
 index 7c1089c..ced848c 100644
 --- a/runtime/spu/spu_drain.c
@@ -3020,7 +3038,7 @@ index 7c1089c..ced848c 100644
        if (s_it) { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 200)
          fprintf(stderr, "[irq] TAKE srr0=0x%05X depth=%d r13=%08X r15=%08X\n",
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
-index 772c2d6..a53c516 100644
+index 772c2d6..b7059e3 100644
 --- a/runtime/spu/spu_interp.c
 +++ b/runtime/spu/spu_interp.c
 @@ -524,10 +524,39 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
@@ -3094,6 +3112,27 @@ index 772c2d6..a53c516 100644
              /* dump the LS 0x2700 SpursTasksetContext the poll reads -- compare to the
               * working RPCS3 SPU0 dump (RUNNING/READY/ENABLED=0x80000000, SIGNALLED=0). */
              #define LB(o) (((uint32_t)ctx->ls[(o)]<<24)|((uint32_t)ctx->ls[(o)+1]<<16)|((uint32_t)ctx->ls[(o)+2]<<8)|ctx->ls[(o)+3])
+@@ -630,6 +672,20 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+                       if (hist[i][j] > tot / 50) fprintf(stderr, "[spu-hist]   img %d page 0x%05X: %.1f%%\n",
+                                                         i == 63 ? -1 : i, j << 12, 100.0 * hist[i][j] / tot);
+               } } }
++        /* SPU_INTERP_WHERE=<n>: every n interpreted steps (all SPUs), print the
++         * pc, the resident overlay, the job header at LS 0x4000 (a WWS job
++         * module starts 00005400 .. C0DEC0DE) and the data-module window at
++         * 0x6C00 -- which module a long interpreted stretch is in, so it can be
++         * lifted or given the entry it is missing. */
++        { static _Atomic long long every = -1; static _Atomic unsigned long long cnt;
++          if (every < 0) { const char* e = getenv("SPU_INTERP_WHERE"); every = e ? atoll(e) : 0; }
++          if (every > 0 && (++cnt % (unsigned long long)every) == 0) {
++              #define IW(o) (((uint32_t)ctx->ls[(o)] << 24) | ((uint32_t)ctx->ls[(o)+1] << 16) | ((uint32_t)ctx->ls[(o)+2] << 8) | ctx->ls[(o)+3])
++              fprintf(stderr, "[interp-where] img=%d ovl=%d pc=0x%05X lr=0x%05X LS[4000]=%08X %08X %08X %08X %08X %08X LS[6C00]=%08X %08X\n",
++                      ctx->image_id, ctx->resident_ovl, _tpc, ctx->gpr[0]._u32[0] & 0x3FFFF,
++                      IW(0x4000), IW(0x4004), IW(0x4008), IW(0x400C), IW(0x4010), IW(0x4014), IW(0x6C00), IW(0x6C04));
++              #undef IW
++          } }
+         if (__atomic_load_n(&ctx->stop_request, __ATOMIC_RELAXED)) {   /* group terminated */
+             ctx->status = SPU_STATUS_STOPPED_BY_HALT; ctx->stop_code = 0;
+             g_spu_interp_steps = steps;
 diff --git a/runtime/syscalls/lv2_register.c b/runtime/syscalls/lv2_register.c
 index d756b8d..328a170 100644
 --- a/runtime/syscalls/lv2_register.c

@@ -89,6 +89,9 @@ PRs abertos do upstream aplicados:
 - [x] Imports sem implementação: `cellGemGetMemorySize` e `cellCameraSetNotifyEventQueue2` implementados no toolkit; `cellFsGetDirectoryEntries` veio do PR #247 do upstream.
 - [x] DLC `unlock_review.edat`: `tools/rap2rifkey.py` deriva a chave RIF do `.rap` do jogador e grava o sidecar que o runtime lê; o EDAT é decifrado.
 
+- [ ] **Lentidão e som picotado em New Marais (medido em 2026-10-15):** ~11–14 fps na cidade (30 no console) e só ~35% dos blocos de áudio com som, num padrão regular (8 com som, 16 de silêncio = uma volta do anel de 16 blocos): o Wwise calcula o áudio ~3× mais devagar que o tempo real. Causa: os jobs SPU de New Marais são código relocável — ~13 blocos do EBOOT (0x8EA380–0x911A10; `SPU_GET1_EA=008EA000:00930000` lista as cópias) que o kernel do SPURS copia para posições diferentes da LS a cada execução (53 posições em poucos minutos), então nunca casam com código traduzido e rodam inteiros no interpretador (`SPU_INTERP_WHERE=<n>` mostra o PC e o cabeçalho em LS 0x4000; 14,8 bilhões de instruções interpretadas em 8 min). Próximo passo: tradução de código SPU relocável (traduzir cada bloco relativo à base de carga, ou por par bloco+LSA). O corpo `libsre` em 0x2A180 (variante do policy module de tasks, carregado em LS 0xA00) também não está traduzido.
+- [ ] Gráficos em New Marais: janelas do barco do Zeke saem como retângulos pretos e blocos de madeira do guindaste saem azul-turquesa. Inimigos "pretos e sem textura" relatados pelo Erik ainda não reproduzidos numa captura (o script não chegou a um combate).
+
 ## Fase 4 — Controles
 
 - [x] Teclado como controle (já existe no toolkit, `cellPad.c`): analógico esquerdo W/A/S/D, direito I/J/K/L, D-pad nas setas; ✕ Espaço, ○ Q, □ E, △ R; L1 U, R1 O, L2 Y, R2 P, L3 G, R3 H; START Return, SELECT Tab. A tecla X não faz nada. O mouse ainda não está mapeado.
