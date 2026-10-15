@@ -438,10 +438,33 @@ index d403baf..76c5505 100644
 +
  #endif /* PS3RECOMP_CELL_GEM_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 621d53e..14c2a3b 100644
+index 621d53e..320a792 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
-@@ -296,6 +296,8 @@ static void pad_poll_sdl2(void)
+@@ -287,8 +287,22 @@ static u8 pad_sdl_trigger_to_u8(int raw)
+     return (u8)val;
+ }
+ 
++/* PS3_PAD_SDL=0: ignore physical controllers. SDL reads a pad whatever window
++ * has focus, so a headless capture running beside a windowed game took the
++ * player's START too and sat in the pause menu (tools/boot.sh sets it). */
++static int pad_sdl_off(void)
++{
++    static int off = -1;
++    if (off < 0) { const char* e = getenv("PS3_PAD_SDL"); off = (e && e[0] == '0') ? 1 : 0; }
++    return off;
++}
++
+ static void pad_poll_sdl2(void)
+ {
++    if (pad_sdl_off()) {
++        for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) s_host_state[i].connected = 0;
++        return;
++    }
+     SDL_GameControllerUpdate();
+ 
+     for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
+@@ -296,6 +310,8 @@ static void pad_poll_sdl2(void)
              /* Try to open newly connected controllers */
              if (SDL_IsGameController(i)) {
                  s_sdl_controllers[i] = SDL_GameControllerOpen(i);
@@ -450,7 +473,15 @@ index 621d53e..14c2a3b 100644
              }
          }
  
-@@ -372,6 +374,9 @@ static void pad_init_backend(void)
+@@ -361,6 +377,7 @@ static void pad_poll_sdl2(void)
+ 
+ static void pad_init_backend(void)
+ {
++    if (pad_sdl_off()) return;
+     if (!s_sdl_inited) {
+         if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
+             SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+@@ -372,6 +389,9 @@ static void pad_init_backend(void)
      /* Open any controllers already connected */
      int num = SDL_NumJoysticks();
      for (int i = 0; i < num && i < PAD_MAX_HOST_PORTS; i++) {
@@ -460,7 +491,7 @@ index 621d53e..14c2a3b 100644
          if (SDL_IsGameController(i)) {
              s_sdl_controllers[i] = SDL_GameControllerOpen(i);
          }
-@@ -497,7 +502,68 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
+@@ -497,7 +517,68 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
   *   L1 U  R1 O  L2 Y  R2 P  L3 G  R3 H              START Return/Enter  SELECT Tab */
  volatile uint32_t g_pad_host_keys[4];
  static int pad_key(unsigned vk) { return (g_pad_host_keys[(vk >> 5) & 3] >> (vk & 31)) & 1; }
@@ -530,7 +561,7 @@ index 621d53e..14c2a3b 100644
  {
      static const struct { unsigned vk; u16 btn; } map[] = {
          {0x7E, CELL_PAD_CTRL_UP}, {0x7D, CELL_PAD_CTRL_DOWN},
-@@ -518,6 +584,7 @@ static void pad_poll_keys(void)
+@@ -518,6 +599,7 @@ static void pad_poll_keys(void)
      int ly = 128 + (pad_key(0x01) ? 127 : 0) - (pad_key(0x0D) ? 128 : 0);   /* S, W */
      int rx = 128 + (pad_key(0x25) ? 127 : 0) - (pad_key(0x26) ? 128 : 0);   /* L, J */
      int ry = 128 + (pad_key(0x28) ? 127 : 0) - (pad_key(0x22) ? 128 : 0);   /* K, I */
@@ -538,7 +569,7 @@ index 621d53e..14c2a3b 100644
      /* PS3_PAD_FILE: its buttons are held in addition to the keys; an
       * off-centre file axis wins over the keyboard's. */
      { u16 fb; int flx, fly, frx, fry;
-@@ -528,6 +595,22 @@ static void pad_poll_keys(void)
+@@ -528,6 +610,22 @@ static void pad_poll_keys(void)
        if (frx != 128) rx = frx;
        if (fry != 128) ry = fry; }
      PadHostState* hs = &s_host_state[0];
@@ -561,7 +592,7 @@ index 621d53e..14c2a3b 100644
      if (btns != hs->buttons) { printf("[cellPad] keyboard: buttons 0x%04X\n", btns); fflush(stdout); }
      pad_apply(hs, btns, lx, ly, rx, ry);
  }
-@@ -553,9 +636,9 @@ static void pad_poll_backend(void)
+@@ -553,9 +651,9 @@ static void pad_poll_backend(void)
  #ifdef _WIN32
      if (!s_host_state[0].connected) pad_poll_keyboard();
  #endif
@@ -574,7 +605,7 @@ index 621d53e..14c2a3b 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -730,9 +813,12 @@ skip_inject: ;
+@@ -730,9 +828,12 @@ skip_inject: ;
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
       * (DIGITAL2 << 8) | DIGITAL1: START 0x0008, UP 0x0010, DOWN 0x0040,
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
@@ -588,7 +619,7 @@ index 621d53e..14c2a3b 100644
        static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
        if (s_sc < 0) {
            s_sc = 0;
-@@ -744,7 +830,9 @@ skip_inject: ;
+@@ -744,7 +845,9 @@ skip_inject: ;
                    double t = strtod(p, (char**)&p);
                    if (*p == ':') p++;
                    unsigned m = (unsigned)strtoul(p, (char**)&p, 0);
@@ -599,7 +630,7 @@ index 621d53e..14c2a3b 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
-@@ -761,13 +849,18 @@ skip_inject: ;
+@@ -761,13 +864,18 @@ skip_inject: ;
            static int fired[32], held[32];
            for (int i = 0; i < n_ev; i++) {
                if (!fired[i] && now >= ev[i].t) { fired[i] = 1; held[i] = 40; }
@@ -621,7 +652,7 @@ index 621d53e..14c2a3b 100644
                }
            }
        } }
-@@ -817,20 +910,32 @@ skip_inject: ;
+@@ -817,20 +925,32 @@ skip_inject: ;
       * started -- which can leave the subject of the demo off-screen or too far
       * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
      { static int s_st = -1;
@@ -1775,7 +1806,7 @@ index 7161c4e..0302ff3 100644
   * Useful for disassembly/logging. */
  const char* rsx_fp_opcode_name(u32 opcode);
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..68453b0 100644
+index 98db285..ea0a908 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -475,6 +475,8 @@ static int create_window_impl(const char* title)
@@ -2046,7 +2077,20 @@ index 98db285..68453b0 100644
          }
  
  
-@@ -3672,7 +3774,10 @@ static void eng_present(void* user, u32 surface)
+@@ -3580,7 +3682,11 @@ static void eng_dump_frame(id<MTLTexture> src)
+             fwrite(rgb, 1, 3, f);
+         }
+         fclose(f);
+-        fprintf(stderr, "[rsx engine/metal] captured frame %u to %s\n", frame, path);
++        /* t= (monotonic seconds) turns consecutive capture lines into an fps
++         * timeline (tools/profile_run.sh): frames between them / time between them. */
++        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++        fprintf(stderr, "[rsx engine/metal] captured frame %u to %s t=%.3f\n", frame, path,
++                (double)ts.tv_sec + ts.tv_nsec / 1e9);
+     }
+     free(rgba);
+ }
+@@ -3672,7 +3778,10 @@ static void eng_present(void* user, u32 surface)
      const u32 nrec = s_eng_rec_count;
      eng_encode_and_commit(src);
      eng_dump_frame(src);
@@ -2058,7 +2102,7 @@ index 98db285..68453b0 100644
  }
  
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
-@@ -3886,6 +3991,38 @@ static int pump_messages_impl(void)
+@@ -3886,6 +3995,38 @@ static int pump_messages_impl(void)
                                                  inMode:NSDefaultRunLoopMode
                                                 dequeue:YES];
              if (!ev) break;
@@ -2097,7 +2141,7 @@ index 98db285..68453b0 100644
              /* Keys drive the keyboard pad (cellPad.c): record and swallow
               * them -- unhandled, AppKit beeps on every press. */
              if ([ev type] == NSEventTypeKeyDown || [ev type] == NSEventTypeKeyUp) {
-@@ -3903,6 +4040,8 @@ static int pump_messages_impl(void)
+@@ -3903,6 +4044,8 @@ static int pump_messages_impl(void)
          if (![NSApp isActive]) {
              extern volatile uint32_t g_pad_host_keys[4];
              for (int i = 0; i < 4; i++) g_pad_host_keys[i] = 0;

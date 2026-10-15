@@ -135,7 +135,7 @@ $P $T/lift_firmware_module.py ../infamous2/fw/libsysmodule.prx --base 0x30180000
 $P $T/lift_firmware_module.py ../infamous2/fw/libsre.prx       --base 0x30100000 --out lle/libsre
 $P $T/lift_firmware_spu.py --module-dir lle/libsre --base 0x30100000 --name libsre \
     --first-image-id 100 --body 0x21480:0x2200:0xA00:0xA00:0x2110 \
-    --body 0x23680:0x1E40:0xA00:0xA00:0x1C80 --out lle_spu
+    --body 0x23680:0x1E40:0xA00:0xA00:0x1C80 --body 0x2A180:0x3DA0:0xA00:0xA00:0x3D00 --out lle_spu
 
 # the title
 $P $T/ppu_loader.py ../infamous2/game/EBOOT.elf -o out/
