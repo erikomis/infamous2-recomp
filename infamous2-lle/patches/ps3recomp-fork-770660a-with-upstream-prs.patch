@@ -761,14 +761,15 @@ index ea160aa..a2318a0 100644
  void sceNpSetFakeUsername(const char* username);
  
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..478fd86 100644
+index 73b7e71..aaaa683 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -778,10 +778,14 @@ unsigned long long ps3_ms_now(void)
+@@ -778,10 +778,15 @@ unsigned long long ps3_ms_now(void)
  }
  
  static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
 +static int s_sema_blocked_pass = 0;   /* this drain stopped on a semaphore acquire */
++static int s_park_pass = 0;           /* this drain stopped on a self-JUMP park */
  /* Backlog past which the drain stops honouring one-flip-per-tick and
   * catches up instead. Sized well above a frame's command list so a
   * title that keeps up never sees this path. */
@@ -779,7 +780,7 @@ index 73b7e71..478fd86 100644
  /* How close `current` must get to `end` before the runtime will recycle a ring
   * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
   * title that is merely near the end from being touched. */
-@@ -864,6 +868,12 @@ static void nv3089_blit(void)
+@@ -864,6 +869,12 @@ static void nv3089_blit(void)
      u32 in_pitch = s_nv3089.in_fmt & 0xFFFF;
      u32 dst_pitch = s_gcm2d.pitch >> 16;
      if (!out_w || !out_h || !in_pitch || !dst_pitch) return;
@@ -792,7 +793,7 @@ index 73b7e71..478fd86 100644
      /* NV3089_GATE=<file>: log every blit's geometry while <file> exists, so a
       * capture covers the scene of interest instead of the first N since boot. */
      { static const char* gate = (const char*)-1; static unsigned poll; static int open_gate;
-@@ -1332,8 +1342,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+@@ -1332,8 +1343,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
  
  static void gcm_fifo_dump_around(u32 getoff)
  {
@@ -806,7 +807,7 @@ index 73b7e71..478fd86 100644
      for (u32 t = 0; t < GCM_TRACE_N; t++) {
          u32 k = (s_tr_i + t) % GCM_TRACE_N;
          if (!s_tr_w[k]) continue;
-@@ -1690,8 +1704,32 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1690,8 +1705,33 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -838,10 +839,11 @@ index 73b7e71..478fd86 100644
 +                      }
 +                  }
 +                  why = "parked";
++                  s_park_pass = 1;
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -1754,8 +1792,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1754,8 +1794,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
                      u32 m = (type == 0) ? method + i * 4 : method;
                      u32 v = vm_read32(dea);
                      u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
@@ -859,7 +861,7 @@ index 73b7e71..478fd86 100644
                      if (m == 0x64u)      s_sema_offset = v;
                      else if (m == 0x6Cu) vm_write32(la, v);
                      else if (m == 0x68u && vm_read32(la) != v) {
-@@ -1763,12 +1808,29 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1763,12 +1810,29 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * the hardware does. Off by default: a title whose label nothing
               * ever writes would wedge the drain permanently, and RELEASE on
               * its own is the half that unblocks a waiting guest. */
@@ -893,21 +895,31 @@ index 73b7e71..478fd86 100644
                  s_fifo_getoff += 4 + count * 4;
                  continue;
              }
-@@ -1964,8 +2026,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1964,8 +2028,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
            }
        } else burned = 0; }
  
 +    /* A drain parked on a semaphore acquire (GCM_SEMA_ACQUIRE) holds `get`
 +     * on purpose: that is the wait, not a stuck walker. The acquire's own
-+     * bound (GCM_SEMA_ACQUIRE_MS) is what ends it. */
++     * bound (GCM_SEMA_ACQUIRE_MS) is what ends it.
++     *
++     * So does a self-JUMP park, and its grace (GCM_PARK_GRACE_MS) is what ends
++     * that. This counter counts drain passes, not time: a park stops every
++     * pass at the same `get`, so it fired a few milliseconds in -- before the
++     * title had patched the park into a JUMP to the commands it had just put
++     * at the ring start -- and the resync dropped them. inFAMOUS 2 stopped
++     * presenting for good that way ~40 s into the daytime pier ("stuck-get"
++     * at a 0x2055C940 self-jump with no "jump-park" before it), and in about
++     * one New Marais run in five. */
      { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
 -      if (s_fifo_getoff == last && s_fifo_getoff != put) {
-+      if (s_sema_blocked_pass) { stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; }
++      if (s_sema_blocked_pass || s_park_pass) {
++          stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; s_park_pass = 0; }
 +      else if (s_fifo_getoff == last && s_fifo_getoff != put) {
            if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
                               gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
        } else { stuck = 0; last = s_fifo_getoff; } }
-@@ -2310,9 +2376,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -2310,9 +2388,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of
