@@ -16,14 +16,6 @@
 # everything later still.
 here=$(cd "$(dirname "$0")/.." && pwd)
 name=${1:-prologue}; secs=${2:-1200}
-# A new game needs a working directory without a save: the savedata layer keeps
-# saves under gamedata/ relative to the working directory (cellFs maps
-# /dev_hdd0 there), and with Erik's save in infamous2-lle/gamedata the menu's
-# presses continue it instead of starting over. KEEP_SAVE=1 runs from here.
-if [ -z "$KEEP_SAVE" ]; then
-    fresh="$here/out/$name.cwd"; rm -rf "$fresh"; mkdir -p "$fresh"; cd "$fresh" || exit 1
-fi
-
 # lx,ly,rx,ry,from,until (0-255, 128 = centred); up to 16 holds.
 PAD_STICK="128,128,128,0,470,480;128,128,0,128,480,490;128,128,255,128,490,500;128,128,128,255,500,510"
 PAD_STICK="$PAD_STICK;128,128,128,0,510,520;128,128,0,128,520,530;128,128,255,128,530,540;128,128,128,255,540,550"

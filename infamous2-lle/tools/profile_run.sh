@@ -3,7 +3,8 @@
 #
 # Runs the game headless (tools/play_prologue.sh for "prologue": menu, docks
 # cutscene, pier gameplay; tools/capture.sh with the menu presses for "menu"),
-# "newmarais" continues Erik's save (gamedata/.../savedata/BCUS98125_INFAMOUS2_0):
+# "newmarais" plays a copy of Erik's save (SAVE=<dir>, default the newest
+# save-backup-*; capture.sh copies it, the real one is never written):
 # the bayou by ~150 s, the city streets by ~350 s (sample at 250 and 400, run 480).
 # with SPU_INTERP_HIST=1, and takes a 5 s `sample` of the process at each
 # sample point (seconds of run time; default 120 300 620: main menu, docks
@@ -29,16 +30,13 @@ own_game() { for p in $(pgrep -f "build/Infamous2Recomp"); do q=$p
 
 rm -f "$here/out/$name".sample.*.txt
 export SPU_INTERP_HIST=1
-# prologue/menu start a new game: run them where no save is (see play_prologue.sh).
-if [ "$mode" != newmarais ]; then
-    fresh="$here/out/$name.cwd"; rm -rf "$fresh"; mkdir -p "$fresh"; cd "$fresh" || exit 1
-fi
 case "$mode" in
-    prologue) KEEP_SAVE=1 "$here/tools/play_prologue.sh" "$name" "$secs" > "$here/out/$name.capture.txt" 2>&1 & ;;
+    prologue) "$here/tools/play_prologue.sh" "$name" "$secs" > "$here/out/$name.capture.txt" 2>&1 & ;;
     menu)     PAD_SCRIPT="95:0x4000,110:0x4000" "$here/tools/capture.sh" "$name" "$secs" > "$here/out/$name.capture.txt" 2>&1 & ;;
     newmarais)
-        cd "$here"; sq=""; t=200; while [ $t -le 330 ]; do sq="$sq,$t:0x8000"; t=$((t + 5)); done
-        PAD_SCRIPT="95:0x4000,110:0x4000,125:0x4000,140:0x4000$sq" PAD_STICK="128,0,128,128,335,420" \
+        sq=""; save="${SAVE:-$(ls -d "$here"/save-backup-* 2>/dev/null | tail -1)}"
+        [ -n "$save" ] || { echo "newmarais needs SAVE=<save dir>"; exit 1; }; t=200; while [ $t -le 330 ]; do sq="$sq,$t:0x8000"; t=$((t + 5)); done
+        PAD_SCRIPT="95:0x4000,110:0x4000,125:0x4000,140:0x4000$sq" PAD_STICK="128,0,128,128,335,420" SAVE="$save" \
             "$here/tools/capture.sh" "$name" "$secs" > "$here/out/$name.capture.txt" 2>&1 & ;;
     *) echo "mode: prologue, menu or newmarais"; exit 1 ;;
 esac

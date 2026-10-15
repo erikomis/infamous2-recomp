@@ -10,14 +10,6 @@
 here=$(cd "$(dirname "$0")/.." && pwd)
 name=${1:?run name}; secs=${2:-720}; grace=${STALL_GRACE:-120}
 log="$here/out/$name.log"
-# A new game needs a working directory without a save: the savedata layer keeps
-# saves under gamedata/ relative to the working directory (cellFs maps
-# /dev_hdd0 there), and with Erik's save in infamous2-lle/gamedata the menu's
-# presses continue it instead of starting over. KEEP_SAVE=1 runs from here.
-if [ -z "$KEEP_SAVE" ]; then
-    fresh="$here/out/$name.cwd"; rm -rf "$fresh"; mkdir -p "$fresh"; cd "$fresh" || exit 1
-fi
-
 PS3_THREAD_DUMP=${PS3_THREAD_DUMP:-100} "$here/tools/capture.sh" "$name" "$secs" &
 cp=$!
 seen=0; sampled=0

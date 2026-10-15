@@ -10,3 +10,8 @@
 /spu_miss/
 /out/
 /build/
+
+# Saves (game data, Erik's own progress): never committed.
+/gamedata/
+/save-backup-*/
+/recomp_spu_ls.bin
