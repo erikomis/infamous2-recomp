@@ -2985,7 +2985,7 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..0266395 100644
+index 3addd48..40877e5 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -709,6 +709,51 @@ static int spu_mfc_atomic_body(spu_context* ctx, uint32_t cmd)
@@ -3169,66 +3169,7 @@ index 3addd48..0266395 100644
  /* Register one-way runtime entries that replace the guest call stack.
   * Matching the resolved function, not just its LS address, avoids affecting
   * unrelated overlays using the same address. Registration precedes execution. */
-@@ -1775,9 +1867,11 @@ void spu_check_stack_reset(spu_context* ctx, void (*fn)(spu_context*))
-     /* The registry count first: it is a plain global, s_spu_halt_armed is
-      * thread-local (a _tlv_get_addr call on macOS), and with no stack-reset
-      * entries registered the loop below cannot fire. Runs on every dispatch. */
--    if (!s_stack_reset_count || !ctx->host_depth || ctx->policy_mode || !s_spu_halt_armed) return;
-+    if (!s_stack_reset_count || !ctx->host_depth || ctx->policy_mode) return;
-+    /* The pc comparison before the thread-local: on almost every step no entry
-+     * matches, and the TLS read is the expensive part on macOS. */
-     for (unsigned i = 0; i < s_stack_reset_count; ++i)
--        if (ctx->pc == s_stack_reset[i].entry &&
-+        if (ctx->pc == s_stack_reset[i].entry && s_spu_halt_armed &&
-             fn == spu_lookup(ctx->pc, s_stack_reset[i].image_id)) {
-             g_spu_trampoline_fn = 0;
-             SPU_LONGJMP(s_spu_halt_env, 2);
-@@ -1905,6 +1999,44 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
-                 ea, size, os, on, ns, nn); }
- }
- 
-+/* Quick reject for spu_overlay_note_get. Every DMA GET runs that function, and
-+ * nearly all of them are data, not code: a signature source needs a >=512-byte
-+ * GET, an address source needs that exact EA, a fixed-address lift needs the
-+ * GET to overlap its LS range. A summary of the table -- a bitset of the
-+ * address sources' EAs and the union of the fixed-lift ranges -- rules out the
-+ * walk for a GET that cannot match anything, without changing which source a
-+ * matching GET finds or in what order. In a profile of the docks cutscene the
-+ * walk was 3% of all SPU time. Rebuilt whenever the table grows. */
-+static uint64_t s_ovl_ea_bits[64];          /* 4096-bit set of hashed address-source EAs */
-+static uint32_t s_ovl_lift_lo = 0xFFFFFFFFu, s_ovl_lift_hi;
-+static int      s_ovl_summary_n = -1;
-+static inline unsigned ovl_ea_hash(uint32_t ea) { return (ea * 2654435761u) >> 20; }
-+static void ovl_summary_rebuild(int n)
-+{
-+    memset(s_ovl_ea_bits, 0, sizeof s_ovl_ea_bits);
-+    uint32_t lo = 0xFFFFFFFFu, hi = 0;
-+    for (int i = 0; i < n; i++) {
-+        const spu_ovl_src* o = &s_ovl_src[i];
-+        if (!o->has_sig) { unsigned h = ovl_ea_hash(o->src_ea); s_ovl_ea_bits[h >> 6] |= 1ull << (h & 63); }
-+        if (o->lift_lsa) {
-+            if (o->lift_lsa < lo) lo = o->lift_lsa;
-+            if (o->lift_lsa + o->span > hi) hi = o->lift_lsa + o->span;
-+        }
-+    }
-+    s_ovl_lift_lo = lo; s_ovl_lift_hi = hi;
-+    __atomic_store_n(&s_ovl_summary_n, n, __ATOMIC_RELEASE);
-+}
-+static inline int ovl_cannot_match(uint32_t ea, uint32_t lsa, uint32_t size)
-+{
-+    const int n = s_ovl_src_count;
-+    if (__atomic_load_n(&s_ovl_summary_n, __ATOMIC_ACQUIRE) != n) ovl_summary_rebuild(n);
-+    if (size >= 512) return 0;                               /* a signature could match */
-+    const unsigned h = ovl_ea_hash(ea);
-+    if (s_ovl_ea_bits[h >> 6] & (1ull << (h & 63))) return 0; /* an address source could */
-+    if (lsa < s_ovl_lift_hi && lsa + size > s_ovl_lift_lo) return 0; /* a fixed lift could */
-+    return 1;
-+}
-+
- void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint32_t size)
- {
-     uint32_t lsa = (uint32_t)(ls - ctx->ls);
-@@ -1924,7 +2056,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1924,7 +2016,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
                fprintf(stderr, "[spu-get] img=%d pc=0x%05X ea=0x%08X -> LS 0x%05X size=0x%X\n",
                        ctx->image_id, (unsigned)(ctx->pc & SPU_LS_MASK), ea, lsa, size); } } }
      spu_ovl_dump(ctx, ea, lsa, ls, size);
@@ -3237,15 +3178,7 @@ index 3addd48..0266395 100644
          if (!ctx->resident_code[slot].image_id) continue;
          uint32_t base = ctx->resident_code[slot].lsa;
          uint32_t end = base + ctx->resident_code[slot].size;
-@@ -1949,6 +2081,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
-             ctx->resident_code[slot].image_id = 0;
-         }
-     }
-+    if (ovl_cannot_match(ea, lsa, size)) return;
-     for (int i = 0; i < s_ovl_src_count; i++) {
-         const spu_ovl_src* o = &s_ovl_src[i];
-         int hit = o->has_sig ? (size >= 512 && memcmp(ls, o->sig, 16) == 0)
-@@ -1966,7 +2099,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1966,7 +2058,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
              }
              if (!hit) continue;
              int have = 0;
@@ -3254,7 +3187,7 @@ index 3addd48..0266395 100644
                  if (ctx->resident_code[slot].image_id == o->image_id &&
                      ctx->resident_code[slot].lsa == o->lift_lsa) have = 1;
              if (have) continue;
-@@ -1975,13 +2108,14 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1975,13 +2067,14 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
          if (hit) {
              if (o->span) {
                  if (lsa + o->span > SPU_LS_SIZE) return;
@@ -3270,7 +3203,7 @@ index 3addd48..0266395 100644
                      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
                          fprintf(stderr, "[spu-ovl] img=%d code span src=0x%08X -> LS 0x%05X+0x%X resident as image %d (slot %u)\n",
                                  ctx->image_id, ea, lsa, o->span, o->image_id, slot); }
-@@ -2212,7 +2346,7 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2212,7 +2305,7 @@ static int spu_smc_microstep(spu_context* ctx)
        if (s_dbg > 0 && pc >= 0x4000 && pc < 0x3F000) { s_dbg--;
          fprintf(stderr, "[micro-dbg] img=%d pc=0x%05X lr=0x%05X slots", ctx->image_id, pc,
                  ctx->gpr[0]._u32[0] & SPU_LS_MASK);
@@ -3279,7 +3212,7 @@ index 3addd48..0266395 100644
              fprintf(stderr, " {%d 0x%05X+0x%X}", ctx->resident_code[k].image_id,
                      ctx->resident_code[k].lsa, ctx->resident_code[k].size);
          fprintf(stderr, " ovl=%d lookup10=%p lookup11=%p\n", ctx->resident_ovl,
-@@ -2366,7 +2500,21 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2366,7 +2459,21 @@ static int spu_smc_microstep(spu_context* ctx)
          /* Stop at the drain's return point too: it sits mid-function, so it is
           * no lifted entry, and a job's return would otherwise run on through
           * the caller's code (GH3's song-freeze; see drain_ret_pc). */
@@ -3302,7 +3235,7 @@ index 3addd48..0266395 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
-@@ -2448,7 +2596,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2448,7 +2555,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
          int lifted = spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->image_id) ||
              (ctx->resident_task && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_task)) ||
              (ctx->resident_ovl  && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_ovl));
@@ -3311,7 +3244,7 @@ index 3addd48..0266395 100644
              if (ctx->resident_code[slot].image_id &&
                  SPURS_TASKSET_PM_SYSCALL_LS - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size)
                  lifted = 1;
-@@ -2555,11 +2703,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2555,11 +2662,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
       * is 0 outside the region, so this only ever fires for genuine task code.) */
      spu_fn fn = NULL;
      int code_owner = 0;
@@ -3327,7 +3260,7 @@ index 3addd48..0266395 100644
              break;
          }
      }
-@@ -2573,8 +2723,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2573,8 +2682,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      /* A resident module's code outside its own image: the save/restore stub the
       * WWS policy module writes at the top of local store (LS 0x3FEC0) and calls
       * from its interrupt path. Its lift belongs to the module's image. */
@@ -3338,7 +3271,7 @@ index 3addd48..0266395 100644
              fn = spu_lookup(ctx->pc, ctx->resident_code[slot].image_id);
      /* The job returned through the link register we planted: it is finished.
       * Its outermost frame ends in `bi $r0`, and r0 was 0 -- so without this the
-@@ -2633,15 +2783,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2633,15 +2742,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      }
  
      if (!fn && !ctx->policy_mode && ctx->pc >= SPU_JM2_KERNEL_BASE) {
@@ -3364,7 +3297,7 @@ index 3addd48..0266395 100644
              uint32_t p0 = ctx->pc & SPU_LS_MASK;
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
-@@ -3127,19 +3281,21 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -3127,19 +3240,21 @@ void spu_indirect_branch(spu_context* ctx)
          }
          spu_fn fn = NULL;
          int code_owner = 0;
@@ -3391,18 +3324,9 @@ index 3addd48..0266395 100644
          if (!fn) goto slow;
          ctx->pc = pc;
 diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
-index 53e07da..fae2c7a 100644
+index 53e07da..ea4e67f 100644
 --- a/runtime/spu/spu_context.h
 +++ b/runtime/spu/spu_context.h
-@@ -55,7 +55,7 @@ unsigned* spu_ls_watch_list(int* out_n);   /* the armed lines (n may be 0) */
-  * recorded, 0 when ring mode is off (caller prints). T-0001. */
- int spu_ls_watch_ring_dma(struct spu_context* spu, uint32_t line, uint32_t ea,
-                          uint32_t size, const uint8_t* q16);
--static inline void spu_ls_watch_hit2(const struct spu_context* c, uint32_t lsa, int is_write,
-+static __attribute__((noinline, cold)) void spu_ls_watch_hit2(const struct spu_context* c, uint32_t lsa, int is_write,
-                                      const uint8_t* p, uint32_t pc, uint32_t lr) {
-     if (__builtin_expect(g_spu_ls_watch_n == 0, 1)) return;
-     spu_ls_watch_slow(c, lsa, is_write, p, pc, lr);
 @@ -182,6 +182,10 @@ typedef struct spu_channel {
  /* ---------------------------------------------------------------------------
   * SPU execution context
@@ -3434,28 +3358,6 @@ index 53e07da..fae2c7a 100644
  
      /* Resident SPURS-taskset TASK image id (0 = none) retires the id-0 wildcard
       * for co-resident tasks. A taskset may hold several tasks that all lift at the
-@@ -584,7 +596,11 @@ static __attribute__((noinline, cold)) void spu_ls_read_probe(const spu_context*
-     }
- }
- 
--static inline u128 spu_ls_read128(const spu_context* ctx, uint32_t lsa)
-+/* always_inline: clang left an out-of-line copy in every lifted SPU file, so
-+ * each LS access paid a call (spu_ls_write128 alone was ~4% of SPU time in the
-+ * docks cutscene). The debug paths are cold calls, so the inlined body is a
-+ * mask, four loads and four byte swaps. */
-+static inline __attribute__((always_inline)) u128 spu_ls_read128(const spu_context* ctx, uint32_t lsa)
- {
-     u128 v;
-     if (__builtin_expect(g_spu_ls_dbg != 0, 0)) {
-@@ -664,7 +680,7 @@ static __attribute__((noinline, cold)) void spu_ls_write_probe_smc(spu_context*
-       } }
- }
- 
--static inline void spu_ls_write128(spu_context* ctx, uint32_t lsa, u128 val)
-+static inline __attribute__((always_inline)) void spu_ls_write128(spu_context* ctx, uint32_t lsa, u128 val)
- {
-     lsa &= SPU_LS_MASK & ~0xFu;
-     uint8_t* p = &ctx->ls[lsa];
 diff --git a/runtime/spu/spu_dispatch_mt.c b/runtime/spu/spu_dispatch_mt.c
 index c610dad..b582c7a 100644
 --- a/runtime/spu/spu_dispatch_mt.c
@@ -3522,7 +3424,7 @@ index 142931a..f3e3d08 100644
       * covers one word, with the SPU id, its pc and the value the word holds
       * after the transfer.
 diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
-index 7c1089c..0566701 100644
+index 7c1089c..10f82b6 100644
 --- a/runtime/spu/spu_drain.c
 +++ b/runtime/spu/spu_drain.c
 @@ -7,6 +7,8 @@
@@ -3534,34 +3436,7 @@ index 7c1089c..0566701 100644
  
  /* See spu_context.h `irq_frame`. */
  typedef struct spu_irq_frame {
-@@ -49,6 +51,26 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
- {
-     extern void spu_check_stack_reset(spu_context*, void (*)(spu_context*));
-     spu_check_stack_reset(ctx, (void (*)(spu_context*))fn);
-+    /* This runs on every drain step -- 3% of all SPU time in a profile of the
-+     * docks cutscene. The diagnostics below each read an _Atomic flag per call;
-+     * with none of them set (every normal run), only the end-of-job check is
-+     * live, so decide that once and take the short path. A plain int: the race
-+     * on first use writes the same value. */
-+    static int s_any_diag = -1;
-+    if (__builtin_expect(s_any_diag < 0, 0))
-+        s_any_diag = (getenv("SPU_NO_LS0_END") || getenv("SPU_EXITTRACE") ||
-+                      getenv("SPU_STEPTRACE") || getenv("SPU_JOBDRAIN")) ? 1 : 0;
-+    if (__builtin_expect(!s_any_diag && !g_pm_flow_ctx, 1)) {
-+        if (ctx->steps++ && (ctx->pc & SPU_LS_MASK) == 0 &&
-+            !ctx->policy_mode && ctx->image_id > 0) {
-+            static int _n = 0;
-+            if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 8)
-+                fprintf(stderr, "[spurs-job] img=%d branched to LS 0 -- job complete\n",
-+                        ctx->image_id);
-+            spu_halt(ctx);
-+        }
-+        return;
-+    }
-     /* A SPURS job returning to LS 0 is finished -- its crt tail-jumps to the
-      * resident job manager, and with the job loaded at 0 that lands on its own
-      * entry. Planting a return address in r0 catches the jobs that get there
-@@ -316,6 +338,39 @@ void (*spu_take_interrupt(spu_context* ctx,
+@@ -316,6 +318,39 @@ void (*spu_take_interrupt(spu_context* ctx,
      ctx->srr0 = ctx->pc;             /* resume point for iret */
      ctx->int_enable = 0;
      spu_irq_regs_save(ctx);          /* hardware contract: handler preserves regs */
@@ -3601,7 +3476,7 @@ index 7c1089c..0566701 100644
      { static _Atomic int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
        if (s_it) { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 200)
          fprintf(stderr, "[irq] TAKE srr0=0x%05X depth=%d r13=%08X r15=%08X\n",
-@@ -458,15 +513,18 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -458,15 +493,18 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
              uint32_t pc = ctx->pc & SPU_LS_MASK;
              spu_drain_fn fn = 0;
              int owned = 0;
@@ -3624,55 +3499,6 @@ index 7c1089c..0566701 100644
              if (fn) {
                  { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 8)
                      fprintf(stderr, "[spu] drain-resume return_pc=0x%05X at lifted entry 0x%05X img=%d depth=%d ovl=%d\n",
-diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index 8d96768..7b9ade2 100644
---- a/runtime/spu/spu_helpers.h
-+++ b/runtime/spu/spu_helpers.h
-@@ -874,8 +874,42 @@ static inline uint32_t spu__cfl_lane(uint32_t x, int scale, int is_unsigned) {
-     const uint32_t v = sh >= 0 ? m << sh : (sh <= -24 ? 0 : m >> -sh);
-     return neg ? 0u - v : v;
- }
--static inline u128 spu_cflts(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = spu__cfl_lane(a._u32[i], 173 - (i8 & 0xFF), 0); return r; }
--static inline u128 spu_cfltu(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = spu__cfl_lane(a._u32[i], 173 - (i8 & 0xFF), 1); return r; }
-+static inline u128 spu_cflts_exact(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = spu__cfl_lane(a._u32[i], 173 - (i8 & 0xFF), 0); return r; }
-+static inline u128 spu_cfltu_exact(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = spu__cfl_lane(a._u32[i], 173 - (i8 & 0xFF), 1); return r; }
-+/* NEON fast path, bit-identical to the exact lanes above: for an exponent in
-+ * 1..254 the value is an ordinary float, multiplying it by 2^scale (0..127) is
-+ * exact or overflows to infinity, and FCVTZS/FCVTZU truncate toward zero and
-+ * saturate exactly as the SPU does (cfltu: negatives -> 0). Exponent-0 lanes
-+ * are the SPU's zero (denormals included) and are forced to 0; any lane with
-+ * exponent 255 -- extended range on the SPU, NaN/Inf here -- takes the exact
-+ * path. These two were ~4% of SPU time in the docks cutscene, scalar.
-+ * runtime/spu/tests/test_spu_cflt_fast.c compares the two. */
-+#if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
-+static inline int spu__cfl_fast_ok(uint32x4_t x, int scale, uint32x4_t* zero_mask) {
-+    if (scale < 0 || scale > 127) return 0;
-+    const uint32x4_t e = vandq_u32(vshrq_n_u32(x, 23), vdupq_n_u32(0xFF));
-+    if (vmaxvq_u32(e) == 0xFF) return 0;
-+    *zero_mask = vceqq_u32(e, vdupq_n_u32(0));
-+    return 1;
-+}
-+static inline u128 spu_cflts(u128 a, int i8) {
-+    const int scale = 173 - (i8 & 0xFF);
-+    const uint32x4_t x = vld1q_u32(a._u32); uint32x4_t z;
-+    if (!spu__cfl_fast_ok(x, scale, &z)) return spu_cflts_exact(a, i8);
-+    const float32x4_t f = vmulq_f32(vreinterpretq_f32_u32(x), vreinterpretq_f32_u32(vdupq_n_u32((uint32_t)(127 + scale) << 23)));
-+    u128 r; vst1q_u32(r._u32, vbicq_u32(vreinterpretq_u32_s32(vcvtq_s32_f32(f)), z)); return r;
-+}
-+static inline u128 spu_cfltu(u128 a, int i8) {
-+    const int scale = 173 - (i8 & 0xFF);
-+    const uint32x4_t x = vld1q_u32(a._u32); uint32x4_t z;
-+    if (!spu__cfl_fast_ok(x, scale, &z)) return spu_cfltu_exact(a, i8);
-+    const float32x4_t f = vmulq_f32(vreinterpretq_f32_u32(x), vreinterpretq_f32_u32(vdupq_n_u32((uint32_t)(127 + scale) << 23)));
-+    u128 r; vst1q_u32(r._u32, vbicq_u32(vcvtq_u32_f32(f), z)); return r;
-+}
-+#else
-+static inline u128 spu_cflts(u128 a, int i8) { return spu_cflts_exact(a, i8); }
-+static inline u128 spu_cfltu(u128 a, int i8) { return spu_cfltu_exact(a, i8); }
-+#endif
- static inline u128 spu_csflt(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const int32_t v = a._s32[i];
-     r._u32[i] = v ? spu__sf_pack(v < 0 ? 0x80000000u : 0, v < 0 ? 0u - (uint32_t)v : (uint32_t)v, -(155 - (i8 & 0xFF))) : 0; } return r; }
- static inline u128 spu_cuflt(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const uint32_t v = a._u32[i];
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
 index 772c2d6..42057dc 100644
 --- a/runtime/spu/spu_interp.c
@@ -3778,51 +3604,6 @@ index 772c2d6..42057dc 100644
          if (__atomic_load_n(&ctx->stop_request, __ATOMIC_RELAXED)) {   /* group terminated */
              ctx->status = SPU_STATUS_STOPPED_BY_HALT; ctx->stop_code = 0;
              g_spu_interp_steps = steps;
-diff --git a/runtime/spu/tests/test_spu_cflt_fast.c b/runtime/spu/tests/test_spu_cflt_fast.c
-new file mode 100644
-index 0000000..6433225
---- /dev/null
-+++ b/runtime/spu/tests/test_spu_cflt_fast.c
-@@ -0,0 +1,39 @@
-+/* test_spu_cflt_fast.c: the NEON cflts/cfltu fast path against the exact lanes.
-+ * Build: cc -O2 -I.. -I../.. -I../../../include test_spu_cflt_fast.c -o /tmp/t && /tmp/t */
-+#include <stdint.h>
-+#include <stdio.h>
-+#include <string.h>
-+#include "spu_context.h"
-+#include "spu_helpers.h"
-+
-+static uint64_t rng = 0x9E3779B97F4A7C15ull;
-+static uint32_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return (uint32_t)rng; }
-+
-+int main(void)
-+{
-+    unsigned long long n = 0, bad = 0;
-+    static const uint32_t edge[] = { 0, 0x80000000u, 0x00000001u, 0x807FFFFFu, 0x00800000u, 0x7F7FFFFFu,
-+        0xFF7FFFFFu, 0x7F800000u, 0xFF800000u, 0x7FC00000u, 0x3F800000u, 0xBF800000u, 0x4EFFFFFFu,
-+        0x4F000000u, 0xCF000000u, 0xCF000001u, 0x4F800000u, 0x3F7FFFFFu, 0xBF7FFFFFu, 0x3EFFFFFFu };
-+    for (int i8 = 0; i8 < 256; i8++) {
-+        for (unsigned k = 0; k < 200000; k++) {
-+            u128 a;
-+            for (int l = 0; l < 4; l++) {
-+                uint32_t v = rnd();
-+                if ((k & 7) == 0) v = edge[rnd() % (sizeof edge / sizeof edge[0])];
-+                else if ((k & 7) == 1) v = (v & 0x807FFFFFu) | ((uint32_t)(127 + (int)(rnd() % 64) - 32) << 23);
-+                a._u32[l] = v;
-+            }
-+            u128 f = spu_cflts(a, i8), e = spu_cflts_exact(a, i8);
-+            u128 fu = spu_cfltu(a, i8), eu = spu_cfltu_exact(a, i8);
-+            n += 2;
-+            if (memcmp(&f, &e, 16) || memcmp(&fu, &eu, 16)) {
-+                if (bad++ < 10)
-+                    printf("MISMATCH i8=%d in %08X %08X %08X %08X: s %08X/%08X u %08X/%08X\n", i8,
-+                           a._u32[0], a._u32[1], a._u32[2], a._u32[3], f._u32[0], e._u32[0], fu._u32[0], eu._u32[0]);
-+            }
-+        }
-+    }
-+    printf("%llu conversions, %llu mismatches\n", n, bad);
-+    return bad != 0;
-+}
 diff --git a/runtime/syscalls/lv2_register.c b/runtime/syscalls/lv2_register.c
 index d756b8d..328a170 100644
 --- a/runtime/syscalls/lv2_register.c
