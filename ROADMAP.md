@@ -38,7 +38,7 @@ jogo.
 ### Gráficos
 
 - [ ] Gráficos em New Marais: janelas do barco do Zeke saem como retângulos pretos e blocos de madeira do guindaste saem azul-turquesa (conferir de novo depois do conserto do FACING). Retângulos escuros translúcidos perto do Cole (captura de tela do Erik, 01:35). Inimigos "pretos e sem textura" relatados pelo Erik ainda não reconferidos depois do conserto do FACING.
-- [ ] (novo) Objetos estourados em branco e blocos retangulares na tela, vistos no save de New Marais antes do conserto do FACING: reconferir.
+- [ ] (novo) Objetos estourados em branco (barco no reboque, amplificador do Cole, caixote do píer) e retângulos de brilho diferente alinhados à tela perto dos personagens: continuam depois do FACING e da água (capturas do Erik, 11:59). Descartados: formatos de textura, opcodes não traduzidos, NaN/Inf nos FPs, `GCM_SEMA_ACQUIRE`, notify do GCM, tesoura das luzes no píer. Aparecem fortes na praça ao entardecer, que o save (início da missão, no píer) não alcança sem andar. Também: o rio aparece, mas sem o reflexo do céu.
 - [ ] "SPU Light Task": roda a cada frame e escreve o label 137 (0x890), mas no menu não escreve nada nos buffers XDR que o passe ambiente amostra (só no boot). Falta entender o que ele deveria produzir e se cutscenes/gameplay mudam com isso. Ver a nota de memória do assistente ou `PS3RECOMP_ENG_TEXLOG`/`GCM_SEMA_TRACE`.
 - [ ] (novo) Menu principal: o contorno cinza-azulado do Cole e os destroços escuros não aparecem; há um borrão cinza estático sob a barra que não existe no original.
 
@@ -135,6 +135,7 @@ jogo.
 - [x] Cor dos materiais de personagem: o decompilador pulava os opcodes de pack/unpack (PK4UB, UP4UB, PKG, UPG) que o jogo usa como conversão sRGB↔linear; era a mancha verde no couro cabeludo do Cole e tons de pele errados.
 - [x] Brilho e contraste: a imagem saía escura e lamacenta (personagens quase pretos nas cenas de contraluz, sombras esmagadas). O jogo pede ao RSX a conversão linear→sRGB na escrita do framebuffer (`SET_SHADER_PACKER`) e a decodificação sRGB→linear ao ler texturas (bits de gamma do `TEXTURE_ADDRESS`), e o motor do fork ignorava as duas. PRs #304 e #305 do upstream portados à mão para o motor do fork.
 - [x] **Trepadeiras e plantas pretas, paredes roxas, rostos de NPC pretos (2026-10-15):** o decompilador de fragment programs devolvia zero para as entradas FACING (0xE), TC8 (0xC) e TC9 (0xD). Os materiais de dois lados fazem `normal × FACING` para virar a normal da face de trás; com zero, a normal virava NaN no G-buffer e o pixel ficava preto. Agora FACING é `SV_IsFrontFace ? +1 : −1` (o `ssa` do RPCS3), TC8 vem de `o[15]` e TC9 de `o[6]` do vertex program. Eram 116 dos 513 pixel shaders de New Marais (71 FACING, 45 TC8/9). Na mesma cena: trepadeiras verdes, paredes de madeira (não mais roxas). Teste em `test_shader_msl` (`[[front_facing]]`, `locn11/12`).
+- [x] **Rio preto em New Marais (2026-10-15):** a água copia a cena já desenhada (alvo em VRAM 0x00E3C000) e a lê na posição da tela. O vertex program escreve `uv × w` em TC2 e o fragment program lê TC2 com o bit `perspective_corr` (bit 31 da palavra SRC2) ligado, que no RSX multiplica a entrada por 1/w. O decompilador ignorava esse bit: a água lia `uv × w`, muito fora da cópia, e saía preta. Agora a leitura vira `tcN * _rsx_inv_w(input.position)` (como o `* gl_FragCoord.w` do RPCS3); nos caminhos via glslang (Metal, Vulkan) `position.w` já é 1/w (`RSX_FRAGCOORD_W_IS_RCP`), no FXC (D3D12) o helper divide. 163 pixel shaders de New Marais usam o bit. Na mesma cena: o rio aparece ao lado do píer e atrás da Kuo. Testes em `test_fp_decompiler` e `test_shader_msl`. Achado com `PS3RECOMP_METAL_DBG_NOZ=<alvo>` (a água era desenhada, mas preta), `SKIP_PIPE` e `DBG_SHOWTEX` (a textura estava certa, as coordenadas não). Diagnósticos novos, desligados por padrão: `RSX_FP_NAN_COLOR=1` (NaN magenta, Inf ciano) e `PS3RECOMP_ENG_FPK_PIPE=<p>` (constantes do FP por draw).
 
 ### Desempenho
 
@@ -219,7 +220,7 @@ cada correção é um PR, com teste onde dava para ter um.
   já o traz) e as ferramentas da investigação do travamento ainda em aberto
   (`GCM_SEMA_ACQUIRE`/`GCM_SEMA_TRACE`, limites de `SPU_PUT_EA`, `LWCOND_TRACE`, a espera de
   250 ms do push de evento do SPU), que vão quando a causa estiver fechada.
-- [ ] (novo) Ainda não enviados: FACING/TC8/TC9 no decompilador de fragment programs,
+- [ ] (novo) Ainda não enviados: FACING/TC8/TC9 e `perspective_corr` no decompilador de fragment programs,
   o watchdog que respeita o estacionamento do FIFO, os jobs SPU relocáveis
   (`--relocatable`) e o mouse para a câmera.
 

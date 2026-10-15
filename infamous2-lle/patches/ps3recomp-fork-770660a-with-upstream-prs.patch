@@ -980,7 +980,7 @@ index 7718d14..0e689ed 100644
        }
        if (method == 0x1D74) {
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..cbfa75c 100644
+index 9a76e67..631c487 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -95,6 +95,7 @@ typedef struct {
@@ -1181,7 +1181,32 @@ index 9a76e67..cbfa75c 100644
              continue;
          }
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
-@@ -2126,8 +2209,10 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2045,6 +2128,24 @@ static void sink_end(void* user, const rsx_dispatch* r)
+     memset(g.fp_cb, 0, fp_bytes);
+     if (g.fp_constants->count)
+         memcpy(g.fp_cb, g.fp_constants->values, g.fp_constants->count * 16u);
++    /* PS3RECOMP_ENG_FPK_PIPE=<p>: the fragment constants each draw through
++     * pipeline <p> (pass-log p= number) receives, first 8 draws per 600
++     * frames -- tells "the shader math is wrong" from "it was handed zeros". */
++    { static long fpk = -2;
++      if (fpk == -2) { const char* e = getenv("PS3RECOMP_ENG_FPK_PIPE"); fpk = e ? strtol(e, 0, 10) : -1; }
++      if (fpk >= 0 && pipeline == (u32)fpk) {
++          static u32 n, win = ~0u;
++          if (g.frames / 600 != win) { win = g.frames / 600; n = 0; }
++          if (n++ < 8) {
++              const float* k = (const float*)g.fp_cb;
++              fprintf(stderr, "[fpk] p=%u frame=%u draw=%u n=%u consts=%u fp=%u:0x%08X\n", pipeline,
++                      g.frames, g.guest_draws, n_draw, g.fp_constants->count,
++                      rsx_dsp_reg(&g.rsx, 0x08E4) & 3u, rsx_dsp_reg(&g.rsx, 0x08E4) & ~3u);
++              for (u32 q = 0; q < g.fp_constants->count; q++)
++                  fprintf(stderr, "[fpk]   k[%2u] = (%g %g %g %g)\n", q,
++                          k[q * 4], k[q * 4 + 1], k[q * 4 + 2], k[q * 4 + 3]);
++          }
++      } }
+     { float* alpha = (float*)(g.fp_cb + nslots * 16u);
+       alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
+       /* WPOS y = pos.y * alpha[1] + alpha[2]: SHADER_WINDOW (0x1D88) bits
+@@ -2126,8 +2227,10 @@ static void sink_end(void* user, const rsx_dispatch* r)
          ds.ns_rest += eng_ds_now() - ds_t0;
      }
  
@@ -1193,7 +1218,7 @@ index 9a76e67..cbfa75c 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2531,6 +2616,95 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +2634,95 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
@@ -1312,7 +1337,7 @@ index e54d615..8b42bd9 100644
   * itself rather than through the FIFO's 0xE944. */
  void rsx_draw_engine_present(void);
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index 933abcb..c943151 100644
+index 933abcb..9aa8e7a 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
 @@ -71,8 +71,8 @@ enum {
@@ -1337,7 +1362,7 @@ index 933abcb..c943151 100644
      case OP_FENCT: return "FENCT"; case OP_FENCB: return "FENCB";
      default:     return "?";
      }
-@@ -359,12 +363,21 @@ static const char* input_expr(u32 input_src)
+@@ -359,17 +363,26 @@ static const char* input_expr(u32 input_src)
          "input.tc4", "input.tc5", "input.tc6", "input.tc7" };
      switch (input_src) {
      case 0x0: return "input.position"; /* WPOS */
@@ -1362,7 +1387,28 @@ index 933abcb..c943151 100644
      }
  }
  
-@@ -445,12 +458,148 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+ /* Build the swizzled/negated/abs'd HLSL for one source into `buf`. */
+-static void emit_src(const Src* s, u32 input_src, const float* k, int has_k,
++static void emit_src(const Src* s, u32 input_src, int persp, const float* k, int has_k,
+                      int buffered, u32 constant_slot, char* buf, u32 bufsz)
+ {
+     char base[96];
+@@ -382,6 +395,14 @@ static void emit_src(const Src* s, u32 input_src, const float* k, int has_k,
+         if (buffered && input_src == 0x0)
+             snprintf(base, sizeof(base),
+                      "float4(input.position.x, input.position.y * fp_alpha.y + fp_alpha.z, input.position.zw)");
++        /* SRC2.perspective_corr on a texcoord read (TC0..TC9) multiplies it
++         * by 1/w (RPCS3 FragmentProgramDecompiler: "Perspective correct flag
++         * multiplies the result by 1/w"). A vertex program that writes uv*w
++         * relies on it: inFAMOUS 2's water samples its screen copy that way,
++         * and read raw it lands far outside the copy and the river is black. */
++        else if (persp && input_src >= 0x4 && input_src <= 0xD)
++            snprintf(base, sizeof(base), "(%s * _rsx_inv_w(input.position))",
++                     input_expr(input_src));
+         else
+             snprintf(base, sizeof(base), "%s", input_expr(input_src));
+     } else { /* CONST */
+@@ -445,12 +466,148 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
      return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
  }
  
@@ -1513,7 +1559,7 @@ index 933abcb..c943151 100644
      u32 buffered_constant_count = 0;
      if (buffered) {
          rsx_fp_constant_block constants;
-@@ -517,6 +666,14 @@ static int rsx_fp_decompile_internal(
+@@ -517,6 +674,14 @@ static int rsx_fp_decompile_internal(
          u32 opcode    = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
          u32 input_src = (w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT;
          u32 tex_unit  = (w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT;
@@ -1528,7 +1574,30 @@ index 933abcb..c943151 100644
          int is_branch = (w2 & FP_BRANCH) ? 1 : 0;
  
          /* Execution condition (exec_if) + condition-code write (set_cond).
-@@ -655,6 +812,18 @@ static int rsx_fp_decompile_internal(
+@@ -569,15 +734,19 @@ static int rsx_fp_decompile_internal(
+             has_k = 1;
+         }
+ 
++        /* SRC2 bit 31 is perspective_corr for the instruction's input read
++         * (RPCS3 RSXFragmentProgram.h SRC2); on a branch the word is an
++         * address instead. */
++        const int persp = !is_branch && (w3 >> 31) != 0;
+         char a[200], b[200], c[200];
+         emit_src(
+-            &s0, input_src, k, has_k, buffered, constant_slot,
++            &s0, input_src, persp, k, has_k, buffered, constant_slot,
+             a, sizeof(a));
+         emit_src(
+-            &s1, input_src, k, has_k, buffered, constant_slot,
++            &s1, input_src, persp, k, has_k, buffered, constant_slot,
+             b, sizeof(b));
+         emit_src(
+-            &s2, input_src, k, has_k, buffered, constant_slot,
++            &s2, input_src, persp, k, has_k, buffered, constant_slot,
+             c, sizeof(c));
+         if (has_k)
+             constant_slot++;
+@@ -655,6 +824,18 @@ static int rsx_fp_decompile_internal(
          case OP_FRC: snprintf(rhs, sizeof(rhs), "frac(%s)", a); break;
          case OP_FLR: snprintf(rhs, sizeof(rhs), "floor(%s)", a); break;
          case OP_RCP: snprintf(rhs, sizeof(rhs), "(1.0 / (%s).x)", a); break;
@@ -1547,7 +1616,7 @@ index 933abcb..c943151 100644
          /* Real RSX RSQ ignores the input's sign — 1/sqrt(|x|), not 1/sqrt(x)
           * (oracle: RPCS3 FragmentProgramDecompiler.cpp, "RSQ ignores the sign
           * of the inputs (Metro Last Light, GTA4)"). The strict form NaN'd the
-@@ -702,6 +871,10 @@ static int rsx_fp_decompile_internal(
+@@ -702,6 +883,10 @@ static int rsx_fp_decompile_internal(
          case OP_SNE: snprintf(rhs, sizeof(rhs), "(float4)((%s) != (%s))", a, b); break;
          case OP_SEQ: snprintf(rhs, sizeof(rhs), "(float4)((%s) == (%s))", a, b); break;
          case OP_TEX:
@@ -1558,7 +1627,7 @@ index 933abcb..c943151 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Cubemap: sample with the full 3-component direction vector. */
                  snprintf(rhs, sizeof(rhs),
-@@ -714,6 +887,10 @@ static int rsx_fp_decompile_internal(
+@@ -714,6 +899,10 @@ static int rsx_fp_decompile_internal(
                           "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
              break;
          case OP_TXP:
@@ -1569,7 +1638,7 @@ index 933abcb..c943151 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Projective divide is meaningless for a cube lookup; sample
                   * the direction directly. */
-@@ -760,14 +937,37 @@ static int rsx_fp_decompile_internal(
+@@ -760,14 +949,37 @@ static int rsx_fp_decompile_internal(
              }
              handled = 0;   /* no destination write */
              break;
@@ -1611,7 +1680,7 @@ index 933abcb..c943151 100644
          int has_dest = !(w0 & FP_OUT_NONE);
          if (handled && (has_dest || set_cond)) {
              u32 dst_idx = (w0 & FP_OUT_REG_MASK) >> FP_OUT_REG_SHIFT;
-@@ -817,13 +1017,17 @@ static int rsx_fp_decompile_internal(
+@@ -817,13 +1029,17 @@ static int rsx_fp_decompile_internal(
                                   "      /* exec_if=none: write suppressed */\n");
                      } else {
                          /* Per-component select gated by the CC sign test.
@@ -1633,7 +1702,35 @@ index 933abcb..c943151 100644
                      }
                      out_puts(&o, buf);
                  }
-@@ -907,7 +1111,7 @@ static int rsx_fp_decompile_internal(
+@@ -881,6 +1097,27 @@ static int rsx_fp_decompile_internal(
+     for (u32 t = FP_MAX_COLOR_TARGETS; t-- > 1; )
+         if (wrote[half_exports][t]) { targets = t + 1; break; }
+ 
++    /* RSX_FP_NAN_COLOR=1: DIAGNOSTIC. Paint an output the NaN guard would zero
++     * magenta, and one carrying an infinity cyan, so "black because NaN" and
++     * "white because Inf" can be told from real colours on screen. Shaders are
++     * generated once per program, so set it before the run starts. */
++    static int nan_color = -1;
++    if (nan_color < 0) nan_color = getenv("RSX_FP_NAN_COLOR") ? 1 : 0;
++    if (nan_color) {
++        for (u32 t = 0; t < targets; t++) {
++            char line[256];
++            snprintf(line, sizeof(line),
++                     "    %s[%u] = any(%s[%u] != %s[%u]) ? float4(1, 0, 1, 1)"
++                     " : any(isinf(%s[%u])) ? float4(0, 1, 1, 1) : %s[%u];\n",
++                     export_file, fp_export_reg[half_exports][t],
++                     export_file, fp_export_reg[half_exports][t],
++                     export_file, fp_export_reg[half_exports][t],
++                     export_file, fp_export_reg[half_exports][t],
++                     export_file, fp_export_reg[half_exports][t]);
++            out_puts(&o, line);
++        }
++    }
++
+     if (targets == 1) {
+         char tail[96];
+         snprintf(tail, sizeof(tail),
+@@ -907,7 +1144,7 @@ static int rsx_fp_decompile_internal(
      /* Preamble: PSInput matches the backend's placeholder layout; temp/half
       * register files; texture+sampler banks for TEX. Built here, in front of
       * the body, now that the return type is known. */
@@ -1642,7 +1739,7 @@ index 933abcb..c943151 100644
      Out p = { preamble, sizeof(preamble), 0, 1 };
      preamble[0] = '\0';
      out_puts(&p,
-@@ -915,8 +1119,15 @@ static int rsx_fp_decompile_internal(
+@@ -915,8 +1152,27 @@ static int rsx_fp_decompile_internal(
          "    float4 position : SV_POSITION; float4 col0 : COLOR0; float4 col1 : COLOR1;\n"
          "    float4 fog : FOG;\n"
          "    float4 tc0:TEXCOORD0; float4 tc1:TEXCOORD1; float4 tc2:TEXCOORD2; float4 tc3:TEXCOORD3;\n"
@@ -1657,10 +1754,22 @@ index 933abcb..c943151 100644
 +    if (strstr(o.p, "input._rsx_front"))
 +        out_puts(&p, "    bool _rsx_front : SV_IsFrontFace;\n");
 +    out_puts(&p, "};\n");
++    /* 1/w of the fragment for perspective_corr reads. SV_POSITION.w is the
++     * clip w under FXC (D3D12) but already 1/w once glslang lowers it to
++     * SPIR-V FragCoord (Vulkan, and Metal's [[position]] is (x, y, z, 1/w));
++     * the glslang paths define RSX_FRAGCOORD_W_IS_RCP. Emitted only where the
++     * body uses it, so every other program stays byte-identical. */
++    if (strstr(o.p, "_rsx_inv_w("))
++        out_puts(&p,
++            "#ifdef RSX_FRAGCOORD_W_IS_RCP\n"
++            "#define _rsx_inv_w(p) ((p).w)\n"
++            "#else\n"
++            "#define _rsx_inv_w(p) (1.0 / (p).w)\n"
++            "#endif\n");
      /* Texture bank. With no cube units (the default) emit the exact legacy
       * array declaration so 2D-only programs are byte-identical. When any unit
       * is a cubemap, declare each unit individually at its t-register so the
-@@ -945,6 +1156,26 @@ static int rsx_fp_decompile_internal(
+@@ -945,6 +1201,26 @@ static int rsx_fp_decompile_internal(
              buffered_constant_count ? buffered_constant_count : 1u);
          out_puts(&p, constants_decl);
      }
@@ -1687,7 +1796,7 @@ index 933abcb..c943151 100644
      if (targets == 1) {
          out_puts(&p, "float4 main(PSInput input) : SV_TARGET {\n");
      } else {
-@@ -970,7 +1201,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
+@@ -970,7 +1246,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
                          u32 tex_cube_mask, char* out, u32 out_size)
  {
      return rsx_fp_decompile_internal(
@@ -1696,7 +1805,7 @@ index 933abcb..c943151 100644
  }
  
  int rsx_fp_decompile_buffered_ex(
-@@ -978,10 +1209,28 @@ int rsx_fp_decompile_buffered_ex(
+@@ -978,10 +1254,28 @@ int rsx_fp_decompile_buffered_ex(
      char* out, u32 out_size, u32* out_constant_count)
  {
      return rsx_fp_decompile_internal(
@@ -1726,7 +1835,7 @@ index 933abcb..c943151 100644
  static float fp_half_to_float(u16 h)
  {
      const u32 sign = (u32)(h & 0x8000u) << 16;
-@@ -1294,3 +1543,74 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
+@@ -1294,3 +1588,74 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
      }
      return patched;
  }
@@ -2208,6 +2317,34 @@ index 98db285..ea0a908 100644
          }
          if (s_window && ![s_window isVisible]) s_closed = 1;
      }
+diff --git a/libs/video/rsx_shader_msl.cpp b/libs/video/rsx_shader_msl.cpp
+index d2715f2..024ac76 100644
+--- a/libs/video/rsx_shader_msl.cpp
++++ b/libs/video/rsx_shader_msl.cpp
+@@ -69,6 +69,9 @@ bool hlsl_to_spirv(const char* hlsl, EShLanguage lang, std::vector<unsigned int>
+     shader.setEnvInput(glslang::EShSourceHlsl, lang, glslang::EShClientVulkan, 100);
+     shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
+     shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
++    /* SPIR-V FragCoord.w is 1/w (FXC's SV_POSITION.w is w): tells the FP
++     * decompiler's _rsx_inv_w helper which one it gets. */
++    shader.setPreamble("#define RSX_FRAGCOORD_W_IS_RCP 1\n");
+     shader.setEntryPoint("main");
+     shader.setAutoMapBindings(true);
+     shader.setAutoMapLocations(true);
+diff --git a/libs/video/rsx_shader_spirv.cpp b/libs/video/rsx_shader_spirv.cpp
+index f9725b8..1ed9934 100644
+--- a/libs/video/rsx_shader_spirv.cpp
++++ b/libs/video/rsx_shader_spirv.cpp
+@@ -80,6 +80,9 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+     shader.setEnvInput(glslang::EShSourceHlsl, lang, glslang::EShClientVulkan, 100);
+     shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
+     shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
++    /* SPIR-V FragCoord.w is 1/w (FXC's SV_POSITION.w is w): tells the FP
++     * decompiler's _rsx_inv_w helper which one it gets. */
++    shader.setPreamble("#define RSX_FRAGCOORD_W_IS_RCP 1\n");
+     shader.setEntryPoint("main");
+     shader.setAutoMapBindings(true);
+     shader.setAutoMapLocations(true);
 diff --git a/libs/video/rsx_texture_layout.c b/libs/video/rsx_texture_layout.c
 index b32a702..ecb1a85 100644
 --- a/libs/video/rsx_texture_layout.c
@@ -2342,6 +2479,38 @@ index 0000000..9b069a1
 +  MTLRenderPassDescriptor*rp=[MTLRenderPassDescriptor renderPassDescriptor];rp.colorAttachments[0].texture=out;rp.colorAttachments[0].loadAction=MTLLoadActionClear;rp.colorAttachments[0].storeAction=MTLStoreActionStore;id<MTLCommandBuffer>cb=[s_queue commandBuffer];id<MTLRenderCommandEncoder>e=[cb renderCommandEncoderWithDescriptor:rp];[e setRenderPipelineState:p];[e setVertexBytes:values[vi] length:16 atIndex:0];[e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];[e endEncoding];[cb commit];[cb waitUntilCompleted];CHECK(cb.status==MTLCommandBufferStatusCompleted&&!cb.error,"GPU completes");float pixel[4];[out getBytes:pixel bytesPerRow:16 fromRegion:MTLRegionMake2D(0,0,1,1) mipmapLevel:0];int good=1;for(int lane=0;lane<4;lane++){float base=values[vi][swizzle?3-lane:lane];if(ai<2)base=fminf(1,fmaxf(0,base));float want=base;if(modifier==2)want=fabsf(want);if(modifier)want=-want;if(opindex)want=want*base;if(opindex==2)want+=base;good &=fabsf(pixel[lane]-want)<1e-6;}CHECK(good,"COL0/COL1 clamp precedes modifiers; TC remains unrestricted");if(!good)fprintf(stderr,"DETAIL attr%u modifier%d input%d output%g,%g,%g,%g\n",attrs[ai],modifier,vi,pixel[0],pixel[1],pixel[2],pixel[3]);
 + }
 + printf("Color input boundary: %d checks, %d failures\n",checks,failures);free(vm_base);return failures?1:0;}}
+diff --git a/libs/video/tests/test_fp_decompiler.c b/libs/video/tests/test_fp_decompiler.c
+index b75424f..bc4fd50 100644
+--- a/libs/video/tests/test_fp_decompiler.c
++++ b/libs/video/tests/test_fp_decompiler.c
+@@ -300,6 +300,27 @@ int main(void)
+         check_absent("lif_handled", hlsl, "unhandled FP opcode");
+     }
+ 
++    /* SRC2 bit 31 (perspective_corr) on a texcoord read multiplies the input
++     * by 1/w (RPCS3 FragmentProgramDecompiler: "Perspective correct flag
++     * multiplies the result by 1/w"). inFAMOUS 2's water writes uv*w from the
++     * vertex program and samples TC2 with the flag set; read raw, uv*w lands
++     * far outside the screen copy and the river samples black. */
++    {
++        u8 prog[16];
++        put_word(prog + 0, OPC(0x17) | OUTMASK_ALL | INSRC(6) | TEXU(0) | END); /* TEX TC2 */
++        put_word(prog + 4, T_INPUT | SWZ_IDENT | EXEC_ALWAYS);
++        put_word(prog + 8, 0);
++        put_word(prog + 12, 1u << 31);
++        rsx_fp_decompile(prog, sizeof(prog), CTRL_32BIT, hlsl, sizeof(hlsl));
++        check("persp_tc_scaled", hlsl, "(input.tc2 * _rsx_inv_w(input.position))");
++        check("persp_helper",    hlsl, "#define _rsx_inv_w(p)");
++
++        put_word(prog + 12, 0);
++        rsx_fp_decompile(prog, sizeof(prog), CTRL_32BIT, hlsl, sizeof(hlsl));
++        check("persp_off_raw",    hlsl, "((input.tc2).xyzw).xy");
++        check_absent("persp_off_no_helper", hlsl, "_rsx_inv_w");
++    }
++
+     printf("\n===========================================\n");
+     printf("Results: %d passed, %d failed\n", g_pass, g_fail);
+     return g_fail ? 1 : 0;
 diff --git a/libs/video/tests/test_gcm_flip_wrap.c b/libs/video/tests/test_gcm_flip_wrap.c
 new file mode 100644
 index 0000000..4938056
@@ -2526,7 +2695,7 @@ index 0000000..b9405c6
 + }
 +}
 diff --git a/libs/video/tests/test_shader_msl.c b/libs/video/tests/test_shader_msl.c
-index 75c76dd..ea81db2 100644
+index 75c76dd..e094ede 100644
 --- a/libs/video/tests/test_shader_msl.c
 +++ b/libs/video/tests/test_shader_msl.c
 @@ -14,6 +14,7 @@
@@ -2537,7 +2706,26 @@ index 75c76dd..ea81db2 100644
   *   FP  TEX r0, TC0 unit 0 (END)           texture unit 0 sampled at texcoord0
   *   FP  TEX r0, TC0 unit 0, CUBE (END)     ... with unit 0 a cube map
   *   VP  MOV o0, v0 ; TXL o1, v8 (END)      a vertex texture sampled at t16
-@@ -122,7 +123,7 @@ int main(int argc, char** argv)
+@@ -48,6 +49,18 @@ static void check(const char* what, const char* text, const char* needle)
+     }
+ }
+ 
++static void check_absent(const char* what, const char* text, const char* needle)
++{
++    if (text && !strstr(text, needle)) {
++        printf("[PASS] %s -- no \"%s\"\n", what, needle);
++        g_pass++;
++    } else {
++        printf("[FAIL] %s -- unexpected \"%s\"\n", what, needle);
++        if (!g_verbose && text) printf("----\n%s\n----\n", text);
++        g_fail++;
++    }
++}
++
+ static void check_count(const char* what, int got, int want)
+ {
+     if (got == want) { printf("[PASS] %s: %d instruction(s)\n", what, got); g_pass++; }
+@@ -122,7 +135,7 @@ int main(int argc, char** argv)
          u32 nconst = 0;
          check_count("FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u /* r0 exports */, 0,
                                                         g_hlsl, sizeof g_hlsl, &nconst), 1);
@@ -2546,7 +2734,7 @@ index 75c76dd..ea81db2 100644
          check("FP HLSL", g_hlsl, "r[0].xyzw = _v.xyzw;");
          check("FP HLSL", g_hlsl, "cbuffer PSConstants : register(b1)");
          /* The alpha test patch must survive translation as well. */
-@@ -147,12 +148,78 @@ int main(int argc, char** argv)
+@@ -147,12 +160,78 @@ int main(int argc, char** argv)
          rsx_test_fp_mov_r0_col0(fp, RSX_TEST_FP_SWZ(2, 1, 0, 3));
          check_count("swizzled FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
                                                                  g_hlsl, sizeof g_hlsl, NULL), 1);
@@ -2626,7 +2814,7 @@ index 75c76dd..ea81db2 100644
      /* ---- fragment program: TEX r0, TC0 (unit 0) --------------------------- */
      {
          u8 fp[16];
-@@ -160,6 +227,8 @@ int main(int argc, char** argv)
+@@ -160,6 +239,8 @@ int main(int argc, char** argv)
          check_count("TEX FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
                                                             g_hlsl, sizeof g_hlsl, NULL), 1);
          check("TEX FP HLSL", g_hlsl, "rsx_tex[0].Sample(rsx_samp[0]");
@@ -2635,7 +2823,32 @@ index 75c76dd..ea81db2 100644
          check("TEX FP HLSL", g_hlsl, "r[0].xyzw = _v.xyzw;");
  
          if (translate("TEX FP", RSX_SHADER_STAGE_FRAGMENT) == 0) {
-@@ -255,7 +324,7 @@ int main(int argc, char** argv)
+@@ -236,6 +317,24 @@ int main(int argc, char** argv)
+         }
+     }
+ 
++    /* ---- fragment program: TEX r0, TC0 with perspective_corr --------------
++     * SRC2 bit 31 scales the texcoord by 1/w. Through glslang SV_POSITION.w
++     * becomes FragCoord.w, which is already 1/w, so the helper must resolve
++     * to the bare .w here (RSX_FRAGCOORD_W_IS_RCP) -- a division would undo
++     * the correction and inFAMOUS 2's river would sample outside its copy. */
++    {
++        u8 fp[16];
++        rsx_test_fp_tex_r0_tc0(fp, 0);
++        rsx_test_fp_put_word(fp + 12, 1u << 31);
++        check_count("persp TEX FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
++                                                                 g_hlsl, sizeof g_hlsl, NULL), 1);
++        check("persp TEX FP HLSL", g_hlsl, "(input.tc0 * _rsx_inv_w(input.position))");
++        if (translate("persp TEX FP", RSX_SHADER_STAGE_FRAGMENT) == 0) {
++            check("persp TEX FP MSL", g_msl, "gl_FragCoord.w");
++            check_absent("persp TEX FP MSL", g_msl, "1.0 / gl_FragCoord.w");
++        }
++    }
++
+     /* ---- fragment program writing TWO colour targets ---------------------
+      * MOV r0, COL0 ; MOV r2, COL0.zyxw (END). With 32-bit exports r0 is
+      * target A and r2 is target B, so the decompiler returns a struct of two
+@@ -255,7 +354,7 @@ int main(int argc, char** argv)
          check("MRT FP HLSL", g_hlsl, "PSOutput main(PSInput input) {");
          check("MRT FP HLSL", g_hlsl, "r[0].xyzw = _v.xyzw;");
          check("MRT FP HLSL", g_hlsl, "r[2].xyzw = _v.xyzw;");
