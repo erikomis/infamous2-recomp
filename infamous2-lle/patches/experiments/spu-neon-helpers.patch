@@ -1,0 +1,190 @@
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index 8d96768..6c9eb42 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -64,13 +64,16 @@ static inline uint32x4_t spu__ld(u128 a) { return vld1q_u32(a._u32); }
+ static inline u128 spu__st(uint32x4_t v) { u128 r; vst1q_u32(r._u32, v); return r; }
+ /* Byte permute in SPU byte order: result SPU byte i = a's SPU byte I[i], or 0
+  * when I[i] >= 16. SPU byte P is host byte P^3, so the host-order table index
+- * is rev32(I) ^ 3 (out-of-range stays out of range). */
++ * is rev32(I) ^ 3 (out-of-range stays out of range). Every caller builds I
++ * from spu__iota() with lane-wise ops and broadcast constants, which commute
++ * with rev32, so spu__iota() hands out the iota already in host order
++ * (rev32 of 0..15) and the permute skips the rev32: I here is host-ordered. */
+ static inline u128 spu__perm(u128 a, uint8x16_t I) {
+-    uint8x16_t ih = veorq_u8(vrev32q_u8(I), vdupq_n_u8(3));
++    uint8x16_t ih = veorq_u8(I, vdupq_n_u8(3));
+     u128 r; vst1q_u8(r._u8, vqtbl1q_u8(vld1q_u8(a._u8), ih)); return r;
+ }
+ static inline uint8x16_t spu__iota(void) {
+-    static const uint8_t k[16] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
++    static const uint8_t k[16] = {3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12};
+     return vld1q_u8(k);
+ }
+ #endif
+@@ -385,21 +388,23 @@ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
+ }
+ #elif defined(__ARM_NEON)
+ #include <arm_neon.h>
+-/* NEON version: tbl over the 32-byte {a,b} concatenation. SPU byte P lives at
+- * host byte P^3 (each word's bytes reversed), so rev32 into SPU order,
+- * select, and rev32 back. */
++/* NEON version: tbl over the 32-byte {a,b} concatenation, with no byte
++ * reversal. SPU byte P lives at host byte P^3 in every operand, so host byte h
++ * of the result is SPU byte h^3, whose selector is host byte h of c, and
++ * concat SPU byte s is host byte s^3 of {a,b}. Masking with 0x9F keeps bit 7,
++ * which puts every special selector out of tbl's range (0); the specials come
++ * from a second lookup on sel>>5: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80.
++ * Six operations instead of eleven (andrebrumdev's Ben 10 port measured -21%
++ * instructions on a shufb-heavy job with the same rewrite). */
+ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
++    static const uint8_t k_special[16] = { 0, 0, 0, 0, 0, 0, 0xFF, 0x80 };
+     uint8x16x2_t t;
+-    t.val[0] = vrev32q_u8(vld1q_u8(a._u8));
+-    t.val[1] = vrev32q_u8(vld1q_u8(b._u8));
+-    const uint8x16_t C = vrev32q_u8(vld1q_u8(c._u8));
+-    uint8x16_t r = vqtbl2q_u8(t, vandq_u8(C, vdupq_n_u8(0x1F)));
+-    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
+-    const uint8x16_t m80 = vtstq_u8(C, vdupq_n_u8(0x80));
+-    const uint8x16_t mC0 = vceqq_u8(vandq_u8(C, vdupq_n_u8(0xC0)), vdupq_n_u8(0xC0));
+-    const uint8x16_t mE0 = vceqq_u8(vandq_u8(C, vdupq_n_u8(0xE0)), vdupq_n_u8(0xE0));
+-    const uint8x16_t special = vbslq_u8(mE0, vdupq_n_u8(0x80), mC0);
+-    r = vrev32q_u8(vbslq_u8(m80, special, r));
++    t.val[0] = vld1q_u8(a._u8);
++    t.val[1] = vld1q_u8(b._u8);
++    const uint8x16_t C = vld1q_u8(c._u8);
++    const uint8x16_t idx = veorq_u8(vandq_u8(C, vdupq_n_u8(0x9F)), vdupq_n_u8(3));
++    const uint8x16_t r = vorrq_u8(vqtbl2q_u8(t, idx),
++                                  vqtbl1q_u8(vld1q_u8(k_special), vshrq_n_u8(C, 5)));
+     u128 out; vst1q_u8(out._u8, r); return out;
+ }
+ #endif
+@@ -851,10 +856,34 @@ static inline int64_t spu__sf_key(uint32_t x) {
+     return (x & 0x80000000u) ? -m : m;
+ }
+ static inline int64_t spu__sf_mag(uint32_t x) { return (x & 0x7F800000u) ? (int64_t)(x & 0x7FFFFFFFu) : 0; }
+-SPU__SF_V2(spu_fceq,  spu__sf_key(x) == spu__sf_key(y) ? 0xFFFFFFFFu : 0u)
+-SPU__SF_V2(spu_fcgt,  spu__sf_key(x) >  spu__sf_key(y) ? 0xFFFFFFFFu : 0u)
+-SPU__SF_V2(spu_fcmeq, spu__sf_mag(x) == spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
+-SPU__SF_V2(spu_fcmgt, spu__sf_mag(x) >  spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
++SPU__SF_V2(spu_fceq_ref,  spu__sf_key(x) == spu__sf_key(y) ? 0xFFFFFFFFu : 0u)
++SPU__SF_V2(spu_fcgt_ref,  spu__sf_key(x) >  spu__sf_key(y) ? 0xFFFFFFFFu : 0u)
++SPU__SF_V2(spu_fcmeq_ref, spu__sf_mag(x) == spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
++SPU__SF_V2(spu_fcmgt_ref, spu__sf_mag(x) >  spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
++#if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++/* The same keys in 32-bit lanes: a magnitude is below 2^31, so its negation
++ * fits an int32 and the signed compare orders exactly like the 64-bit one. */
++static inline int32x4_t spu__sf_mag4(u128 a) {
++    const uint32x4_t v = vld1q_u32(a._u32);
++    const uint32x4_t live = vtstq_u32(v, vdupq_n_u32(0x7F800000u));     /* exponent != 0 */
++    return vreinterpretq_s32_u32(vandq_u32(vandq_u32(v, vdupq_n_u32(0x7FFFFFFFu)), live));
++}
++static inline int32x4_t spu__sf_key4(u128 a) {
++    const int32x4_t m = spu__sf_mag4(a);
++    const uint32x4_t neg = vtstq_u32(vld1q_u32(a._u32), vdupq_n_u32(0x80000000u));
++    return vbslq_s32(neg, vnegq_s32(m), m);
++}
++static inline u128 spu__sf_mask(uint32x4_t m) { u128 r; vst1q_u32(r._u32, m); return r; }
++static inline u128 spu_fceq(u128 a, u128 b)  { return spu__sf_mask(vceqq_s32(spu__sf_key4(a), spu__sf_key4(b))); }
++static inline u128 spu_fcgt(u128 a, u128 b)  { return spu__sf_mask(vcgtq_s32(spu__sf_key4(a), spu__sf_key4(b))); }
++static inline u128 spu_fcmeq(u128 a, u128 b) { return spu__sf_mask(vceqq_s32(spu__sf_mag4(a), spu__sf_mag4(b))); }
++static inline u128 spu_fcmgt(u128 a, u128 b) { return spu__sf_mask(vcgtq_s32(spu__sf_mag4(a), spu__sf_mag4(b))); }
++#else
++static inline u128 spu_fceq(u128 a, u128 b)  { return spu_fceq_ref(a, b); }
++static inline u128 spu_fcgt(u128 a, u128 b)  { return spu_fcgt_ref(a, b); }
++static inline u128 spu_fcmeq(u128 a, u128 b) { return spu_fcmeq_ref(a, b); }
++static inline u128 spu_fcmgt(u128 a, u128 b) { return spu_fcmgt_ref(a, b); }
++#endif
+ #undef SPU__SF_V2
+ #undef SPU__SF_V3
+ 
+diff --git a/runtime/spu/tests/test_spu_fcmp_neon.c b/runtime/spu/tests/test_spu_fcmp_neon.c
+new file mode 100644
+index 0000000..7b7c081
+--- /dev/null
++++ b/runtime/spu/tests/test_spu_fcmp_neon.c
+@@ -0,0 +1,55 @@
++/* test_spu_fcmp_neon.c -- the NEON fceq/fcgt/fcmeq/fcmgt must match the scalar
++ * references (spu_*_ref) bit for bit: random words, plus every pairing of the
++ * edge classes (both zeros, denormals, the smallest/largest normals, infinities,
++ * NaNs, both signs). Build on arm64:
++ *   cc -O2 -I.. -I../../../include test_spu_fcmp_neon.c -o t && ./t */
++#include "../spu_helpers.h"
++#include <stdio.h>
++#include <stdlib.h>
++
++static const uint32_t k_edge[] = {
++    0x00000000u, 0x80000000u, 0x00000001u, 0x807FFFFFu, 0x007FFFFFu, 0x00800000u,
++    0x80800000u, 0x3F800000u, 0xBF800000u, 0x3F800001u, 0x7F7FFFFFu, 0xFF7FFFFFu,
++    0x7F800000u, 0xFF800000u, 0x7FC00000u, 0xFFFFFFFFu, 0x7FFFFFFFu, 0x00400000u,
++};
++#define NEDGE (int)(sizeof k_edge / sizeof k_edge[0])
++
++static uint32_t rnd32(void) { return ((uint32_t)rand() << 16) ^ (uint32_t)rand(); }
++
++static int check(u128 a, u128 b, long n)
++{
++#define CMP(op) do { u128 x = spu_##op(a, b), y = spu_##op##_ref(a, b); \
++        if (memcmp(&x, &y, 16)) { printf("test_spu_fcmp_neon: %s MISMATCH (case %ld) a=%08X b=%08X\n", #op, n, a._u32[0], b._u32[0]); return 1; } } while (0)
++    CMP(fceq); CMP(fcgt); CMP(fcmeq); CMP(fcmgt);
++#undef CMP
++    return 0;
++}
++
++int main(void)
++{
++#if !defined(__ARM_NEON)
++    puts("test_spu_fcmp_neon: not arm64, nothing to compare");
++    return 0;
++#else
++    long n = 0;
++    for (int i = 0; i < NEDGE; i++)
++        for (int j = 0; j < NEDGE; j++) {
++            u128 a, b;
++            for (int l = 0; l < 4; l++) { a._u32[l] = k_edge[(i + l) % NEDGE]; b._u32[l] = k_edge[(j + 3 * l) % NEDGE]; }
++            a._u32[0] = k_edge[i]; b._u32[0] = k_edge[j];
++            if (check(a, b, n++)) return 1;
++        }
++    srand(4242);
++    for (long it = 0; it < 4000000; it++) {
++        u128 a, b;
++        for (int l = 0; l < 4; l++) {
++            a._u32[l] = rnd32();
++            /* Half the time b is a near neighbour of a, so equal/adjacent keys occur. */
++            b._u32[l] = (it & 1) ? a._u32[l] + (uint32_t)(rand() % 5) - 2u : rnd32();
++        }
++        if (check(a, b, n++)) return 1;
++    }
++    printf("test_spu_fcmp_neon: ok (%ld cases x 4 ops)\n", n);
++    return 0;
++#endif
++}
+diff --git a/runtime/spu/tests/test_spu_shufb.c b/runtime/spu/tests/test_spu_shufb.c
+index 195c75e..1b0b9ad 100644
+--- a/runtime/spu/tests/test_spu_shufb.c
++++ b/runtime/spu/tests/test_spu_shufb.c
+@@ -25,7 +25,23 @@ int main(void)
+             return 1;
+         }
+     }
+-    puts("test_spu_shufb: ok (200000 random cases)");
++    /* Every selector value at every position, the other positions random. */
++    for (int pos = 0; pos < 16; pos++)
++        for (int v = 0; v < 256; v++)
++            for (int rep = 0; rep < 64; rep++) {
++                u128 a, b, c;
++                for (int i = 0; i < 16; i++) {
++                    a._u8[i] = (uint8_t)rand(); b._u8[i] = (uint8_t)rand();
++                    c._u8[i] = (uint8_t)rand();
++                }
++                c._u8[pos] = (uint8_t)v;
++                u128 x = spu_shufb(a, b, c), y = spu_shufb_ref(a, b, c);
++                if (memcmp(&x, &y, 16)) {
++                    printf("test_spu_shufb: MISMATCH selector 0x%02X at host byte %d\n", v, pos);
++                    return 1;
++                }
++            }
++    puts("test_spu_shufb: ok (200000 random cases + every selector at every position)");
+     return 0;
+ #endif
+ }
