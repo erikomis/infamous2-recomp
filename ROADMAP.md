@@ -168,7 +168,7 @@ Feitas neste port:
 - [x] `GCM_SEMA_ACQUIRE=1` + `GCM_SEMA_ACQUIRE_MS`: o walker do FIFO espera o ACQUIRE de semáforo (com limite), e o watchdog "stuck-get" não ressincroniza enquanto espera. Desligado por padrão. `GCM_SEMA_TRACE=<n>` mostra o protocolo de labels.
 - [x] cellPad: `PS3_PAD_SDL=0` ignora controles físicos; `tools/boot.sh` o liga, para uma execução sem janela não pegar o START do DualSense de quem está jogando.
 - [x] `ps3_ms_now()` devolvia 0 no macOS (upstream 91ee29f): os limites `GCM_PARK_GRACE_MS`/`GCM_SEMA_ACQUIRE_MS` nunca expiravam e os logs de taxa liam 0. Agora usa `CLOCK_MONOTONIC`.
-- [x] Máscara de cor e blend por alvo de MRT (`COLOR_MASK_MRT`/`BLEND_ENABLE_MRT`), atrás de `PS3RECOMP_METAL_MRT_MASK` (ver Gráficos).
+- [x] Máscara de cor e blend por alvo de MRT (`COLOR_MASK_MRT`/`BLEND_ENABLE_MRT`), padrão desde 2026-10-15 à noite, depois do ACQUIRE bloqueante (`PS3RECOMP_METAL_MRT_MASK=0` volta ao antigo) (ver Gráficos).
 
 PRs abertos do upstream aplicados:
 
