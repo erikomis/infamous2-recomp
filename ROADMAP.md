@@ -119,8 +119,9 @@ PRs abertos do upstream aplicados:
 
 ## Fase 6 — Desempenho e qualidade
 
-- [ ] Medir fps no gameplay; perfilar PPU e SPU.
-- [ ] Reduzir o que ainda passa pelo interpretador SPU.
+- [x] Medir fps no gameplay; perfilar PPU e SPU (`tools/profile_run.sh` + `tools/profile_report.py`, 2026-10-15, prólogo sem janela): menu ~30 fps; cutscene das docas e píer **11–13 fps**, estável em 12 (≈ 5 vblanks por quadro). A thread principal do PPU fica ~80% do tempo parada: 59% num laço `usleep(10)` (`func_00350CE0`) esperando zerar o contador de "SPU light tasks" pendentes, que a thread "SPU Light Task Kicker" vai submetendo. Os 5 SPUs de trabalho ficam a ~93%, e o tempo deles se divide em: código de job traduzido 54–70%, **helpers do runtime 23–31%** (`spu_ls_write128`, `spu_overlay_note_get`, `spu_task_launch_check`/`spu_check_stack_reset` a cada passo do drain, `mfc_do_transfer`, conversões de float), interpretador 3%, RSX/Metal 2–7%. Ou seja: o quadro é limitado pela vazão das SPUs, e um quarto a um terço dela vai para sobrecarga do runtime.
+- [ ] Reduzir o que ainda passa pelo interpretador SPU: no prólogo já é só 3% do tempo de SPU (quase tudo no stub de LS 0x3F000); em New Marais os jobs relocáveis foram traduzidos (7a74368) e o interpretado caiu de 14,8 G para 0,2 G instruções por 8 min. Falta perfilar New Marais com o mesmo relatório.
+- [ ] Cortar a sobrecarga do runtime SPU (23–31% do tempo das SPUs): checagens por passo do drain com flags de diagnóstico lidas atomicamente a cada vez, `spu_overlay_note_get` percorrendo todas as fontes de overlay registradas a cada GET, e helpers que o compilador não põe inline no código traduzido.
 - [ ] `libgcm_sys` e `libfs` em LLE (o RPCS3 roda os dois assim).
 - [ ] Saves: conferir criação, carregamento e local dos arquivos.
 - [x] Montagem do toolkit por script (`tools/setup_toolkit.sh`).
