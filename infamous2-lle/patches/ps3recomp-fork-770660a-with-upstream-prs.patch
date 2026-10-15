@@ -980,7 +980,7 @@ index 7718d14..0e689ed 100644
        }
        if (method == 0x1D74) {
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..8753832 100644
+index 9a76e67..cbfa75c 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -95,6 +95,7 @@ typedef struct {
@@ -1038,7 +1038,23 @@ index 9a76e67..8753832 100644
      if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
      if (e.handle || !evicted) { g.textures[index] = e; eng_tidx_rebuild(); }
      return e.handle;
-@@ -1225,8 +1238,45 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1172,6 +1185,7 @@ static const char* const kEngFixedVS =
+ "    float4 fog:FOG;\n"
+ "    float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
+ "    float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7;\n"
++"    float4 t8:TEXCOORD8; float4 t9:TEXCOORD9;\n"
+ "};\n"
+ "cbuffer VPConst : register(b0) {\n"
+ "    float4 vp_c[512];\n"
+@@ -1189,6 +1203,7 @@ static const char* const kEngFixedVS =
+ "    Out.col0 = input.a3; Out.col1 = float4(0,0,0,1); Out.fog = (float4)0;\n"
+ "    Out.t0 = input.a8; Out.t1 = (float4)0; Out.t2 = (float4)0; Out.t3 = (float4)0;\n"
+ "    Out.t4 = (float4)0; Out.t5 = (float4)0; Out.t6 = (float4)0; Out.t7 = (float4)0;\n"
++"    Out.t8 = (float4)0; Out.t9 = (float4)0;\n"
+ "    return Out;\n"
+ "}\n";
+ 
+@@ -1225,8 +1240,45 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vp_instrs = fixed ? 0 : vp->instrs, fp_size = fixed ? 0 : fp->size;
  
      const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
@@ -1084,7 +1100,7 @@ index 9a76e67..8753832 100644
  
      static const rsx_fp_constant_block no_constants;
      g.fp_constants = fixed ? &no_constants : &fp->constants;
-@@ -1247,6 +1297,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1247,6 +1299,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          int valid, fixed;
          u64 vp_hash, fp_struct;
          u32 fp_ctrl_key, cube_mask, vtex_mask, layout_mask, layout_stride, rt_count;
@@ -1094,7 +1110,7 @@ index 9a76e67..8753832 100644
          rsx_be_format rt_fmt;
          rsx_be_render_state rs;
          u64 key;
-@@ -1259,7 +1312,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1259,7 +1314,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          kmemo.fp_ctrl_key == fp_ctrl_key && kmemo.cube_mask == cube_mask &&
          kmemo.vtex_mask == vtex_mask && kmemo.layout_mask == layout->mask &&
          kmemo.layout_stride == layout->stride && kmemo.rt_count == rt_count &&
@@ -1107,7 +1123,7 @@ index 9a76e67..8753832 100644
          key = kmemo.key;
          goto key_done;
      }
-@@ -1271,7 +1328,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1271,7 +1330,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          key = eng_fnv1a(&vp->hash, sizeof vp->hash, key);
          key = eng_fnv1a(&fp->structural, sizeof fp->structural, key);
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
@@ -1121,7 +1137,7 @@ index 9a76e67..8753832 100644
          key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
-@@ -1285,6 +1348,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1285,6 +1350,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      kmemo.fp_ctrl_key = fp_ctrl_key; kmemo.cube_mask = cube_mask; kmemo.vtex_mask = vtex_mask;
      kmemo.layout_mask = layout->mask; kmemo.layout_stride = layout->stride;
      kmemo.rt_count = rt_count; kmemo.rt_fmt = rt_fmt; memcpy(&kmemo.rs, rs, sizeof *rs);
@@ -1131,7 +1147,7 @@ index 9a76e67..8753832 100644
      kmemo.key = key;
  key_done:;
  
-@@ -1317,9 +1383,13 @@ key_done:;
+@@ -1317,9 +1385,13 @@ key_done:;
          vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
                                           layout->mask, s_vs_hlsl,
                                           sizeof s_vs_hlsl);
@@ -1147,7 +1163,7 @@ index 9a76e67..8753832 100644
          if (fi > 0 && rs->alpha_test_enable &&
              rsx_fp_apply_alpha_test_buffered(s_ps_hlsl, sizeof s_ps_hlsl,
                                               rs->alpha_func) < 0)
-@@ -1805,6 +1875,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1805,6 +1877,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                       t.remap & 0xFFFFu, t.format)
                  : 0;
              textures[u] = view ? view : g.surfaces[sampled].handle;
@@ -1165,7 +1181,7 @@ index 9a76e67..8753832 100644
              continue;
          }
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
-@@ -2126,8 +2207,10 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2126,8 +2209,10 @@ static void sink_end(void* user, const rsx_dispatch* r)
          ds.ns_rest += eng_ds_now() - ds_t0;
      }
  
@@ -1177,7 +1193,7 @@ index 9a76e67..8753832 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2531,6 +2614,95 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +2616,95 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
@@ -1296,7 +1312,7 @@ index e54d615..8b42bd9 100644
   * itself rather than through the FIFO's 0xE944. */
  void rsx_draw_engine_present(void);
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index 933abcb..8408f72 100644
+index 933abcb..c943151 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
 @@ -71,8 +71,8 @@ enum {
@@ -1321,7 +1337,7 @@ index 933abcb..8408f72 100644
      case OP_FENCT: return "FENCT"; case OP_FENCB: return "FENCB";
      default:     return "?";
      }
-@@ -359,8 +363,10 @@ static const char* input_expr(u32 input_src)
+@@ -359,12 +363,21 @@ static const char* input_expr(u32 input_src)
          "input.tc4", "input.tc5", "input.tc6", "input.tc7" };
      switch (input_src) {
      case 0x0: return "input.position"; /* WPOS */
@@ -1332,9 +1348,21 @@ index 933abcb..8408f72 100644
 +    case 0x1: return "saturate(input.col0)"; /* COL0 */
 +    case 0x2: return "saturate(input.col1)"; /* COL1 */
      case 0x3: return "input.fog";      /* FOGC */
++    case 0xC: return "input.tc8";      /* TC8 (VP o15) */
++    case 0xD: return "input.tc9";      /* TC9 (VP o6) */
++    /* FACING: +1 on a front face, -1 on a back face (RPCS3's `ssa`). Two-sided
++     * materials multiply the interpolated normal by it; read as zero, inFAMOUS
++     * 2's foliage and character heads normalised a null vector into the
++     * G-buffer and lit black. */
++    case 0xE: return "(input._rsx_front ? float4(1,1,1,1) : float4(-1,-1,-1,-1))";
      default:
          if (input_src >= 0x4 && input_src <= 0xB) return tc[input_src - 0x4]; /* TC0..7 */
-@@ -445,12 +451,148 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+-        return "float4(0,0,0,0)";      /* TC8/TC9/FACING not plumbed */
++        return "float4(0,0,0,0)";
+     }
+ }
+ 
+@@ -445,12 +458,148 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
      return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
  }
  
@@ -1485,7 +1513,7 @@ index 933abcb..8408f72 100644
      u32 buffered_constant_count = 0;
      if (buffered) {
          rsx_fp_constant_block constants;
-@@ -517,6 +659,14 @@ static int rsx_fp_decompile_internal(
+@@ -517,6 +666,14 @@ static int rsx_fp_decompile_internal(
          u32 opcode    = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
          u32 input_src = (w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT;
          u32 tex_unit  = (w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT;
@@ -1500,7 +1528,7 @@ index 933abcb..8408f72 100644
          int is_branch = (w2 & FP_BRANCH) ? 1 : 0;
  
          /* Execution condition (exec_if) + condition-code write (set_cond).
-@@ -655,6 +805,18 @@ static int rsx_fp_decompile_internal(
+@@ -655,6 +812,18 @@ static int rsx_fp_decompile_internal(
          case OP_FRC: snprintf(rhs, sizeof(rhs), "frac(%s)", a); break;
          case OP_FLR: snprintf(rhs, sizeof(rhs), "floor(%s)", a); break;
          case OP_RCP: snprintf(rhs, sizeof(rhs), "(1.0 / (%s).x)", a); break;
@@ -1519,7 +1547,7 @@ index 933abcb..8408f72 100644
          /* Real RSX RSQ ignores the input's sign — 1/sqrt(|x|), not 1/sqrt(x)
           * (oracle: RPCS3 FragmentProgramDecompiler.cpp, "RSQ ignores the sign
           * of the inputs (Metro Last Light, GTA4)"). The strict form NaN'd the
-@@ -702,6 +864,10 @@ static int rsx_fp_decompile_internal(
+@@ -702,6 +871,10 @@ static int rsx_fp_decompile_internal(
          case OP_SNE: snprintf(rhs, sizeof(rhs), "(float4)((%s) != (%s))", a, b); break;
          case OP_SEQ: snprintf(rhs, sizeof(rhs), "(float4)((%s) == (%s))", a, b); break;
          case OP_TEX:
@@ -1530,7 +1558,7 @@ index 933abcb..8408f72 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Cubemap: sample with the full 3-component direction vector. */
                  snprintf(rhs, sizeof(rhs),
-@@ -714,6 +880,10 @@ static int rsx_fp_decompile_internal(
+@@ -714,6 +887,10 @@ static int rsx_fp_decompile_internal(
                           "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
              break;
          case OP_TXP:
@@ -1541,7 +1569,7 @@ index 933abcb..8408f72 100644
              if ((tex_cube_mask >> tex_unit) & 1u)
                  /* Projective divide is meaningless for a cube lookup; sample
                   * the direction directly. */
-@@ -760,14 +930,37 @@ static int rsx_fp_decompile_internal(
+@@ -760,14 +937,37 @@ static int rsx_fp_decompile_internal(
              }
              handled = 0;   /* no destination write */
              break;
@@ -1583,7 +1611,7 @@ index 933abcb..8408f72 100644
          int has_dest = !(w0 & FP_OUT_NONE);
          if (handled && (has_dest || set_cond)) {
              u32 dst_idx = (w0 & FP_OUT_REG_MASK) >> FP_OUT_REG_SHIFT;
-@@ -817,13 +1010,17 @@ static int rsx_fp_decompile_internal(
+@@ -817,13 +1017,17 @@ static int rsx_fp_decompile_internal(
                                   "      /* exec_if=none: write suppressed */\n");
                      } else {
                          /* Per-component select gated by the CC sign test.
@@ -1605,7 +1633,7 @@ index 933abcb..8408f72 100644
                      }
                      out_puts(&o, buf);
                  }
-@@ -907,7 +1104,7 @@ static int rsx_fp_decompile_internal(
+@@ -907,7 +1111,7 @@ static int rsx_fp_decompile_internal(
      /* Preamble: PSInput matches the backend's placeholder layout; temp/half
       * register files; texture+sampler banks for TEX. Built here, in front of
       * the body, now that the return type is known. */
@@ -1614,7 +1642,25 @@ index 933abcb..8408f72 100644
      Out p = { preamble, sizeof(preamble), 0, 1 };
      preamble[0] = '\0';
      out_puts(&p,
-@@ -945,6 +1142,26 @@ static int rsx_fp_decompile_internal(
+@@ -915,8 +1119,15 @@ static int rsx_fp_decompile_internal(
+         "    float4 position : SV_POSITION; float4 col0 : COLOR0; float4 col1 : COLOR1;\n"
+         "    float4 fog : FOG;\n"
+         "    float4 tc0:TEXCOORD0; float4 tc1:TEXCOORD1; float4 tc2:TEXCOORD2; float4 tc3:TEXCOORD3;\n"
+-        "    float4 tc4:TEXCOORD4; float4 tc5:TEXCOORD5; float4 tc6:TEXCOORD6; float4 tc7:TEXCOORD7;\n"
+-        "};\n");
++        "    float4 tc4:TEXCOORD4; float4 tc5:TEXCOORD5; float4 tc6:TEXCOORD6; float4 tc7:TEXCOORD7;\n");
++    /* TC8/TC9 and the face flag only where the body reads them, so every other
++     * program stays byte-identical (and keeps its cached pipeline). TC8 and
++     * TC9 follow TC7 so the earlier interpolants keep their locations. */
++    if (strstr(o.p, "input.tc8") || strstr(o.p, "input.tc9"))
++        out_puts(&p, "    float4 tc8:TEXCOORD8; float4 tc9:TEXCOORD9;\n");
++    if (strstr(o.p, "input._rsx_front"))
++        out_puts(&p, "    bool _rsx_front : SV_IsFrontFace;\n");
++    out_puts(&p, "};\n");
+     /* Texture bank. With no cube units (the default) emit the exact legacy
+      * array declaration so 2D-only programs are byte-identical. When any unit
+      * is a cubemap, declare each unit individually at its t-register so the
+@@ -945,6 +1156,26 @@ static int rsx_fp_decompile_internal(
              buffered_constant_count ? buffered_constant_count : 1u);
          out_puts(&p, constants_decl);
      }
@@ -1641,7 +1687,7 @@ index 933abcb..8408f72 100644
      if (targets == 1) {
          out_puts(&p, "float4 main(PSInput input) : SV_TARGET {\n");
      } else {
-@@ -970,7 +1187,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
+@@ -970,7 +1201,7 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
                          u32 tex_cube_mask, char* out, u32 out_size)
  {
      return rsx_fp_decompile_internal(
@@ -1650,7 +1696,7 @@ index 933abcb..8408f72 100644
  }
  
  int rsx_fp_decompile_buffered_ex(
-@@ -978,10 +1195,28 @@ int rsx_fp_decompile_buffered_ex(
+@@ -978,10 +1209,28 @@ int rsx_fp_decompile_buffered_ex(
      char* out, u32 out_size, u32* out_constant_count)
  {
      return rsx_fp_decompile_internal(
@@ -1680,7 +1726,7 @@ index 933abcb..8408f72 100644
  static float fp_half_to_float(u16 h)
  {
      const u32 sign = (u32)(h & 0x8000u) << 16;
-@@ -1294,3 +1529,74 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
+@@ -1294,3 +1543,74 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
      }
      return patched;
  }
@@ -2233,6 +2279,37 @@ index ce99e68..24963a8 100644
  /* TEX_RGBA: treat A8R8G8B8 source bytes as already R,G,B,A and copy them
   * straight through.
   *
+diff --git a/libs/video/rsx_vp_decompiler.c b/libs/video/rsx_vp_decompiler.c
+index 00067b0..f60f79e 100644
+--- a/libs/video/rsx_vp_decompiler.c
++++ b/libs/video/rsx_vp_decompiler.c
+@@ -624,6 +624,7 @@ static int rsx_vp_decompile_impl(
+         "    float4 fog:FOG;\n"
+         "    float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
+         "    float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7;\n"
++        "    float4 t8:TEXCOORD8; float4 t9:TEXCOORD9;\n"
+         "};\n"
+         /* b0: 512 vec4 transform constants + the RSX viewport transform,
+          * pre-mapped by the harness to D3D clip space:
+@@ -689,7 +690,9 @@ static int rsx_vp_decompile_impl(
+     if (has_flow) emit(&o, "    }\n");
+ 
+     /* Output register map (see header comment): o0 = HPOS through the RSX
+-     * viewport transform, o1/o2 = colors, o5.x = fog, o7..o14 = TEX0..7. */
++     * viewport transform, o1/o2 = colors, o5.x = fog, o7..o14 = TEX0..7,
++     * o15 = TEX8, o6 = TEX9 (RPCS3's reg_table: TEX9 shares the point-size
++     * register). */
+     emit(&o,
+         "    VSOutput Out;\n"
+         "    float4 _p = o[0];\n"
+@@ -697,6 +700,7 @@ static int rsx_vp_decompile_impl(
+         "    Out.col0 = o[1]; Out.col1 = o[2]; Out.fog = o[5].xxxx;\n"
+         "    Out.t0=o[7];  Out.t1=o[8];  Out.t2=o[9];  Out.t3=o[10];\n"
+         "    Out.t4=o[11]; Out.t5=o[12]; Out.t6=o[13]; Out.t7=o[14];\n"
++        "    Out.t8=o[15]; Out.t9=o[6];\n"
+         "    return Out;\n"
+         "}\n");
+ 
 diff --git a/libs/video/tests/test_color_input_metal.m b/libs/video/tests/test_color_input_metal.m
 new file mode 100644
 index 0000000..9b069a1
@@ -2449,7 +2526,7 @@ index 0000000..b9405c6
 + }
 +}
 diff --git a/libs/video/tests/test_shader_msl.c b/libs/video/tests/test_shader_msl.c
-index 75c76dd..8ce844d 100644
+index 75c76dd..ea81db2 100644
 --- a/libs/video/tests/test_shader_msl.c
 +++ b/libs/video/tests/test_shader_msl.c
 @@ -14,6 +14,7 @@
@@ -2469,7 +2546,7 @@ index 75c76dd..8ce844d 100644
          check("FP HLSL", g_hlsl, "r[0].xyzw = _v.xyzw;");
          check("FP HLSL", g_hlsl, "cbuffer PSConstants : register(b1)");
          /* The alpha test patch must survive translation as well. */
-@@ -147,12 +148,35 @@ int main(int argc, char** argv)
+@@ -147,12 +148,78 @@ int main(int argc, char** argv)
          rsx_test_fp_mov_r0_col0(fp, RSX_TEST_FP_SWZ(2, 1, 0, 3));
          check_count("swizzled FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
                                                                  g_hlsl, sizeof g_hlsl, NULL), 1);
@@ -2503,10 +2580,53 @@ index 75c76dd..8ce844d 100644
 +        }
 +    }
 +
++    /* ---- fragment program: MOV r0, FACING ---------------------------------
++     * Input 0xE is the face flag, +1 front / -1 back. Two-sided materials
++     * multiply the normal by it; it used to read as zero. */
++    {
++        u8 fp[16];
++        rsx_test_fp_instr(fp,
++                          RSX_TEST_FP_OPC(RSX_TEST_FP_OP_MOV) | RSX_TEST_FP_MASK_XYZW |
++                          RSX_TEST_FP_INSRC(0xE) | RSX_TEST_FP_END,
++                          RSX_TEST_FP_SRC_INPUT | RSX_TEST_FP_SWZ_IDENT);
++        check_count("FACING FP",
++                    rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
++                                                 g_hlsl, sizeof g_hlsl, NULL), 1);
++        check("FACING FP HLSL", g_hlsl, "bool _rsx_front : SV_IsFrontFace;");
++        check("FACING FP HLSL", g_hlsl, "input._rsx_front ? float4(1,1,1,1) : float4(-1,-1,-1,-1)");
++        if (translate("FACING FP", RSX_SHADER_STAGE_FRAGMENT) == 0)
++            check("FACING FP MSL", g_msl, "[[front_facing]]");
++    }
++
++    /* ---- fragment program: MOV r0, TC8 / TC9 ------------------------------
++     * They follow TEXCOORD7 (locn10), and the VP writes them from o15 / o6. */
++    for (u32 n = 8; n <= 9; n++) {
++        u8 fp[16];
++        rsx_test_fp_instr(fp,
++                          RSX_TEST_FP_OPC(RSX_TEST_FP_OP_MOV) | RSX_TEST_FP_MASK_XYZW |
++                          RSX_TEST_FP_INSRC(0xC + (n - 8)) | RSX_TEST_FP_END,
++                          RSX_TEST_FP_SRC_INPUT | RSX_TEST_FP_SWZ_IDENT);
++        check_count("TC8/9 FP",
++                    rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
++                                                 g_hlsl, sizeof g_hlsl, NULL), 1);
++        check("TC8/9 FP HLSL", g_hlsl, n == 8 ? "(input.tc8).xyzw" : "(input.tc9).xyzw");
++        check("TC8/9 FP HLSL", g_hlsl, "float4 tc8:TEXCOORD8; float4 tc9:TEXCOORD9;");
++        if (translate("TC8/9 FP", RSX_SHADER_STAGE_FRAGMENT) == 0)
++            check("TC8/9 FP MSL", g_msl, n == 8 ? "[[user(locn11)]]" : "[[user(locn12)]]");
++    }
++    {
++        u8 vp[16];
++        rsx_test_vp_mov_out(vp, 0, RSX_TEST_VP_SWZ_IDENT, 15, 1);   /* MOV o15, v0, END */
++        rsx_vp_decompile(vp, sizeof vp, g_hlsl, sizeof g_hlsl);
++        check("TC8 VP HLSL", g_hlsl, "Out.t8=o[15]; Out.t9=o[6];");
++        if (translate("TC8 VP", RSX_SHADER_STAGE_VERTEX) == 0)
++            check("TC8 VP MSL", g_msl, "[[user(locn11)]]");
++    }
++
      /* ---- fragment program: TEX r0, TC0 (unit 0) --------------------------- */
      {
          u8 fp[16];
-@@ -160,6 +184,8 @@ int main(int argc, char** argv)
+@@ -160,6 +227,8 @@ int main(int argc, char** argv)
          check_count("TEX FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
                                                             g_hlsl, sizeof g_hlsl, NULL), 1);
          check("TEX FP HLSL", g_hlsl, "rsx_tex[0].Sample(rsx_samp[0]");
@@ -2515,7 +2635,7 @@ index 75c76dd..8ce844d 100644
          check("TEX FP HLSL", g_hlsl, "r[0].xyzw = _v.xyzw;");
  
          if (translate("TEX FP", RSX_SHADER_STAGE_FRAGMENT) == 0) {
-@@ -255,7 +281,7 @@ int main(int argc, char** argv)
+@@ -255,7 +324,7 @@ int main(int argc, char** argv)
          check("MRT FP HLSL", g_hlsl, "PSOutput main(PSInput input) {");
          check("MRT FP HLSL", g_hlsl, "r[0].xyzw = _v.xyzw;");
          check("MRT FP HLSL", g_hlsl, "r[2].xyzw = _v.xyzw;");
