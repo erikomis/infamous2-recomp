@@ -15,5 +15,14 @@ export PS3_HDD0_ROOT="$vfs/dev_hdd0"
 export PS3_DEV_FLASH="${PS3_DEV_FLASH:-$HOME/Library/Application Support/rpcs3/dev_flash}"
 export PS3_TITLE="inFAMOUS 2"
 [ -n "$HEADLESS" ] && export PS3RECOMP_METAL_HEADLESS=1
+# The RSX must block on its semaphore ACQUIREs: each frame the FIFO acquires
+# the label the SPU light task writes when it has turned the normals/depth
+# copies in XDR into the light buffers, and only then composites. With the
+# toolkit default (acquires fall through) the composite sampled the normals
+# copy instead: glossy props blew out white, lighting came out in normal
+# colours with per-target MRT masks, and the SPU's 32x40 tiles showed. The
+# bound keeps a label nobody services from wedging the FIFO (none did here).
+export GCM_SEMA_ACQUIRE="${GCM_SEMA_ACQUIRE:-1}"
+export GCM_SEMA_ACQUIRE_MS="${GCM_SEMA_ACQUIRE_MS:-200}"
 
 exec "$here/build/Infamous2Recomp" "$vfs/PS3_GAME/USRDIR/EBOOT.elf" "$@"
