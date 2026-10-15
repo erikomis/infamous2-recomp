@@ -93,7 +93,7 @@ PRs abertos do upstream aplicados:
 
 - [x] Teclado como controle (já existe no toolkit, `cellPad.c`): analógico esquerdo W/A/S/D, direito I/J/K/L, D-pad nas setas; ✕ Espaço, ○ Q, □ E, △ R; L1 U, R1 O, L2 Y, R2 P, L3 G, R3 H; START Return, SELECT Tab. A tecla X não faz nada. O mouse ainda não está mapeado.
 - [ ] Testar o teclado com janela (`./run.sh`) do menu ao gameplay.
-- [ ] Mouse para a câmera: mapear o movimento para o analógico direito, com sensibilidade e inversão configuráveis; botões do mouse para R1/R2 (raios e granadas).
+- [x] Mouse para a câmera (2026-10-14): com a janela em foco, o movimento vira o analógico direito, proporcional à velocidade; botão esquerdo = R1 (raio), direito = R2 (granada), do meio = L1 (mirar). Configuração por variável de ambiente: `PS3_MOUSE_SENS=<fator>` (padrão 1.0), `PS3_MOUSE_INVERT_Y=1`, `PS3_MOUSE_DEADZONE=<0-120>` (padrão 30), `PS3_MOUSE=0` desliga; `PS3_MOUSE_LOG=1` registra o que chega. Junto: teclado e mouse deixaram de ser desligados quando há um controle físico conectado; agora somam com ele (um DualSense pareado e parado fazia todas as teclas não responderem).
 - [ ] Captura do cursor na janela e atalho para soltá-lo.
 - [ ] Mapeamento configurável (arquivo de configuração em vez de teclas fixas no código).
 - [ ] Controle físico via SDL2 (DualShock/DualSense/Xbox) testado, incluindo vibração.

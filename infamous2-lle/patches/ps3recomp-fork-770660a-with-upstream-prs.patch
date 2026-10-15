@@ -438,10 +438,143 @@ index d403baf..76c5505 100644
 +
  #endif /* PS3RECOMP_CELL_GEM_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 621d53e..322ef3b 100644
+index 621d53e..14c2a3b 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
-@@ -730,9 +730,12 @@ skip_inject: ;
+@@ -296,6 +296,8 @@ static void pad_poll_sdl2(void)
+             /* Try to open newly connected controllers */
+             if (SDL_IsGameController(i)) {
+                 s_sdl_controllers[i] = SDL_GameControllerOpen(i);
++                fprintf(stderr, "[cellPad] SDL controller %d connected: %s\n", i,
++                        s_sdl_controllers[i] ? SDL_GameControllerName(s_sdl_controllers[i]) : "(open failed)");
+             }
+         }
+ 
+@@ -372,6 +374,9 @@ static void pad_init_backend(void)
+     /* Open any controllers already connected */
+     int num = SDL_NumJoysticks();
+     for (int i = 0; i < num && i < PAD_MAX_HOST_PORTS; i++) {
++        fprintf(stderr, "[cellPad] SDL joystick %d: %s (game controller: %s)\n", i,
++                SDL_JoystickNameForIndex(i) ? SDL_JoystickNameForIndex(i) : "?",
++                SDL_IsGameController(i) ? "yes" : "no");
+         if (SDL_IsGameController(i)) {
+             s_sdl_controllers[i] = SDL_GameControllerOpen(i);
+         }
+@@ -497,7 +502,68 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
+  *   L1 U  R1 O  L2 Y  R2 P  L3 G  R3 H              START Return/Enter  SELECT Tab */
+ volatile uint32_t g_pad_host_keys[4];
+ static int pad_key(unsigned vk) { return (g_pad_host_keys[(vk >> 5) & 3] >> (vk & 31)) & 1; }
+-static void pad_poll_keys(void)
++
++/* Mouse camera (macOS window). The window adds motion in 1/16 px to
++ * g_pad_mouse_dx/dy and keeps button bits in g_pad_mouse_buttons (1 left,
++ * 2 right, 4 middle). A stick is a rate, a mouse a displacement, so the right
++ * stick deflects in proportion to the mouse's speed since the last poll, with
++ * a light smoothing so a frame without motion events does not snap it home,
++ * and starts past the title's own dead zone so slow moves still turn.
++ *   PS3_MOUSE=0              off (keys I/J/K/L only)
++ *   PS3_MOUSE_SENS=<f>       speed multiplier (default 1.0)
++ *   PS3_MOUSE_INVERT_Y=1     moving the mouse up looks down
++ *   PS3_MOUSE_DEADZONE=<n>   first stick step past centre, 0-120 (default 30)
++ * Left button = R1 (bolt), right = R2 (grenade), middle = L1 (aim). */
++volatile int32_t  g_pad_mouse_dx, g_pad_mouse_dy;
++volatile uint32_t g_pad_mouse_buttons;
++static int pad_mouse_axis(float v, int dz)
++{
++    if (v > -0.5f && v < 0.5f) return 128;
++    float m = (v < 0 ? -v : v) + (float)dz;
++    if (m > 127.0f) m = 127.0f;
++    return v < 0 ? 128 - (int)(m + 0.5f) - (m >= 127.0f ? 1 : 0) : 128 + (int)(m + 0.5f);
++}
++static void pad_poll_mouse(u16* btns, int* rx, int* ry)
++{
++    static int on = -1, invert, dz; static float sens, sx, sy; static unsigned long long last;
++    if (on < 0) {
++        const char* e = getenv("PS3_MOUSE");        on = e ? atoi(e) != 0 : 1;
++        e = getenv("PS3_MOUSE_SENS");               sens = e ? (float)atof(e) : 1.0f;
++        if (!(sens > 0.0f)) sens = 1.0f;
++        e = getenv("PS3_MOUSE_INVERT_Y");           invert = e ? atoi(e) != 0 : 0;
++        e = getenv("PS3_MOUSE_DEADZONE");           dz = e ? atoi(e) : 30;
++        if (dz < 0) dz = 0; if (dz > 120) dz = 120;
++    }
++    if (!on) return;
++    const uint32_t b = g_pad_mouse_buttons;
++    if (b & 1u) *btns |= CELL_PAD_CTRL_R1;
++    if (b & 2u) *btns |= CELL_PAD_CTRL_R2;
++    if (b & 4u) *btns |= CELL_PAD_CTRL_L1;
++    const int32_t dx = __atomic_exchange_n(&g_pad_mouse_dx, 0, __ATOMIC_RELAXED);
++    const int32_t dy = __atomic_exchange_n(&g_pad_mouse_dy, 0, __ATOMIC_RELAXED);
++    const unsigned long long now = pad_now_ms();
++    unsigned long long dt = last ? now - last : 16;
++    last = now;
++    if (dt < 1) dt = 1;
++    if (dt > 100) dt = 100;                 /* a long gap is not one slow move */
++    /* px per ms; 1.5 px/ms (a brisk flick) reaches full deflection at SENS 1. */
++    const float k = 127.0f / 1.5f * sens;
++    const float vx = (float)dx / 16.0f / (float)dt * k;
++    const float vy = (float)dy / 16.0f / (float)dt * k * (invert ? -1.0f : 1.0f);
++    sx = sx * 0.35f + vx * 0.65f;
++    sy = sy * 0.35f + vy * 0.65f;
++    if (sx > -0.5f && sx < 0.5f) sx = 0.0f;
++    if (sy > -0.5f && sy < 0.5f) sy = 0.0f;
++    if (sx != 0.0f) *rx = pad_mouse_axis(sx, dz);
++    if (sy != 0.0f) *ry = pad_mouse_axis(sy, dz);   /* NSEvent deltaY > 0 = down, as the stick */
++    { static int logged; static int lrx = 128, lry = 128;
++      static uint32_t lb;
++      if (getenv("PS3_MOUSE_LOG") && logged < 400 && (*rx != lrx || *ry != lry || b != lb)) {
++          logged++; lrx = *rx; lry = *ry; lb = b;
++          printf("[cellPad] mouse: d=(%d,%d)/16 px in %llu ms -> rx=%d ry=%d buttons=0x%X\n",
++                 dx, dy, dt, *rx, *ry, b); fflush(stdout); } }
++}
++static void pad_poll_keys(int merge)
+ {
+     static const struct { unsigned vk; u16 btn; } map[] = {
+         {0x7E, CELL_PAD_CTRL_UP}, {0x7D, CELL_PAD_CTRL_DOWN},
+@@ -518,6 +584,7 @@ static void pad_poll_keys(void)
+     int ly = 128 + (pad_key(0x01) ? 127 : 0) - (pad_key(0x0D) ? 128 : 0);   /* S, W */
+     int rx = 128 + (pad_key(0x25) ? 127 : 0) - (pad_key(0x26) ? 128 : 0);   /* L, J */
+     int ry = 128 + (pad_key(0x28) ? 127 : 0) - (pad_key(0x22) ? 128 : 0);   /* K, I */
++    pad_poll_mouse(&btns, &rx, &ry);   /* mouse motion wins over I/J/K/L while it moves */
+     /* PS3_PAD_FILE: its buttons are held in addition to the keys; an
+      * off-centre file axis wins over the keyboard's. */
+     { u16 fb; int flx, fly, frx, fry;
+@@ -528,6 +595,22 @@ static void pad_poll_keys(void)
+       if (frx != 128) rx = frx;
+       if (fry != 128) ry = fry; }
+     PadHostState* hs = &s_host_state[0];
++    /* With a real pad on port 0 (SDL filled hs this poll), the keyboard and
++     * mouse add to it instead of being switched off: buttons are OR-ed, and
++     * an axis the keys or mouse move wins over the pad's. A paired DualSense
++     * that nobody was holding used to make every key do nothing. */
++    if (merge) {
++        btns |= hs->buttons;
++        if (lx == 128) lx = hs->analog_lx;
++        if (ly == 128) ly = hs->analog_ly;
++        if (rx == 128) rx = hs->analog_rx;
++        if (ry == 128) ry = hs->analog_ry;
++        const u8 l2 = hs->trigger_l2, r2 = hs->trigger_r2;
++        pad_apply(hs, btns, lx, ly, rx, ry);
++        if (l2 > hs->trigger_l2) hs->trigger_l2 = l2;   /* keep an analog trigger's own value */
++        if (r2 > hs->trigger_r2) hs->trigger_r2 = r2;
++        return;
++    }
+     if (btns != hs->buttons) { printf("[cellPad] keyboard: buttons 0x%04X\n", btns); fflush(stdout); }
+     pad_apply(hs, btns, lx, ly, rx, ry);
+ }
+@@ -553,9 +636,9 @@ static void pad_poll_backend(void)
+ #ifdef _WIN32
+     if (!s_host_state[0].connected) pad_poll_keyboard();
+ #endif
+-    { static int real0 = 0;
+-      if (s_host_state[0].connected && !getenv("PS3_PAD_FILE")) real0 = 1;
+-      if (!real0) pad_poll_keys(); }   /* keyboard, plus PS3_PAD_FILE if set */
++    /* Keyboard, mouse and PS3_PAD_FILE always count; with a real pad on port 0
++     * they are merged into it (pad_poll_keys). */
++    pad_poll_keys(s_host_state[0].connected);
+ }
+ 
+ /* ---------------------------------------------------------------------------
+@@ -730,9 +813,12 @@ skip_inject: ;
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
       * (DIGITAL2 << 8) | DIGITAL1: START 0x0008, UP 0x0010, DOWN 0x0040,
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
@@ -455,7 +588,7 @@ index 621d53e..322ef3b 100644
        static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
        if (s_sc < 0) {
            s_sc = 0;
-@@ -744,7 +747,9 @@ skip_inject: ;
+@@ -744,7 +830,9 @@ skip_inject: ;
                    double t = strtod(p, (char**)&p);
                    if (*p == ':') p++;
                    unsigned m = (unsigned)strtoul(p, (char**)&p, 0);
@@ -466,7 +599,7 @@ index 621d53e..322ef3b 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
-@@ -761,13 +766,18 @@ skip_inject: ;
+@@ -761,13 +849,18 @@ skip_inject: ;
            static int fired[32], held[32];
            for (int i = 0; i < n_ev; i++) {
                if (!fired[i] && now >= ev[i].t) { fired[i] = 1; held[i] = 40; }
@@ -488,7 +621,7 @@ index 621d53e..322ef3b 100644
                }
            }
        } }
-@@ -817,20 +827,32 @@ skip_inject: ;
+@@ -817,20 +910,32 @@ skip_inject: ;
       * started -- which can leave the subject of the demo off-screen or too far
       * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
      { static int s_st = -1;
@@ -1642,10 +1775,19 @@ index 7161c4e..0302ff3 100644
   * Useful for disassembly/logging. */
  const char* rsx_fp_opcode_name(u32 opcode);
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..c76ebe4 100644
+index 98db285..68453b0 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
-@@ -742,6 +742,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
+@@ -475,6 +475,8 @@ static int create_window_impl(const char* title)
+     if (!s_window) return -1;
+ 
+     [s_window setTitle:[NSString stringWithUTF8String:(title ? title : "ps3recomp")]];
++    /* Mouse-moved events are off by default; the mouse camera (cellPad.c) needs them. */
++    [s_window setAcceptsMouseMovedEvents:YES];
+     [s_window center];
+ 
+     s_layer = [CAMetalLayer layer];
+@@ -742,6 +744,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
   * and sampled with a direction rather than a 2D coordinate, so it changes the
   * compiled program and belongs in the key -- the D3D12 backend's PSO key
   * carries cube_mask for the same reason. */
@@ -1669,7 +1811,7 @@ index 98db285..c76ebe4 100644
  static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
  {
      if (!vm_base || st->shader_program == 0) return -1;
-@@ -752,6 +769,8 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -752,6 +771,8 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
  
      u64 key = rsx_fp_structural_hash(*uc, MTL_FP_MAX_BYTES, 1469598103934665603ull);
      if (!key) return -1;                    /* malformed or unterminated */
@@ -1678,7 +1820,7 @@ index 98db285..c76ebe4 100644
      const u32 ctrl      = st->shader_control;
      const u32 ctrl_key  = ctrl & CELL_GCM_SHADER_CONTROL_32_BITS_EXPORTS;
      const u32 alpha_en  = (st->alpha_test_enable && st->alpha_func != 0x0207u) ? 1u : 0u;
-@@ -761,15 +780,20 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -761,15 +782,20 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
      key = fnv1a64(&alpha_fn, sizeof alpha_fn, key);
      key = fnv1a64(&cube_mask, sizeof cube_mask, key);
  
@@ -1703,7 +1845,7 @@ index 98db285..c76ebe4 100644
      if (ni > 0 && alpha_en &&
          rsx_fp_apply_alpha_test_buffered(s_hlsl, sizeof s_hlsl, st->alpha_func) < 0)
          ni = -1;
-@@ -793,13 +817,14 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -793,13 +819,14 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
      { static int n = 0; if (n++ < 32)
          fprintf(stderr, "[RSX metal] fragment program %016llX: %d instrs, %u constants -> %s\n",
                  (unsigned long long)key, ni, nconst,
@@ -1720,7 +1862,7 @@ index 98db285..c76ebe4 100644
  }
  
  /* Reserve `bytes` of constant staging at a 256-byte boundary. */
-@@ -828,24 +853,27 @@ static int cb_alloc(u32 bytes, u32* off)
+@@ -828,24 +855,27 @@ static int cb_alloc(u32 bytes, u32* off)
   * outputs do not link with the built-in fragment shader's inputs. */
  static int guest_programs_for(const rsx_state* st, MtlDraw* d)
  {
@@ -1753,7 +1895,7 @@ index 98db285..c76ebe4 100644
  
      /* VPConst: the 512 transform constants, then the viewport epilogue
       * (see the D3D12 backend's vp_record_cb): x/y identity, and the z lane
-@@ -1581,7 +1609,8 @@ static void record_draw(const rsx_state* st, u32 prim, u32 base, u32 count,
+@@ -1581,7 +1611,8 @@ static void record_draw(const rsx_state* st, u32 prim, u32 base, u32 count,
       * drops to the built-in shader must still fetch its vertices the same
       * way. Constant staging reserved here for a draw that then fails on
       * vertices is simply left unused until the frame resets it. */
@@ -1763,7 +1905,7 @@ index 98db285..c76ebe4 100644
      if (guest) textures_for(st, d);
  
      u32 first_vert = s_vert_count;
-@@ -3201,6 +3230,43 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
+@@ -3201,6 +3232,43 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
      return 1;
  }
  
@@ -1807,7 +1949,7 @@ index 98db285..c76ebe4 100644
  /* One pass per contiguous run of draws against the same attachments, with any
   * clears immediately ahead of it folded into its load actions. A clear whose
   * targets the following draw does not share becomes a pass of its own, which
-@@ -3243,6 +3309,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3243,6 +3311,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
           * surface and an MRT set arrives as one clear per target, so they are
           * collected rather than compared: they become load actions on the
           * pass below when the draw that follows writes the same targets. */
@@ -1815,7 +1957,7 @@ index 98db285..c76ebe4 100644
          u32 n_cc = 0;
          u32 cc_surf[RSX_BE_MAX_COLOR_TARGETS];
          float cc_rgba[RSX_BE_MAX_COLOR_TARGETS][4];
-@@ -3281,6 +3348,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3281,6 +3350,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
          u32 nrt = n_cc;
          for (u32 k = 0; k < n_cc; k++) rt[k] = cc_surf[k];
          u32 depth = have_clear_ds ? cd : 0;
@@ -1823,7 +1965,7 @@ index 98db285..c76ebe4 100644
          if (i < s_eng_rec_count && s_eng_rec[i].kind == ENG_REC_DRAW &&
              (!have_clear_ds || s_eng_rec[i].depth == cd)) {
              const EngRecord* d = &s_eng_rec[i];
-@@ -3292,12 +3360,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3292,12 +3362,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
                  covered = found;
              }
              if (covered) {
@@ -1847,7 +1989,7 @@ index 98db285..c76ebe4 100644
          /* Metal wants every attachment the same size, and the engine registers
           * an MRT set's members at target A's, so a set whose members disagree
           * is one this frame cannot honour: it stops at the gap, as the vtable
-@@ -3471,16 +3550,28 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3471,16 +3552,28 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          /* PS3RECOMP_METAL_PASS_LOG=1: every 600th present, print the frame's
           * record stream grouped into passes (kind, targets, depth, count, and
           * the textures the first draw samples). */
@@ -1879,7 +2021,7 @@ index 98db285..c76ebe4 100644
                      fprintf(stderr, "[pass] %5u x%-4u kind=%d rt=", i, j - i, (int)r->kind);
                      for (u32 k = 0; k < r->nrt; k++) fprintf(stderr, "%s%u", k ? "," : "", r->rt[k]);
                      fprintf(stderr, " depth=%u", r->depth);
-@@ -3498,7 +3589,7 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3498,7 +3591,7 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
                      i = j;
                  }
              }
@@ -1888,7 +2030,7 @@ index 98db285..c76ebe4 100644
          pt = eng_pt_now();
          id<MTLCommandBuffer> cb = [s_queue commandBuffer];
          eng_encode_records(cb, stage);
-@@ -3521,6 +3612,15 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3521,6 +3614,15 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          } else {
              [cb commit];
              [cb waitUntilCompleted];
@@ -1904,7 +2046,7 @@ index 98db285..c76ebe4 100644
          }
  
  
-@@ -3672,7 +3772,10 @@ static void eng_present(void* user, u32 surface)
+@@ -3672,7 +3774,10 @@ static void eng_present(void* user, u32 surface)
      const u32 nrec = s_eng_rec_count;
      eng_encode_and_commit(src);
      eng_dump_frame(src);
@@ -1916,6 +2058,54 @@ index 98db285..c76ebe4 100644
  }
  
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3886,6 +3991,38 @@ static int pump_messages_impl(void)
+                                                 inMode:NSDefaultRunLoopMode
+                                                dequeue:YES];
+             if (!ev) break;
++            /* The mouse drives the right stick and R1/R2 (cellPad.c). Motion
++             * accumulates as deltas in 1/16 px, which cellPad drains on each
++             * poll; buttons count only inside the game view, so dragging the
++             * title bar does not fire a bolt. The events still go to AppKit,
++             * which is what focuses the window on a click. */
++            {   extern volatile int32_t  g_pad_mouse_dx, g_pad_mouse_dy;
++                extern volatile uint32_t g_pad_mouse_buttons;
++                const NSEventType t = [ev type];
++                const int motion = (t == NSEventTypeMouseMoved || t == NSEventTypeLeftMouseDragged ||
++                                    t == NSEventTypeRightMouseDragged || t == NSEventTypeOtherMouseDragged);
++                /* Motion counts whenever the game window is key: a moved event
++                 * carries no window once the cursor leaves it, and the camera
++                 * should keep turning then. */
++                if (motion && s_window && [s_window isKeyWindow]) {
++                    __atomic_add_fetch(&g_pad_mouse_dx, (int32_t)lround([ev deltaX] * 16.0), __ATOMIC_RELAXED);
++                    __atomic_add_fetch(&g_pad_mouse_dy, (int32_t)lround([ev deltaY] * 16.0), __ATOMIC_RELAXED);
++                }
++                if (!motion && s_window && [ev window] == s_window && [s_window isKeyWindow]) {
++                    const NSPoint at = [ev locationInWindow];
++                    const int inside = NSPointInRect(at, [[s_window contentView] frame]);
++                    uint32_t bit = 0;
++                    if (t == NSEventTypeLeftMouseDown  || t == NSEventTypeLeftMouseUp)  bit = 1u;
++                    if (t == NSEventTypeRightMouseDown || t == NSEventTypeRightMouseUp) bit = 2u;
++                    if (t == NSEventTypeOtherMouseDown || t == NSEventTypeOtherMouseUp) bit = 4u;
++                    if (bit) {
++                        const int down = (t == NSEventTypeLeftMouseDown || t == NSEventTypeRightMouseDown ||
++                                          t == NSEventTypeOtherMouseDown);
++                        if (down && inside) __atomic_or_fetch(&g_pad_mouse_buttons, bit, __ATOMIC_RELAXED);
++                        if (!down)          __atomic_and_fetch(&g_pad_mouse_buttons, ~bit, __ATOMIC_RELAXED);
++                    }
++                }
++            }
+             /* Keys drive the keyboard pad (cellPad.c): record and swallow
+              * them -- unhandled, AppKit beeps on every press. */
+             if ([ev type] == NSEventTypeKeyDown || [ev type] == NSEventTypeKeyUp) {
+@@ -3903,6 +4040,8 @@ static int pump_messages_impl(void)
+         if (![NSApp isActive]) {
+             extern volatile uint32_t g_pad_host_keys[4];
+             for (int i = 0; i < 4; i++) g_pad_host_keys[i] = 0;
++            extern volatile uint32_t g_pad_mouse_buttons;
++            g_pad_mouse_buttons = 0;
+         }
+         if (s_window && ![s_window isVisible]) s_closed = 1;
+     }
 diff --git a/libs/video/rsx_texture_layout.c b/libs/video/rsx_texture_layout.c
 index b32a702..ecb1a85 100644
 --- a/libs/video/rsx_texture_layout.c
