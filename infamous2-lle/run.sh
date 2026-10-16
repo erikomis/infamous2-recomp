@@ -16,7 +16,7 @@ export PS3_DEV_FLASH="${PS3_DEV_FLASH:-$HOME/Library/Application Support/rpcs3/d
 export PS3_TITLE="inFAMOUS 2"
 # Dub, subtitles and menus in Brazilian Portuguese (cache/psarc/brazilian*.psarc).
 # The game (2011) treats every system language above 16 as unknown, so the
-# console's later "Portuguese (Brazil)" (18) falls back to English; on this
+# console's later "Portuguese (Brazil)" (17) falls back to English; on this
 # Americas build plain "Portuguese" (7) is what selects the Brazilian files
 # (func_0009D9DC). PS3_LANG=en (or es, fr, ...) to change.
 export PS3_LANG="${PS3_LANG:-pt}"
