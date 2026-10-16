@@ -37,6 +37,7 @@
  * passthrough to <windows.h>; off Windows the toolkit's shim supplies the same
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
+#include "ps3emu/ps3_ftrace.h"   /* PS3_FTRACE: present spans */
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #include <pthread.h>
@@ -184,7 +185,9 @@ extern "C" void rsx_metal_backend_note_guest_frame(void);
 
 static void present_guest_frame(void)
 {
+    const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
     rsx_backend_present();
+    if (ft_t0) ps3_ft_span(PS3_FT_PRESENT, 0, 0, 0, ft_t0, ps3_ft_now());
 #if defined(__APPLE__)
     rsx_metal_backend_note_guest_frame();
 #endif
