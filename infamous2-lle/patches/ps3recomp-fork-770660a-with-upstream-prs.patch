@@ -818,11 +818,108 @@ index ea160aa..a2318a0 100644
  /* Set the fake PSN username (call before sceNpInit if desired) */
  void sceNpSetFakeUsername(const char* username);
  
+diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
+index d1b8f32..0ee610a 100644
+--- a/libs/system/cellSysutil.c
++++ b/libs/system/cellSysutil.c
+@@ -257,6 +257,57 @@ s32 cellSysutilCheckCallback(void)
+  * near the guest's variable, and nothing on the way says a word.
+  *
+  * A u32 cannot be passed a host pointer by accident. */
++/* PS3_LANG: the console language the title is told (dub, subtitles, menus).
++ * A CELL_SYSUTIL_LANG_* number or a code: en, en-gb, ja, fr, es, de, it, nl,
++ * pt (Portugal), pt-br, ru, ko, zh-t, zh-s, fi, sv, da, no, pl, tr. Unset or
++ * unknown: English (US), the old fixed answer. A title only switches if its
++ * data carries that language. */
++static int sysutil_ieq(const char* a, const char* b)
++{
++    for (; *a && *b; a++, b++) {
++        char x = *a, y = *b;
++        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
++        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
++        if (x != y) return 0;
++    }
++    return *a == *b;
++}
++
++static s32 sysutil_language(void)
++{
++    static s32 lang = -1;
++    if (lang >= 0) return lang;
++    static const struct { const char* code; s32 id; } k[] = {
++        {"ja", CELL_SYSUTIL_LANG_JAPANESE}, {"en", CELL_SYSUTIL_LANG_ENGLISH_US},
++        {"en-us", CELL_SYSUTIL_LANG_ENGLISH_US}, {"fr", CELL_SYSUTIL_LANG_FRENCH},
++        {"es", CELL_SYSUTIL_LANG_SPANISH}, {"de", CELL_SYSUTIL_LANG_GERMAN},
++        {"it", CELL_SYSUTIL_LANG_ITALIAN}, {"nl", CELL_SYSUTIL_LANG_DUTCH},
++        {"pt", CELL_SYSUTIL_LANG_PORTUGUESE_PT}, {"pt-pt", CELL_SYSUTIL_LANG_PORTUGUESE_PT},
++        {"ru", CELL_SYSUTIL_LANG_RUSSIAN}, {"ko", CELL_SYSUTIL_LANG_KOREAN},
++        {"zh-t", CELL_SYSUTIL_LANG_CHINESE_T}, {"zh-s", CELL_SYSUTIL_LANG_CHINESE_S},
++        {"fi", CELL_SYSUTIL_LANG_FINNISH}, {"sv", CELL_SYSUTIL_LANG_SWEDISH},
++        {"da", CELL_SYSUTIL_LANG_DANISH}, {"no", CELL_SYSUTIL_LANG_NORWEGIAN},
++        {"pl", CELL_SYSUTIL_LANG_POLISH}, {"pt-br", CELL_SYSUTIL_LANG_PORTUGUESE_BR},
++        {"en-gb", CELL_SYSUTIL_LANG_ENGLISH_GB}, {"tr", CELL_SYSUTIL_LANG_TURKISH},
++    };
++    lang = CELL_SYSUTIL_LANG_ENGLISH_US;
++    const char* e = getenv("PS3_LANG");
++    if (e && *e) {
++        char* end = NULL;
++        long n = strtol(e, &end, 10);
++        if (end && *end == '\0' && n >= 0 && n <= CELL_SYSUTIL_LANG_TURKISH) lang = (s32)n;
++        else {
++            unsigned i;
++            for (i = 0; i < sizeof k / sizeof k[0]; i++)
++                if (sysutil_ieq(e, k[i].code)) { lang = k[i].id; break; }
++            if (i == sizeof k / sizeof k[0])
++                printf("[cellSysutil] PS3_LANG=%s not recognised, using English\n", e);
++        }
++    }
++    printf("[cellSysutil] system language %d\n", (int)lang);
++    return lang;
++}
++
+ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
+ {
+     if (!value_ea)
+@@ -265,7 +316,7 @@ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
+     s32 v = 0;
+     switch (id) {
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_LANG:
+-        v = CELL_SYSUTIL_LANG_ENGLISH_US;
++        v = sysutil_language();
+         break;
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_ENTER_BUTTON_ASSIGN:
+         v = CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CROSS;
+diff --git a/libs/system/cellSysutil.h b/libs/system/cellSysutil.h
+index 238e188..241d746 100644
+--- a/libs/system/cellSysutil.h
++++ b/libs/system/cellSysutil.h
+@@ -58,8 +58,11 @@ extern "C" {
+ #define CELL_SYSUTIL_LANG_DANISH             14
+ #define CELL_SYSUTIL_LANG_NORWEGIAN          15
+ #define CELL_SYSUTIL_LANG_POLISH             16
+-#define CELL_SYSUTIL_LANG_PORTUGUESE_BR      17
+-#define CELL_SYSUTIL_LANG_ENGLISH_GB         18
++/* 17 is English (UK) and 18 Portuguese (Brazil), the console's own order
++ * (RPCS3's system_language list). These two were swapped here, so a title
++ * asked for Brazilian Portuguese got British English. */
++#define CELL_SYSUTIL_LANG_ENGLISH_GB         17
++#define CELL_SYSUTIL_LANG_PORTUGUESE_BR      18
+ #define CELL_SYSUTIL_LANG_TURKISH            19
+ 
+ /* Enter button assign */
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..3f7dea6 100644
+index 73b7e71..793f97e 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -773,15 +773,25 @@ unsigned long long ps3_ms_now(void)
+@@ -14,6 +14,7 @@
+ #include "../../runtime/platform/win32_compat.h"
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_write32 (translate + byte-swap, OOB-safe) */
+ #include "../../runtime/memory/vm.h"    /* VM_HLE_INJECT_BASE */
++#include "../../runtime/spu/spu_coherency.h" /* lock-line bookkeeping for the blit row copy */
+ #include "rsx_commands.h"                    /* rsx_state, rsx_process_command_buffer */
+ #include "../../include/ps3emu/guest_call.h" /* g_ps3_guest_caller for direct handler dispatch */
+ 
+@@ -773,15 +774,26 @@ unsigned long long ps3_ms_now(void)
  #ifdef _WIN32
      return (unsigned long long)GetTickCount64();
  #else
@@ -838,6 +935,7 @@ index 73b7e71..3f7dea6 100644
  
  static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
 +static int s_sema_blocked_pass = 0;   /* this drain stopped on a semaphore acquire */
++static int s_sema_live = 0;           /* the LAST drain pass ended on one (see cellGcm_drain_sema_blocked) */
 +static int s_park_pass = 0;           /* this drain stopped on a self-JUMP park */
  /* Backlog past which the drain stops honouring one-flip-per-tick and
   * catches up instead. Sized well above a frame's command list so a
@@ -849,7 +947,37 @@ index 73b7e71..3f7dea6 100644
  /* How close `current` must get to `end` before the runtime will recycle a ring
   * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
   * title that is merely near the end from being touched. */
-@@ -864,6 +874,12 @@ static void nv3089_blit(void)
+@@ -857,6 +869,29 @@ static u32 nv309e_swz(u32 x, u32 y, u32 l2w, u32 l2h)
+     return off;
+ }
+ 
++/* A guest-memory row copy with the same lock-line bookkeeping as vm_write32
++ * (ppu_loader.cpp VM_WRITE_COH), per 128-byte line instead of per pixel: an
++ * SPU holding a reservation on a line the row overwrites loses it and gets
++ * its lost-reservation event. The two byte swaps a vm_read32/vm_write32 pair
++ * does cancel, so the bytes move verbatim. */
++static void gcm_row_copy(u32 d, u32 s, u32 n)
++{
++    extern u8* vm_base;
++    const u32 l0 = d & ~127u, l1 = (d + n - 1) & ~127u;
++    u64 mask = 0; int locked = 0;
++    for (u32 a = l0; a <= l1; a += 128)
++        if (spu_coh_is_reserved(a)) {
++            mask = spu_lockline_mask_range(d, n); spu_lockline_lock_mask(mask); locked = 1; break; }
++    memmove(vm_base + d, vm_base + s, n);
++    __atomic_signal_fence(__ATOMIC_SEQ_CST);
++    for (u32 a = l0; a <= l1; a += 128)
++        if (spu_coh_is_reserved(a)) {
++            if (!locked) { mask = spu_lockline_mask_range(d, n); spu_lockline_lock_mask(mask); locked = 1; }
++            spu_coh_notify_write_from_ppu(a);
++        }
++    if (locked) spu_lockline_unlock_mask(mask);
++}
++
+ static void nv3089_blit(void)
+ {
+     u32 out_w = s_nv3089.out_sz & 0xFFFF, out_h = s_nv3089.out_sz >> 16;
+@@ -864,6 +899,12 @@ static void nv3089_blit(void)
      u32 in_pitch = s_nv3089.in_fmt & 0xFFFF;
      u32 dst_pitch = s_gcm2d.pitch >> 16;
      if (!out_w || !out_h || !in_pitch || !dst_pitch) return;
@@ -862,7 +990,50 @@ index 73b7e71..3f7dea6 100644
      /* NV3089_GATE=<file>: log every blit's geometry while <file> exists, so a
       * capture covers the scene of interest instead of the first N since boot. */
      { static const char* gate = (const char*)-1; static unsigned poll; static int open_gate;
-@@ -1332,8 +1348,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+@@ -1000,6 +1041,34 @@ static void nv3089_blit(void)
+     u32 dbpp = (s_gcm2d.color_fmt == 4u /* R5G6B5 */) ? 2u
+              : (s_gcm2d.color_fmt == 1u /* Y8 */)     ? 1u : 4u;
+     u32 bpp = (sbpp == dbpp) ? sbpp : 4u;
++    /* NV3089_ROWCOPY (default 1): an unscaled blit goes a row at a time. The
++     * per-pixel loop below paid a vm_read32 and a vm_write32 per pixel -- OOB
++     * and null-store checks, the store watch, the reservation lookup and two
++     * byte swaps that cancel -- and inFAMOUS 2 copies its 1280x720 G-buffer
++     * surfaces to XDR this way every frame for the SPU lighting: a quarter of
++     * the RSX thread's time. NV3089_ROWCOPY=0 keeps the per-pixel copy (it is
++     * what the PPU_WWATCH / PPU_WVAL store diagnostics see). */
++    { static int rc = -1;
++      if (rc < 0) { const char* e = getenv("NV3089_ROWCOPY"); rc = e ? atoi(e) : 1; }
++      if (rc && s_nv3089.ds_dx == 0x100000u && s_nv3089.dt_dy == 0x100000u) {
++          /* the integer source start the per-pixel loop derives for x = y = 0 */
++          const u32 sx0 = (u32)(((u64)u0 << 8) >> 20), sy0 = (u32)(((u64)v0 << 8) >> 20);
++          u32 xa = 0, xb = out_w;                       /* destination x range after the clip */
++          if (out_x < cx0) xa = cx0 - out_x;
++          if (out_x + xb > cx1) xb = cx1 > out_x ? cx1 - out_x : 0;
++          if (xa < xb) {
++              const u32 n = (xb - xa) * bpp;
++              for (u32 y = 0; y < out_h; y++) {
++                  const u32 dy = out_y + y;
++                  if (dy < cy0 || dy >= cy1) continue;
++                  const u64 sa = (u64)src + (u64)(sy0 + y) * in_pitch + (u64)(sx0 + xa) * bpp;
++                  const u64 da = (u64)dst + (u64)dy * dst_pitch + (u64)(out_x + xa) * bpp;
++                  if (sa + n > 0x100000000ull || da + n > 0x100000000ull) continue;
++                  gcm_row_copy((u32)da, (u32)sa, n);
++              }
++          }
++          goto blit_done;
++      } }
+     for (u32 y = 0; y < out_h; y++) {
+         u32 dy = out_y + y;
+         if (dy < cy0 || dy >= cy1) continue;
+@@ -1017,6 +1086,7 @@ static void nv3089_blit(void)
+             else               vm_write8(d, vm_read8(s));
+         }
+     }
++blit_done:
+     { static int _n = 0; static int cap = -1;
+       if (cap < 0) { const char* e = getenv("NV3089_DBG"); cap = e ? atoi(e) : 0; }
+       if (cap && _n < cap) { _n++;
+@@ -1332,8 +1402,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
  
  static void gcm_fifo_dump_around(u32 getoff)
  {
@@ -876,7 +1047,23 @@ index 73b7e71..3f7dea6 100644
      for (u32 t = 0; t < GCM_TRACE_N; t++) {
          u32 k = (s_tr_i + t) % GCM_TRACE_N;
          if (!s_tr_w[k]) continue;
-@@ -1690,8 +1710,33 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1478,8 +1552,15 @@ void cellGcm_rsx_process_fifo(void)
+     ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+ }
+ 
++/* Did the last drain stop on a blocking semaphore acquire (GCM_SEMA_ACQUIRE)?
++ * What unblocks it is an SPU's DMA write of the label, which kicks nothing, so
++ * a present thread that sleeps a fixed 4 ms between drains adds up to 4 ms to
++ * every such wait; it can poll faster while this holds. */
++int cellGcm_drain_sema_blocked(void) { return s_sema_live; }
++
+ static void gcm_rsx_process_fifo_unlocked(void)
+ {
++    s_sema_live = 0;
+     { static unsigned _n = 0; static unsigned long long _t0 = 0;
+       extern unsigned long long ps3_ms_now(void);
+       _n++;
+@@ -1690,8 +1771,33 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -912,7 +1099,7 @@ index 73b7e71..3f7dea6 100644
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -1754,8 +1799,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1754,8 +1860,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
                      u32 m = (type == 0) ? method + i * 4 : method;
                      u32 v = vm_read32(dea);
                      u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
@@ -930,7 +1117,7 @@ index 73b7e71..3f7dea6 100644
                      if (m == 0x64u)      s_sema_offset = v;
                      else if (m == 0x6Cu) vm_write32(la, v);
                      else if (m == 0x68u && vm_read32(la) != v) {
-@@ -1763,12 +1815,29 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1763,12 +1876,29 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * the hardware does. Off by default: a title whose label nothing
               * ever writes would wedge the drain permanently, and RELEASE on
               * its own is the half that unblocks a waiting guest. */
@@ -960,11 +1147,11 @@ index 73b7e71..3f7dea6 100644
          }
                  }
 -                if (sem_blocked) break;
-+                if (sem_blocked) { s_sema_blocked_pass = 1; break; }
++                if (sem_blocked) { s_sema_blocked_pass = 1; s_sema_live = 1; break; }
                  s_fifo_getoff += 4 + count * 4;
                  continue;
              }
-@@ -1964,8 +2033,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1964,8 +2094,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
            }
        } else burned = 0; }
  
@@ -988,7 +1175,7 @@ index 73b7e71..3f7dea6 100644
            if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
                               gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
        } else { stuck = 0; last = s_fifo_getoff; } }
-@@ -2310,9 +2393,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -2310,9 +2454,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of
@@ -2036,7 +2223,7 @@ index e54d615..7379637 100644
   * itself rather than through the FIFO's 0xE944. */
  void rsx_draw_engine_present(void);
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index 933abcb..0065c6e 100644
+index 933abcb..65fb040 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
 @@ -71,8 +71,8 @@ enum {
@@ -2346,7 +2533,7 @@ index 933abcb..0065c6e 100644
 +                 if (*d == ':') snprintf(dbg_reg, sizeof dbg_reg, "%s", d + 1); } }
 +    const int dbg_here = dbg_n >= 0 && dbg_reg[0] &&
 +        rsx_fp_structural_hash(ucode, max_bytes, 1469598103934665603ull) == dbg_hash;
-+    u32 dbg_count = 0;
++    u32 dbg_count = 0; int dbg_done = 0;
 +    if (dbg_here) out_puts(&o, "    float4 _rsx_dbg = (float4)0;\n");
  
      /* Which colour export each register file received a write to, indexed
@@ -2393,13 +2580,13 @@ index 933abcb..0065c6e 100644
              continue;
          }
  
-+        if (dbg_here && dbg_count == (u32)dbg_n) {
++        if (dbg_here && !dbg_done && dbg_count == (u32)dbg_n) {
 +            /* reg "h1" -> h[1], "h1.wwww" -> (h[1]).wwww */
 +            char rn[48]; const char* dot = strchr(dbg_reg, '.');
 +            const unsigned idx = (unsigned)strtoul(dbg_reg + 1, NULL, 10);
 +            snprintf(rn, sizeof rn, "(%c[%u])%s", dbg_reg[0], idx, dot ? dot : "");
 +            char line[96]; snprintf(line, sizeof line, "    _rsx_dbg = (float4)(%s);\n", rn);
-+            out_puts(&o, line); dbg_count = ~0u;   /* once */
++            out_puts(&o, line); dbg_done = 1;   /* once */
 +        }
          /* Build the RHS expression for this opcode. */
          char rhs[640];
@@ -2553,7 +2740,7 @@ index 933abcb..0065c6e 100644
 +        }
 +
          int has_dest = !(w0 & FP_OUT_NONE);
-+        if (dbg_here && handled) dbg_count++;
++        if (dbg_here && handled && !dbg_done) dbg_count++;
          if (handled && (has_dest || set_cond)) {
              u32 dst_idx = (w0 & FP_OUT_REG_MASK) >> FP_OUT_REG_SHIFT;
              int dst_half = (w0 & FP_OUT_HALF) ? 1 : 0;
@@ -2604,7 +2791,7 @@ index 933abcb..0065c6e 100644
 +        }
 +    }
 +
-+    if (dbg_here && dbg_count == ~0u) out_puts(&o, "    { float4 _d = _rsx_dbg; _d.w = 1.0; h[0] = _d; r[0] = _d; }\n");
++    if (dbg_here && dbg_done) out_puts(&o, "    { float4 _d = _rsx_dbg; _d.w = 1.0; h[0] = _d; r[0] = _d; }\n");
      if (targets == 1) {
          char tail[96];
          snprintf(tail, sizeof(tail),
@@ -5441,7 +5628,7 @@ index 772c2d6..42057dc 100644
              ctx->status = SPU_STATUS_STOPPED_BY_HALT; ctx->stop_code = 0;
              g_spu_interp_steps = steps;
 diff --git a/runtime/syscalls/lv2_register.c b/runtime/syscalls/lv2_register.c
-index d756b8d..328a170 100644
+index d756b8d..a43d84d 100644
 --- a/runtime/syscalls/lv2_register.c
 +++ b/runtime/syscalls/lv2_register.c
 @@ -45,6 +45,7 @@ extern void spu_raw_note_image(uint32_t src_ea, uint32_t entry);
@@ -5452,7 +5639,136 @@ index d756b8d..328a170 100644
  #include <string.h>
  
  #include "../platform/win32_compat.h"   /* QueryPerformanceCounter shim for the SPU_SPEED timing */
-@@ -1970,6 +1971,28 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
+@@ -390,6 +391,12 @@ typedef struct {
+     uint32_t waiter_cause;
+     int32_t  waiter_status;
+     int      has_sched;          /* context-switched (not NON_CONTEXT) */
++    /* SPURS_EXTRA_SPUS (sys_spu_thread_group_create): threads the title did
++     * not ask for, cloned from its last SPURS kernel thread. */
++    uint32_t spurs_base;         /* the title's own SPU count */
++    uint32_t spurs_extra;        /* threads added on top */
++    uint32_t spurs_ea;           /* the CellSpurs instance (kernel arg r4) */
++    int      spurs_fixup_started;
+ } spu_group_t;
+ 
+ static spu_group_t  s_spu_groups[MAX_SPU_GROUPS];
+@@ -642,6 +649,27 @@ static int64_t sys_spu_thread_group_create_handler(ppu_context* ctx)
+             g->name[i] = src[i];
+         g->name[i] = 0;
+     }
++    /* SPURS_EXTRA_SPUS=<n>: give the title's SPURS kernel group n more SPU
++     * threads than it asked for (1..3; at most 8 in all, the CellSpurs
++     * instance has 8 SPU slots). The kernel is the title's own lifted libsre
++     * code, so this happens underneath it: the group is created larger, the
++     * thread initializations it never makes are cloned from its last real one
++     * with the SPU number in r3 updated (sys_spu_thread_initialize), and the
++     * per-workload max-contention bytes libsre set to its SPU count are raised
++     * to the new one for as long as the group runs (sys_spu_thread_group_start).
++     * An SPU-bound title gets that much more SPU throughput on a host with
++     * cores to spare. inFAMOUS 2 asks for 5 and caps every workload at 5.
++     * Experimental: the title's own per-SPU bookkeeping is not resized. */
++    { static int extra = -1;
++      if (extra < 0) { const char* e = getenv("SPURS_EXTRA_SPUS"); extra = e ? atoi(e) : 0;
++                       if (extra > 3) extra = 3; if (extra < 0) extra = 0; }
++      if (extra && !strcmp(g->name, "CellSpursKernelGroup") && num >= 2 && num + (uint32_t)extra <= 8) {
++          g->spurs_base  = num;
++          g->spurs_extra = (uint32_t)extra;
++          g->num_threads = num + (uint32_t)extra;
++          fprintf(stderr, "[SPU] group 0x%X: SPURS_EXTRA_SPUS=%d -> %u SPU threads\n",
++                  g->id, extra, g->num_threads);
++      } }
+ 
+     vm_write_be32(out_ea, g->id);
+ 
+@@ -821,6 +849,32 @@ static int64_t sys_spu_thread_initialize_handler(ppu_context* ctx)
+ #endif
+     g->thread_indices[thread_num] = (uint32_t)(t - s_spu_threads);
+     g->init_mask |= 1u << thread_num;
++    /* SPURS_EXTRA_SPUS: the extra kernel threads, cloned from the title's last
++     * one. The kernel takes its SPU number in r3 (high word) and the CellSpurs
++     * instance in r4; everything else is the same image and arguments. */
++    if (g->spurs_extra && thread_num + 1 == g->spurs_base) {
++        for (uint32_t i = g->spurs_base; i < g->spurs_base + g->spurs_extra; i++) {
++            if (g->init_mask & (1u << i)) continue;
++            spu_thread_t* c = spu_alloc_thread();
++            if (!c) break;
++            c->group_id    = group_id;
++            c->index       = i;
++            c->entry_point = entry;
++            c->img_ea      = img_ea;
++            c->nsegs       = nsegs;
++            memcpy(c->segs, segs, sizeof(lv2_spu_seg) * nsegs);
++            c->img_src     = src;
++            c->args_ea     = args_ea;
++            c->args_size   = 0;
++            for (int a = 0; a < 4; a++) c->args[a] = t->args[a];
++            c->args[0] = (uint64_t)i << 32;
++            g->thread_indices[i] = (uint32_t)(c - s_spu_threads);
++            g->init_mask |= 1u << i;
++            g->spurs_ea = (uint32_t)t->args[1];
++            fprintf(stderr, "[SPU] thread_init group=0x%X index=%u cloned from index %u -> tid=0x%X (SPURS_EXTRA_SPUS)\n",
++                    group_id, i, thread_num, c->tid);
++        }
++    }
+     if ((uint32_t)__builtin_popcount(g->init_mask) == g->num_threads)
+         g->state = SPU_GROUP_STATE_INITIALIZED;
+     vm_write_be32(out_tid_ea, t->tid);
+@@ -997,6 +1051,13 @@ static void* spu_exec_thread_proc(void* arg)
+     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }  /* let SO reach the reporter */
+ #endif
+     spu_thread_t* t = (spu_thread_t*)arg;
++    /* PS3_HOT_QOS=1: on an SPU-bound title these threads are the frame-rate
++     * ceiling, and at the default QoS macOS is free to run them on the
++     * efficiency cores. Above-normal maps to QOS_CLASS_USER_INTERACTIVE on
++     * Apple (win32_compat) and to a real priority bump on Windows. */
++    { static int q = -1;
++      if (q < 0) { const char* e = getenv("PS3_HOT_QOS"); q = e ? atoi(e) : 0; }
++      if (q) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL); }
+     spu_lifted_thread_result r;
+     spu_lifted_thread_run(t->sctx, &r);
+     t->exit_status = r.exit_status;
+@@ -1212,12 +1273,40 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
+ 
+ /* sys_spu_thread_group_start(id) */
+ extern int sys_event_queue_push_by_id(uint32_t, uint64_t, uint64_t, uint64_t, uint64_t);
++/* SPURS_EXTRA_SPUS: libsre caps each workload's contention at the SPU count it
++ * knows (CellSpurs +0x50.., one byte per workload, written as workloads are
++ * added), and the kernel reads those bytes on every scheduling pass. Raise
++ * the ones at the title's count to the real one, and keep doing so, since
++ * workloads come and go for the life of the group. */
++static DWORD WINAPI spurs_extra_fixup_main(LPVOID p)
++{
++    extern uint8_t* vm_base;
++    spu_group_t* g = (spu_group_t*)p;
++    const uint32_t ea = g->spurs_ea, base = g->spurs_base, all = g->spurs_base + g->spurs_extra;
++    if (!ea || !vm_base) return 0;
++    for (;;) {
++        for (uint32_t w = 0; w < 16; w++) {
++            uint8_t* m = vm_base + ea + 0x50 + w;                  /* SPURS_WKL_MAXCONT */
++            if (__atomic_load_n(m, __ATOMIC_RELAXED) == (uint8_t)base)
++                __atomic_store_n(m, (uint8_t)all, __ATOMIC_RELAXED);
++        }
++        Sleep(50);
++    }
++    return 0;
++}
++
+ static int64_t sys_spu_thread_group_start_handler(ppu_context* ctx)
+ {
+     uint32_t id = (uint32_t)ctx->gpr[3];
+     spu_group_t* g = spu_find_group(id);
+     if (!g) LV2_RET(ctx, CELL_ESRCH);
+     spu_group_reap(g);
++    if (g->spurs_extra && g->spurs_ea && !g->spurs_fixup_started) {
++        g->spurs_fixup_started = 1;
++        CreateThread(NULL, 1u << 16, spurs_extra_fixup_main, g, 0, NULL);
++        fprintf(stderr, "[SPU] group 0x%X: SPURS_EXTRA_SPUS raising workload max contention %u -> %u (instance 0x%08X)\n",
++                id, g->spurs_base, g->spurs_base + g->spurs_extra, g->spurs_ea);
++    }
+     AcquireSRWLockExclusive(&s_grp_lock);
+     if (g->state != SPU_GROUP_STATE_INITIALIZED) {
+         ReleaseSRWLockExclusive(&s_grp_lock);
+@@ -1970,6 +2059,28 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
          if (queue) {
              int rc = sys_event_queue_push_by_id(queue, 0xFFFFFFFF53505501ull,
                  spu->spu_id, ((uint64_t)port << 32) | (value & 0xFFFFFFu), data);
@@ -5481,6 +5797,57 @@ index d756b8d..328a170 100644
              result = rc == 0 ? CELL_OK : CELL_EBUSY;
          }
      }
+@@ -2572,6 +2683,17 @@ static int64_t sys_process_is_spu_lock_line_reservation_address(ppu_context* ctx
+  * In OR mode (spu_cfg bit 0/1) the value is ORed into the pending register;
+  * in overwrite mode (default) it replaces it. The SPU reads via RdSigNotify1/2
+  * (read-and-clear; channel count = 1 while a value is pending). */
++static void spu_snr_deliver(spu_thread_t* t, uint32_t num, uint32_t val, int or_mode)
++{
++    spu_context* sc = t->live_ctx ? (spu_context*)t->live_ctx : t->sctx;
++    if (!sc) return;
++    spu_channel* ch = &sc->ch_sig_notify[num];
++    if (or_mode) spu_channel_or(ch, val);
++    else         spu_channel_overwrite(ch, val);      /* one word, replaced */
++    extern void spu_ch_wake(spu_context*);
++    spu_ch_wake(sc);
++}
++
+ static int64_t sys_spu_thread_write_snr_handler(ppu_context* ctx)
+ {
+     uint32_t tid = (uint32_t)ctx->gpr[3];
+@@ -2587,18 +2709,25 @@ static int64_t sys_spu_thread_write_snr_handler(ppu_context* ctx)
+         return -1;
+     }
+     AcquireSRWLockShared(&s_live_ctx_lock);
+-    spu_context* sc = t->live_ctx ? (spu_context*)t->live_ctx : t->sctx;
+-    if (sc) {
+-        spu_channel* ch = &sc->ch_sig_notify[num];
++    {
+         int or_mode = (t->spu_cfg >> num) & 1;
+-        if (or_mode) spu_channel_or(ch, val);
+-        else         spu_channel_overwrite(ch, val);      /* one word, replaced */
+-        extern void spu_ch_wake(spu_context*);
+-        spu_ch_wake(sc);
++        spu_snr_deliver(t, num, val, or_mode);
+         { static _Atomic int n = 0; if (n < 12) { n++;
+             fprintf(stderr, "[SPU] write_snr tid=0x%X snr%u <- 0x%08X (%s)\n",
+                     tid, num + 1, val, or_mode ? "OR" : "overwrite");
+             fflush(stderr); } }
++        /* SPURS_EXTRA_SPUS: libsre signals the kernel threads it knows, so a
++         * wakeup never reaches the cloned ones, which sit in `rdch
++         * SPU_RdEventStat` waiting for it for ever. Mirror every signal sent
++         * to one of the title's own kernel threads to the clones. */
++        spu_group_t* g = spu_find_group(t->group_id);
++        if (g && g->spurs_extra && t->index < g->spurs_base) {
++            for (uint32_t i = g->spurs_base; i < g->spurs_base + g->spurs_extra; i++) {
++                if (!(g->init_mask & (1u << i)) || g->thread_indices[i] >= MAX_SPU_THREADS) continue;
++                spu_thread_t* c = &s_spu_threads[g->thread_indices[i]];
++                if (SLOT_LIVE(c)) spu_snr_deliver(c, num, val, or_mode);
++            }
++        }
+     }
+     ReleaseSRWLockShared(&s_live_ctx_lock);
+     ctx->gpr[3] = 0;
 diff --git a/runtime/syscalls/sys_lwsync.c b/runtime/syscalls/sys_lwsync.c
 index f55cfa5..f7944d6 100644
 --- a/runtime/syscalls/sys_lwsync.c
@@ -5573,6 +5940,46 @@ index f55cfa5..f7944d6 100644
  
      if (--m->lwcond_waiters == INT_MIN) WakeAllConditionVariable(&s_destroy_cv);
      if (--c->lwmutex_waiters == INT_MIN) WakeAllConditionVariable(&s_destroy_cv);
+diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
+index 877b632..b2831da 100644
+--- a/runtime/syscalls/sys_timer.c
++++ b/runtime/syscalls/sys_timer.c
+@@ -7,6 +7,7 @@
+ #include "../memory/vm.h"
+ #include <stdlib.h>   /* getenv -- an implicit decl returns int, truncating the pointer */
+ #include <string.h>
++#include <sched.h>   /* sched_yield: the PS3_USLEEP_SPIN_US spin */
+ #include <stdlib.h>
+ 
+ /* ---------------------------------------------------------------------------
+@@ -245,6 +246,27 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+         } while (qpc_now.QuadPart < qpc_deadline);
+     }
+ #else
++    /* PS3_USLEEP_SPIN_US=<n>: a sleep of n microseconds or less spins to a
++     * CLOCK_MONOTONIC deadline, yielding each turn, instead of nanosleep.
++     * nanosleep(3 us) on macOS returns after ~50 us at best and after a
++     * coalesced timer tick at worst, so a title that paces a producer/consumer
++     * loop with usleep(3)/usleep(10) -- inFAMOUS 2's SPU light-task kicker and
++     * its main thread's wait for those tasks -- runs that loop 20-100x slower
++     * than on the console, with the SPUs starved between kicks. The Windows
++     * branch above has always done this for sub-millisecond sleeps. Off by
++     * default: two spinning threads cost cores an SPU-bound title may need. */
++    { static long spin_us = -1;
++      if (spin_us < 0) { const char* e = getenv("PS3_USLEEP_SPIN_US"); spin_us = e ? atol(e) : 0; if (spin_us < 0) spin_us = 0; }
++      if (usec > 0 && usec <= (uint64_t)spin_us) {
++          struct timespec t0, now;
++          clock_gettime(CLOCK_MONOTONIC, &t0);
++          const uint64_t deadline = (uint64_t)t0.tv_sec * 1000000000ull + (uint64_t)t0.tv_nsec + usec * 1000ull;
++          do {
++              sched_yield();
++              clock_gettime(CLOCK_MONOTONIC, &now);
++          } while ((uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec < deadline);
++          return CELL_OK;
++      } }
+     if (usec > 0) {
+         struct timespec ts;
+         ts.tv_sec  = (time_t)(usec / 1000000);
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
 index ab59cbe..6f63368 100644
 --- a/tools/ppu_lifter.py

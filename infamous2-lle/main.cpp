@@ -101,6 +101,7 @@ void     cellGcmTickFlip(void);
 int      cellGcm_take_flip_pending(void);
 void     cellGcm_rsx_process_fifo(void);      /* drain get -> put */
 unsigned cellGcm_flip_request_count(void);
+int      cellGcm_drain_sema_blocked(void);
 }
 
 /* ---------------------------------------------------------------------------
@@ -170,9 +171,16 @@ extern "C" unsigned ppu_boot_frames_presented(void)
     return (unsigned)g_frames_presented;
 }
 
+/* GCM_FLIP_IMMEDIATE=1: complete the flip when the frame is presented instead
+ * of on the next 16 ms vblank tick. The title waits on the flip before it
+ * starts the next frame, and on a frame that takes ~70 ms the tick costs it
+ * ~8 ms on average for nothing. */
+static int g_flip_immediate = 0;
+
 static void present_guest_frame(void)
 {
     rsx_backend_present();
+    if (g_flip_immediate) cellGcmTickFlip();
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     InterlockedIncrement(&g_frames_presented);
@@ -187,10 +195,21 @@ static DWORD WINAPI frame_clock(LPVOID)
     fprintf(stderr, "[rsx] %s backend init %s\n", RSX_BACKEND_NAME,
             rsx_ok ? "OK -- window open" : "FAILED");
 
+    /* Pacing knobs (see tools/profile_run.sh for the A/B that sets them). */
+    { const char* e = getenv("GCM_FLIP_IMMEDIATE"); g_flip_immediate = e ? atoi(e) : 0; }
+    int sema_fast_poll = 0;
+    { const char* e = getenv("GCM_SEMA_FASTPOLL"); sema_fast_poll = e ? atoi(e) : 0; }
+    /* PS3_HOT_QOS=1: this thread walks the FIFO and encodes every draw; keep
+     * it on a performance core alongside the SPU threads (lv2_register.c). */
+    { const char* e = getenv("PS3_HOT_QOS");
+      if (e && atoi(e)) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL); }
+
     ULONGLONG next_tick = GetTickCount64();
 
     for (;;) {
-        Sleep(4);
+        /* GCM_SEMA_FASTPOLL=1: while the drain is parked on a semaphore acquire
+         * (the SPU lighting label), re-check every 1 ms instead of every 4. */
+        Sleep(sema_fast_poll && cellGcm_drain_sema_blocked() ? 1 : 4);
         ULONGLONG now = GetTickCount64();
 
         int fired = 0;

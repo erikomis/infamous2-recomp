@@ -14,6 +14,9 @@ export PS3_VFS_ROOT="$vfs"
 export PS3_HDD0_ROOT="$vfs/dev_hdd0"
 export PS3_DEV_FLASH="${PS3_DEV_FLASH:-$HOME/Library/Application Support/rpcs3/dev_flash}"
 export PS3_TITLE="inFAMOUS 2"
+# Dub, subtitles and menus: the data carries Brazilian Portuguese
+# (cache/psarc/brazilian*.psarc). PS3_LANG=en (or es, pt, fr, ...) to change.
+export PS3_LANG="${PS3_LANG:-pt-br}"
 [ -n "$HEADLESS" ] && export PS3RECOMP_METAL_HEADLESS=1
 # The RSX must block on its semaphore ACQUIREs: each frame the FIFO acquires
 # the label the SPU light task writes when it has turned the normals/depth
