@@ -107,6 +107,11 @@ Um controle (DualSense testado) funciona direto. Teclado e mouse somam com ele:
 O mouse se ajusta com `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1` e
 `PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` desliga.
 
+Saves e troféus ficam em `~/Library/Application Support/infamous2-recomp/gamedata`
+(Linux: `~/.local/share/infamous2-recomp`), não importa de qual pasta o jogo é aberto;
+o primeiro `./run.sh` com janela copia para lá um `infamous2-lle/gamedata` antigo.
+`PS3_GAMEDATA_ROOT=<dir>` escolhe outro lugar.
+
 Para testes sem janela: `tools/capture.sh <nome> <segundos>` salva um PNG do
 frame a cada 10 s, `PAD_SCRIPT="95:0x4000"` aperta ✕ aos 95 s
 (`760:0x0400:400` segura L1 por 400 s) e `PAD_STICK="lx,ly,rx,ry,de,até;..."`

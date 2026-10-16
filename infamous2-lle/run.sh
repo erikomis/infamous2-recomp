@@ -21,6 +21,23 @@ export PS3_TITLE="inFAMOUS 2"
 # (func_0009D9DC). PS3_LANG=en (or es, fr, ...) to change.
 export PS3_LANG="${PS3_LANG:-pt}"
 [ -n "$HEADLESS" ] && export PS3RECOMP_METAL_HEADLESS=1
+# Saves and trophies live in one fixed place for windowed play, so opening the
+# game from another directory no longer starts without a save. The first run
+# copies the old cwd-relative infamous2-lle/gamedata there (the original stays
+# as a backup). Headless runs keep the toolkit's ./gamedata: the tools run each
+# one in its own out/<name>.cwd/ and must never touch the player's save.
+# PS3_GAMEDATA_ROOT=<dir> picks another place (=gamedata restores the old way).
+if [ -z "$HEADLESS" ] && [ -z "$PS3_GAMEDATA_ROOT" ]; then
+    case $(uname) in
+        Darwin) data="$HOME/Library/Application Support/infamous2-recomp" ;;
+        *)      data="${XDG_DATA_HOME:-$HOME/.local/share}/infamous2-recomp" ;;
+    esac
+    if [ ! -d "$data/gamedata" ] && [ -d "$here/gamedata/dev_hdd0" ]; then
+        mkdir -p "$data" && cp -Rp "$here/gamedata" "$data/gamedata" &&
+            echo "run.sh: saves copied from $here/gamedata to $data/gamedata" >&2
+    fi
+    export PS3_GAMEDATA_ROOT="$data/gamedata"
+fi
 # The RSX must block on its semaphore ACQUIREs: each frame the FIFO acquires
 # the label the SPU light task writes when it has turned the normals/depth
 # copies in XDR into the light buffers, and only then composites. With the

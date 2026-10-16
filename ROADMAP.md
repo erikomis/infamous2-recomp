@@ -60,8 +60,9 @@ left in New Marais, and the fact that nobody has gone past 1% of the game yet.
 
 ### Saves
 
-- [ ] Saves: check creation, loading and file location.
-  - Update: creation and loading work (Erik's autosave is written and loaded by the game itself). The location is the problem: `/dev_hdd0` is `gamedata/` relative to the directory the game was launched from, so launching from another folder means starting without a save. It needs a fixed path (for example under `~/Library/Application Support`).
+- [x] Saves: creation, loading and file location.
+  - Creation and loading work (Erik's autosave is written and loaded by the game itself).
+  - Fixed location (2026-10-16): the toolkit takes `PS3_GAMEDATA_ROOT` (saves in `<dir>/dev_hdd0/home/00000001/savedata`, trophies in `<dir>/trophies`; it used to be `./gamedata`, relative to the directory the game was launched from), and `run.sh` points it at `~/Library/Application Support/infamous2-recomp/gamedata` for windowed runs, copying the old `infamous2-lle/gamedata` there on the first run (the original stays as a backup). Headless runs keep `./gamedata` in their own `out/<name>.cwd/` and never touch the player's save. Verified: a headless run with `PS3_GAMEDATA_ROOT` on a path with a space, launched from an empty directory, loaded the New Marais save and autosaved into that copy only (sroot1); test `test_savedata_root.c`.
 
 ### Controls
 

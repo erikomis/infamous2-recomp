@@ -61,8 +61,9 @@ jogo.
 
 ### Saves
 
-- [ ] Saves: conferir criação, carregamento e local dos arquivos.
-  - Atualização: criação e carregamento funcionam (o autosave do Erik é gravado e carregado pelo próprio jogo). O local é o problema: o `/dev_hdd0` é `gamedata/` relativo ao diretório de onde o jogo foi aberto, então abrir de outra pasta é começar sem save. Precisa de um caminho fixo (por exemplo em `~/Library/Application Support`).
+- [x] Saves: criação, carregamento e local dos arquivos.
+  - Criação e carregamento funcionam (o autosave do Erik é gravado e carregado pelo próprio jogo).
+  - Local fixo (2026-10-16): o toolkit aceita `PS3_GAMEDATA_ROOT` (saves em `<dir>/dev_hdd0/home/00000001/savedata`, troféus em `<dir>/trophies`; antes era `./gamedata`, relativo à pasta de onde o jogo foi aberto), e o `run.sh` aponta para `~/Library/Application Support/infamous2-recomp/gamedata` nas execuções com janela, copiando o `infamous2-lle/gamedata` antigo para lá na primeira vez (o original fica como backup). As execuções sem janela continuam com `./gamedata` no próprio `out/<nome>.cwd/` e nunca tocam o save do jogador. Conferido: uma execução sem janela com `PS3_GAMEDATA_ROOT` num caminho com espaço, aberta de uma pasta vazia, carregou o save de New Marais e fez o autosave só nessa cópia (sroot1); teste `test_savedata_root.c`.
 
 ### Controles
 

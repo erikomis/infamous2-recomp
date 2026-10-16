@@ -818,6 +818,218 @@ index ea160aa..a2318a0 100644
  /* Set the fake PSN username (call before sceNpInit if desired) */
  void sceNpSetFakeUsername(const char* username);
  
+diff --git a/libs/network/sceNpTrophy.c b/libs/network/sceNpTrophy.c
+index d99e8ac..d956e6d 100644
+--- a/libs/network/sceNpTrophy.c
++++ b/libs/network/sceNpTrophy.c
+@@ -40,6 +40,19 @@
+ 
+ static int s_trophy_initialized = 0;
+ static char s_storage_path[512] = "gamedata/trophies";
++static int  s_storage_path_set = 0;
++
++/* $PS3_GAMEDATA_ROOT (see cellSaveData.c) moves the default next to the saves;
++ * an explicit sceNpTrophySetStoragePath still wins. */
++static void trophy_adopt_gamedata_root(void)
++{
++    static int s_done = 0;
++    if (s_done || s_storage_path_set) return;
++    s_done = 1;
++    const char* env = getenv("PS3_GAMEDATA_ROOT");
++    if (env && *env)
++        snprintf(s_storage_path, sizeof(s_storage_path), "%s/trophies", env);
++}
+ 
+ /* Per-context data */
+ typedef struct {
+@@ -68,6 +81,7 @@ static void trophy_ensure_dir(void)
+     char tmp[512];
+     char* p;
+ 
++    trophy_adopt_gamedata_root();
+     strncpy(tmp, s_storage_path, sizeof(tmp) - 1);
+     tmp[sizeof(tmp) - 1] = '\0';
+ 
+@@ -85,6 +99,7 @@ static void trophy_ensure_dir(void)
+ static void trophy_get_filepath(const SceNpCommunicationId* commId,
+                                  char* buf, size_t bufsize)
+ {
++    trophy_adopt_gamedata_root();
+     snprintf(buf, bufsize, "%s/%s.json", s_storage_path, commId->data);
+ }
+ 
+@@ -174,6 +189,7 @@ void sceNpTrophySetStoragePath(const char* path)
+     if (path) {
+         strncpy(s_storage_path, path, sizeof(s_storage_path) - 1);
+         s_storage_path[sizeof(s_storage_path) - 1] = '\0';
++        s_storage_path_set = 1;
+     }
+ }
+ 
+diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
+index 79ea8ca..d1208a3 100644
+--- a/libs/system/cellSaveData.c
++++ b/libs/system/cellSaveData.c
+@@ -52,6 +52,19 @@
+ 
+ static char s_save_root[1024] = "./gamedata/dev_hdd0/home/00000001/savedata";
+ 
++/* $PS3_GAMEDATA_ROOT replaces the cwd-relative "./gamedata", so a port can keep
++ * the player's saves in one fixed place (e.g. ~/Library/Application Support/...)
++ * no matter which directory the game was launched from. */
++static void adopt_gamedata_root(void)
++{
++    static int s_done = 0;
++    if (s_done) return;
++    s_done = 1;
++    const char* env = getenv("PS3_GAMEDATA_ROOT");
++    if (env && *env)
++        snprintf(s_save_root, sizeof(s_save_root), "%s/dev_hdd0/home/00000001/savedata", env);
++}
++
+ /* Ensure directory (and parents) exist */
+ static void ensure_dirs(const char* path)
+ {
+@@ -72,6 +85,7 @@ static void ensure_dirs(const char* path)
+ 
+ static void build_save_path(char* buf, size_t buf_size, const char* dirName)
+ {
++    adopt_gamedata_root();
+     snprintf(buf, buf_size, "%s/%s", s_save_root, dirName);
+ #ifdef _WIN32
+     for (char* p = buf; *p; p++) {
+@@ -436,6 +450,7 @@ static u32 enumerate_save_dirs(const char* prefix, CellSaveDataDirList* dirList,
+ {
+     u32 count = 0;
+ 
++    adopt_gamedata_root();
+     ensure_dirs(s_save_root);
+ 
+ #ifdef _WIN32
+@@ -515,50 +530,50 @@ static u32 savedata_content_type(const char* name)
+     return CELL_SAVEDATA_FILETYPE_NORMALFILE;
+ }
+ 
+-/* Which files were written as SECUREFILE. A real save records them in
+- * PARAM.PFD; ours keeps one name per line there, and the file stays hidden
+- * from the guest's list (savedata_system_file). Without it every file came
+- * back as NORMALFILE, and a title that looks for its secure payload in the
+- * stat list (The Simpsons Arcade Game) called its own fresh save corrupt. */
+-static void pfd_path(const char* save_path, char* out, size_t n)
+-{
+-    snprintf(out, n, "%s/PARAM.PFD", save_path);
+-#ifdef _WIN32
+-    for (char* p = out; *p; p++) if (*p == '/') *p = '\\';
+-#endif
+-}
+-
+-static int pfd_has(const char* save_path, const char* name)
+-{
+-    char path[1024], line[64];
+-    pfd_path(save_path, path, sizeof(path));
+-    FILE* fp = fopen(path, "rb");
+-    if (!fp) return 0;
+-    int found = 0;
+-    while (!found && fgets(line, sizeof(line), fp)) {
+-        line[strcspn(line, "\r\n")] = 0;
+-        found = !strcmp(line, name);
+-    }
+-    fclose(fp);
+-    return found;
+-}
+-
+-static void pfd_add(const char* save_path, const char* name)
+-{
+-    if (pfd_has(save_path, name)) return;
+-    char path[1024];
+-    pfd_path(save_path, path, sizeof(path));
+-    FILE* fp = fopen(path, "ab");
+-    if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
+-}
+-
+-static u32 savedata_file_type(const char* save_path, const char* name)
+-{
+-    u32 t = savedata_content_type(name);
+-    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && pfd_has(save_path, name)
+-         ? CELL_SAVEDATA_FILETYPE_SECUREFILE : t;
+-}
+-
++/* Which files were written as SECUREFILE. A real save records them in
++ * PARAM.PFD; ours keeps one name per line there, and the file stays hidden
++ * from the guest's list (savedata_system_file). Without it every file came
++ * back as NORMALFILE, and a title that looks for its secure payload in the
++ * stat list (The Simpsons Arcade Game) called its own fresh save corrupt. */
++static void pfd_path(const char* save_path, char* out, size_t n)
++{
++    snprintf(out, n, "%s/PARAM.PFD", save_path);
++#ifdef _WIN32
++    for (char* p = out; *p; p++) if (*p == '/') *p = '\\';
++#endif
++}
++
++static int pfd_has(const char* save_path, const char* name)
++{
++    char path[1024], line[64];
++    pfd_path(save_path, path, sizeof(path));
++    FILE* fp = fopen(path, "rb");
++    if (!fp) return 0;
++    int found = 0;
++    while (!found && fgets(line, sizeof(line), fp)) {
++        line[strcspn(line, "\r\n")] = 0;
++        found = !strcmp(line, name);
++    }
++    fclose(fp);
++    return found;
++}
++
++static void pfd_add(const char* save_path, const char* name)
++{
++    if (pfd_has(save_path, name)) return;
++    char path[1024];
++    pfd_path(save_path, path, sizeof(path));
++    FILE* fp = fopen(path, "ab");
++    if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
++}
++
++static u32 savedata_file_type(const char* save_path, const char* name)
++{
++    u32 t = savedata_content_type(name);
++    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && pfd_has(save_path, name)
++         ? CELL_SAVEDATA_FILETYPE_SECUREFILE : t;
++}
++
+ /* Enumerate files in a save directory. Returns count, fills fileList up to max. */
+ static u32 enumerate_save_files(const char* save_path,
+                                  CellSaveDataFileStat* fileList, u32 max)
+@@ -579,7 +594,7 @@ static u32 enumerate_save_files(const char* save_path,
+                 continue;
+             if (count < max && fileList) {
+                 memset(&fileList[count], 0, sizeof(CellSaveDataFileStat));
+-                fileList[count].fileType = savedata_file_type(save_path, fd.cFileName);
++                fileList[count].fileType = savedata_file_type(save_path, fd.cFileName);
+                 strncpy(fileList[count].fileName, fd.cFileName,
+                         CELL_SAVEDATA_FILENAME_SIZE - 1);
+                 ULARGE_INTEGER sz;
+@@ -616,7 +631,7 @@ static u32 enumerate_save_files(const char* save_path,
+ #endif
+             if (count < max && fileList) {
+                 memset(&fileList[count], 0, sizeof(CellSaveDataFileStat));
+-                fileList[count].fileType = savedata_file_type(save_path, de->d_name);
++                fileList[count].fileType = savedata_file_type(save_path, de->d_name);
+                 strncpy(fileList[count].fileName, de->d_name,
+                         CELL_SAVEDATA_FILENAME_SIZE - 1);
+                 fileList[count].st_size = (u64)st.st_size;
+@@ -721,8 +736,8 @@ static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
+         size_t wrote = fwrite(set->fileBuf, 1, write_size, fp);
+         int failed = wrote != write_size;
+         if (fclose(fp) != 0) failed = 1;
+-        if (!failed && set->fileType == CELL_SAVEDATA_FILETYPE_SECUREFILE)
+-            pfd_add(save_path, name);
++        if (!failed && set->fileType == CELL_SAVEDATA_FILETYPE_SECUREFILE)
++            pfd_add(save_path, name);
+         return failed ? CELL_SAVEDATA_ERROR_ACCESS_ERROR : (s32)wrote;
+     }
+ 
 diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
 index d1b8f32..26de280 100644
 --- a/libs/system/cellSysutil.c
@@ -985,6 +1197,60 @@ index d1b8f32..26de280 100644
          break;
      case CELL_SYSUTIL_SYSTEMPARAM_ID_ENTER_BUTTON_ASSIGN:
          v = CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CROSS;
+diff --git a/libs/system/tests/test_savedata_root.c b/libs/system/tests/test_savedata_root.c
+new file mode 100644
+index 0000000..f8ee047
+--- /dev/null
++++ b/libs/system/tests/test_savedata_root.c
+@@ -0,0 +1,48 @@
++/* clang -std=gnu17 -I include libs/system/tests/test_savedata_root.c
++ * -Wl,-dead_strip -o /tmp/test_savedata_root && /tmp/test_savedata_root */
++#include "../cellSaveData.c"
++#include <assert.h>
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++
++ps3_guest_caller_fn g_ps3_guest_caller;
++
++int main(void)
++{
++    char root[] = "/tmp/ps3recomp-gamedata-root-XXXXXX";
++    assert(mkdtemp(root));
++    setenv("PS3_GAMEDATA_ROOT", root, 1);
++
++    /* The env root replaces ./gamedata for the save path... */
++    char path[1024], want[1024];
++    build_save_path(path, sizeof(path), "TEST00000");
++    snprintf(want, sizeof(want), "%s/dev_hdd0/home/00000001/savedata/TEST00000", root);
++    assert(strcmp(path, want) == 0);
++
++    /* ...and for the listing, which creates the tree and finds saves in it. */
++    snprintf(want, sizeof(want), "%s/dev_hdd0/home/00000001/savedata", root);
++    assert(enumerate_save_dirs("TEST", NULL, 0) == 0);
++    assert(dir_exists(want));
++    snprintf(path, sizeof(path), "%s/TEST00000", want);
++    assert(HOST_MKDIR(path) == 0);
++    CellSaveDataDirList list[2];
++    assert(enumerate_save_dirs("TEST", list, 2) == 1);
++    assert(strcmp(list[0].dirName, "TEST00000") == 0);
++
++    /* Adopted once: a later change of the env does not move the saves. */
++    setenv("PS3_GAMEDATA_ROOT", "/nonexistent", 1);
++    assert(enumerate_save_dirs("TEST", list, 2) == 1);
++
++    char cmd[1100];
++    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
++    assert(system(cmd) == 0);
++    puts("PS3_GAMEDATA_ROOT moves the save root and the listing follows it");
++}
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 index 73b7e71..793f97e 100644
 --- a/libs/video/cellGcmSys.c

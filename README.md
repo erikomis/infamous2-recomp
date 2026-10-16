@@ -107,6 +107,11 @@ on top of it:
 The mouse is tuned with `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1` and
 `PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` turns it off.
 
+Saves and trophies live in `~/Library/Application Support/infamous2-recomp/gamedata`
+(Linux: `~/.local/share/infamous2-recomp`), whatever directory the game is launched from;
+the first windowed `./run.sh` copies an older `infamous2-lle/gamedata` there.
+`PS3_GAMEDATA_ROOT=<dir>` picks another place.
+
 For headless tests: `tools/capture.sh <name> <seconds>` saves a PNG of the
 frame every 10 s, `PAD_SCRIPT="95:0x4000"` presses ✕ at 95 s
 (`760:0x0400:400` holds L1 for 400 s) and `PAD_STICK="lx,ly,rx,ry,from,to;..."`
