@@ -933,7 +933,7 @@ index d99e8ac..d956e6d 100644
  }
  
 diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
-index 79ea8ca..d1208a3 100644
+index 79ea8ca..a581869 100644
 --- a/libs/system/cellSaveData.c
 +++ b/libs/system/cellSaveData.c
 @@ -52,6 +52,19 @@
@@ -972,130 +972,6 @@ index 79ea8ca..d1208a3 100644
      ensure_dirs(s_save_root);
  
  #ifdef _WIN32
-@@ -515,50 +530,50 @@ static u32 savedata_content_type(const char* name)
-     return CELL_SAVEDATA_FILETYPE_NORMALFILE;
- }
- 
--/* Which files were written as SECUREFILE. A real save records them in
-- * PARAM.PFD; ours keeps one name per line there, and the file stays hidden
-- * from the guest's list (savedata_system_file). Without it every file came
-- * back as NORMALFILE, and a title that looks for its secure payload in the
-- * stat list (The Simpsons Arcade Game) called its own fresh save corrupt. */
--static void pfd_path(const char* save_path, char* out, size_t n)
--{
--    snprintf(out, n, "%s/PARAM.PFD", save_path);
--#ifdef _WIN32
--    for (char* p = out; *p; p++) if (*p == '/') *p = '\\';
--#endif
--}
--
--static int pfd_has(const char* save_path, const char* name)
--{
--    char path[1024], line[64];
--    pfd_path(save_path, path, sizeof(path));
--    FILE* fp = fopen(path, "rb");
--    if (!fp) return 0;
--    int found = 0;
--    while (!found && fgets(line, sizeof(line), fp)) {
--        line[strcspn(line, "\r\n")] = 0;
--        found = !strcmp(line, name);
--    }
--    fclose(fp);
--    return found;
--}
--
--static void pfd_add(const char* save_path, const char* name)
--{
--    if (pfd_has(save_path, name)) return;
--    char path[1024];
--    pfd_path(save_path, path, sizeof(path));
--    FILE* fp = fopen(path, "ab");
--    if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
--}
--
--static u32 savedata_file_type(const char* save_path, const char* name)
--{
--    u32 t = savedata_content_type(name);
--    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && pfd_has(save_path, name)
--         ? CELL_SAVEDATA_FILETYPE_SECUREFILE : t;
--}
--
-+/* Which files were written as SECUREFILE. A real save records them in
-+ * PARAM.PFD; ours keeps one name per line there, and the file stays hidden
-+ * from the guest's list (savedata_system_file). Without it every file came
-+ * back as NORMALFILE, and a title that looks for its secure payload in the
-+ * stat list (The Simpsons Arcade Game) called its own fresh save corrupt. */
-+static void pfd_path(const char* save_path, char* out, size_t n)
-+{
-+    snprintf(out, n, "%s/PARAM.PFD", save_path);
-+#ifdef _WIN32
-+    for (char* p = out; *p; p++) if (*p == '/') *p = '\\';
-+#endif
-+}
-+
-+static int pfd_has(const char* save_path, const char* name)
-+{
-+    char path[1024], line[64];
-+    pfd_path(save_path, path, sizeof(path));
-+    FILE* fp = fopen(path, "rb");
-+    if (!fp) return 0;
-+    int found = 0;
-+    while (!found && fgets(line, sizeof(line), fp)) {
-+        line[strcspn(line, "\r\n")] = 0;
-+        found = !strcmp(line, name);
-+    }
-+    fclose(fp);
-+    return found;
-+}
-+
-+static void pfd_add(const char* save_path, const char* name)
-+{
-+    if (pfd_has(save_path, name)) return;
-+    char path[1024];
-+    pfd_path(save_path, path, sizeof(path));
-+    FILE* fp = fopen(path, "ab");
-+    if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
-+}
-+
-+static u32 savedata_file_type(const char* save_path, const char* name)
-+{
-+    u32 t = savedata_content_type(name);
-+    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && pfd_has(save_path, name)
-+         ? CELL_SAVEDATA_FILETYPE_SECUREFILE : t;
-+}
-+
- /* Enumerate files in a save directory. Returns count, fills fileList up to max. */
- static u32 enumerate_save_files(const char* save_path,
-                                  CellSaveDataFileStat* fileList, u32 max)
-@@ -579,7 +594,7 @@ static u32 enumerate_save_files(const char* save_path,
-                 continue;
-             if (count < max && fileList) {
-                 memset(&fileList[count], 0, sizeof(CellSaveDataFileStat));
--                fileList[count].fileType = savedata_file_type(save_path, fd.cFileName);
-+                fileList[count].fileType = savedata_file_type(save_path, fd.cFileName);
-                 strncpy(fileList[count].fileName, fd.cFileName,
-                         CELL_SAVEDATA_FILENAME_SIZE - 1);
-                 ULARGE_INTEGER sz;
-@@ -616,7 +631,7 @@ static u32 enumerate_save_files(const char* save_path,
- #endif
-             if (count < max && fileList) {
-                 memset(&fileList[count], 0, sizeof(CellSaveDataFileStat));
--                fileList[count].fileType = savedata_file_type(save_path, de->d_name);
-+                fileList[count].fileType = savedata_file_type(save_path, de->d_name);
-                 strncpy(fileList[count].fileName, de->d_name,
-                         CELL_SAVEDATA_FILENAME_SIZE - 1);
-                 fileList[count].st_size = (u64)st.st_size;
-@@ -721,8 +736,8 @@ static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
-         size_t wrote = fwrite(set->fileBuf, 1, write_size, fp);
-         int failed = wrote != write_size;
-         if (fclose(fp) != 0) failed = 1;
--        if (!failed && set->fileType == CELL_SAVEDATA_FILETYPE_SECUREFILE)
--            pfd_add(save_path, name);
-+        if (!failed && set->fileType == CELL_SAVEDATA_FILETYPE_SECUREFILE)
-+            pfd_add(save_path, name);
-         return failed ? CELL_SAVEDATA_ERROR_ACCESS_ERROR : (s32)wrote;
-     }
- 
 diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
 index d1b8f32..26de280 100644
 --- a/libs/system/cellSysutil.c
@@ -1766,7 +1642,7 @@ index 7718d14..6809e91 100644
              state->vertex_constants[slot][lane] = f;
              { static int _sq=0, _e=-1; if (_e < 0) _e = getenv("SEQ_DBG") ? 1 : 0; if (_e && slot==256 && lane==0 && __atomic_fetch_add(&_sq, 1, __ATOMIC_RELAXED) < 500)
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..f236dff 100644
+index 9a76e67..aed1ad8 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -95,6 +95,7 @@ typedef struct {
@@ -2311,26 +2187,35 @@ index 9a76e67..f236dff 100644
  /* Texture units the current guest fragment program samples: a unit can stay
   * enabled with a stale binding (a shadow pass keeps its own map bound), and a
   * snapshot is only worth taking for one the program reads. */
-+/* PS3RECOMP_ENG_ZRESOLVE_UNREAD=1 resolves depth for unread units again (A/B). */
-+static int eng_zresolve_unread_skip(void)
++/* PS3RECOMP_ENG_BIND_UNREAD=1 binds every enabled unit again, read or not (A/B). */
++static int eng_bind_unread(void)
 +{
-+    static int skip = -1;
-+    if (skip < 0) skip = getenv("PS3RECOMP_ENG_ZRESOLVE_UNREAD") ? 0 : 1;
-+    return skip;
++    static int on = -1;
++    if (on < 0) on = getenv("PS3RECOMP_ENG_BIND_UNREAD") ? 1 : 0;
++    return on;
 +}
 +
  static u32 eng_fp_tex_mask(void)
  {
      const eng_fp_memo* fp = NULL;
-@@ -1755,12 +2024,24 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1755,12 +2024,32 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                rsx_be_sampler_desc samplers[RSX_BE_MAX_TEXTURES])
  {
      u32 mask = 0;
-+    const u32 fp_reads = eng_fp_tex_mask();
++    const u32 fp_reads = eng_bind_unread() ? 0xFFFFu : eng_fp_tex_mask();
      for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
          rsx_dsp_texture t;
          rsx_dsp_get_texture(&g.rsx, u, &t);
-         if (!t.enabled) continue;
+-        if (!t.enabled) continue;
++        /* A unit left enabled by an earlier draw but not sampled by this
++         * program is skipped (as upstream's sink_bind_textures does): binding
++         * it costs a cache check and a hash, and a unit left on the depth
++         * buffer a depth resolve. Since each depth write invalidates the
++         * resolved copy, inFAMOUS 2's forward materials (FP 3e92fd7ffdfc0f5f,
++         * tex0 x constant, depth writes on, a stale unit on the zeta) paid a
++         * render-pass break and a full-screen decode per draw: ~1000 a frame,
++         * ~45 ms of GPU. */
++        if (!t.enabled || !(fp_reads >> u & 1u)) continue;
          mask |= 1u << u;
          eng_decode_sampler(t.filter, t.wrap, t.control0, &samplers[u]);
 +        /* PS3RECOMP_ENG_SIGNLOG=1: units bound with SET_TEXTURE_FILTER's
@@ -2347,7 +2232,7 @@ index 9a76e67..f236dff 100644
  
          /* Several targets can share an address (one per size/format). Take
           * the one whose size matches the texture, else the newest; never one
-@@ -1805,6 +2086,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1805,6 +2094,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                       t.remap & 0xFFFFu, t.format)
                  : 0;
              textures[u] = view ? view : g.surfaces[sampled].handle;
@@ -2365,26 +2250,7 @@ index 9a76e67..f236dff 100644
              continue;
          }
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
-@@ -1818,6 +2110,18 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
-                       fprintf(stderr, "[rsx engine] depth-address texture unit=%u fmt=0x%02X base=0x%02X remap=0x%04X %ux%u zcur=%d\n",
-                               u, t.format, base_fmt, t.remap & 0xFFFF, t.width, t.height, current_zslot == i); }
-               } }
-+        /* A depth unit the program never samples is left unbound. Resolving
-+         * it costs a render-pass break plus a full-screen decode, and since a
-+         * depth write invalidates the copy, a stale unit left on the depth
-+         * buffer made inFAMOUS 2 resolve before every forward draw that
-+         * writes depth (~1000 a frame, ~45 ms of GPU time) for a program
-+         * that reads only tex0. */
-+        if (base_fmt == RSX_TEX_FMT_DEPTH24_D8 || base_fmt == 0x85u || base_fmt == 0x9Eu) {
-+            int on_zeta = 0;
-+            for (u32 i = 0; i < g.n_zdepths; i++)
-+                if (g.zdepths[i].location == t.location && g.zdepths[i].offset == t.offset) { on_zeta = 1; break; }
-+            if (on_zeta && !(fp_reads >> u & 1u) && eng_zresolve_unread_skip()) { mask &= ~(1u << u); continue; }
-+        }
-         if (base_fmt == RSX_TEX_FMT_DEPTH24_D8) {
-             for (u32 i = 0; i < g.n_zdepths; i++)
-                 if (g.zdepths[i].location == t.location &&
-@@ -1845,9 +2149,13 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1845,9 +2145,13 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                  }
              if (textures[u]) continue;
          }
@@ -2399,7 +2265,7 @@ index 9a76e67..f236dff 100644
          /* PS3RECOMP_ENG_TEXLOG_RT=<hex>: guest-memory bindings of draws into
           * colour target A at that offset (first 40). */
          { static long trt = -2; static int n;
-@@ -1879,7 +2187,7 @@ static u32 sink_bind_vertex_textures(
+@@ -1879,7 +2183,7 @@ static u32 sink_bind_vertex_textures(
          /* A vertex unit has no crossbar, so its remap is the identity. */
          textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
                                         vt.width, vt.height, vt.mipmaps,
@@ -2408,7 +2274,7 @@ index 9a76e67..f236dff 100644
          if (textures[u]) bound |= 1u << u;
      }
      return bound;
-@@ -1978,6 +2286,37 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1978,6 +2282,37 @@ static void sink_end(void* user, const rsx_dispatch* r)
      DS_MARK(ns_bind);   /* render state, targets, zeta: counted with binds */
      const u32 tex_mask = sink_bind_textures(targets, n_targets, zslot,
                                              textures, samplers);
@@ -2446,7 +2312,7 @@ index 9a76e67..f236dff 100644
      const u32 vtex_mask = sink_bind_vertex_textures(eng_vtex_mask(), vtextures,
                                                      vsamplers);
  
-@@ -1992,6 +2331,127 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1992,6 +2327,127 @@ static void sink_end(void* user, const rsx_dispatch* r)
                                            n_targets, &pipeline_is_fixed);
      if (!pipeline) { eng_drop("pipeline", prim); return; }
      DS_MARK(ns_pipe);
@@ -2574,7 +2440,7 @@ index 9a76e67..f236dff 100644
  
      if (indexed) {
          if (!dc_reserve_indices(n_draw)) { eng_drop("reserve_indices", prim); return; }
-@@ -2045,6 +2505,57 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2045,6 +2501,57 @@ static void sink_end(void* user, const rsx_dispatch* r)
      memset(g.fp_cb, 0, fp_bytes);
      if (g.fp_constants->count)
          memcpy(g.fp_cb, g.fp_constants->values, g.fp_constants->count * 16u);
@@ -2632,7 +2498,7 @@ index 9a76e67..f236dff 100644
      { float* alpha = (float*)(g.fp_cb + nslots * 16u);
        alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
        /* WPOS y = pos.y * alpha[1] + alpha[2]: SHADER_WINDOW (0x1D88) bits
-@@ -2126,8 +2637,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2126,8 +2633,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
          ds.ns_rest += eng_ds_now() - ds_t0;
      }
  
@@ -2654,7 +2520,7 @@ index 9a76e67..f236dff 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2138,6 +2661,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2138,6 +2657,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
      const u32 n_targets = eng_current_target_set(targets);
      if (!n_targets) return;
  
@@ -2676,7 +2542,7 @@ index 9a76e67..f236dff 100644
      if (mask & (RSX_CLEAR_COLOR_R | RSX_CLEAR_COLOR_G |
                  RSX_CLEAR_COLOR_B | RSX_CLEAR_COLOR_A)) {
          const u32 c = rsx_dsp_clear_color(&g.rsx);
-@@ -2347,13 +2885,23 @@ presented:;
+@@ -2347,13 +2881,23 @@ presented:;
                pf = b0 = b1 = bw = 0; t0 = now; } } }
      /* PS3RECOMP_ENG_MEMDUMP=<hexEA>:<hexLen>:<worldframe>[:file]: at that world
       * frame, write the guest range as hex words, 16 bytes per line -- the same
@@ -2704,7 +2570,7 @@ index 9a76e67..f236dff 100644
            extern uint8_t* vm_base;
            FILE* f = fopen(dpath, "w");
            if (f && vm_base) {
-@@ -2408,6 +2956,20 @@ presented:;
+@@ -2408,6 +2952,20 @@ presented:;
                }
            } } }
      eng_constlog_frame_end();
@@ -2725,7 +2591,7 @@ index 9a76e67..f236dff 100644
      g.frames++;
      eng_ds_frame_end(g.guest_draws);
      g.last_guest_draws = g.guest_draws;
-@@ -2531,6 +3093,95 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +3089,95 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
