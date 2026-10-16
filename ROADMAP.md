@@ -109,7 +109,8 @@ Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que lev
 - [ ] **Pacotes de texturas e mods:** carregar texturas substitutas (alta resolução, refeitas por IA) e patches, ligar/desligar cada um.
 - [ ] **Desempenho e diagnóstico:** contador de fps/tempo de quadro na tela; "reportar problema" que salva o quadro atual com os dados de diagnóstico (`tools/play_dump.sh`) e o log num arquivo para mandar; perfis prontos (qualidade/equilibrado/desempenho).
 - [ ] **Atualizações:** avisar quando o port tiver versão nova e refazer o rebuild sozinho.
-- [ ] **Idioma** da interface (português e inglês).
+- [ ] **Idioma** da interface do app (português e inglês).
+- [ ] **Idioma do jogo (dublagem, legendas e menus)** escolhível no launcher e no menu dentro do jogo, entre os que a cópia do jogador traz (`cache/psarc/<idioma>.psarc` e `<idioma>_text.psarc`: português do Brasil, de Portugal, espanhol latino, inglês e outros). Grava `PS3_LANG` no `config.toml` (padrão hoje: `pt-br` no `run.sh`). O jogo carrega o idioma ao abrir, então trocar pede reiniciar; o app avisa e reinicia sozinho. Opcional: voz e legenda em idiomas diferentes (ex.: voz em inglês, legenda em português), redirecionando a abertura dos `.psarc` de voz ou de texto.
 - [ ] **Versões do jogo:** hoje só a PSN (`NPUA80638`, PKG ou pasta do RPCS3 + `.rap` da compra do jogador). Para quem tem o disco: aceitar a .iso (`BCUS98125`) com a chave do disco (`.dkey`/`.ird`) e a atualização oficial, como os ports de Twisted Metal, All-Stars e Drakengard 3 (`decrypt_iso.py`, AES-CBC). Antes, comparar o EBOOT do disco atualizado com o da PSN: se for igual, é só a descriptografia; se não, um segundo perfil de recomp. O app identifica a versão do executável e avisa quando não é suportada.
 
 ### Desempenho
