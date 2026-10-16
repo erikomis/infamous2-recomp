@@ -889,24 +889,6 @@ index d1b8f32..0ee610a 100644
          break;
      case CELL_SYSUTIL_SYSTEMPARAM_ID_ENTER_BUTTON_ASSIGN:
          v = CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CROSS;
-diff --git a/libs/system/cellSysutil.h b/libs/system/cellSysutil.h
-index 238e188..241d746 100644
---- a/libs/system/cellSysutil.h
-+++ b/libs/system/cellSysutil.h
-@@ -58,8 +58,11 @@ extern "C" {
- #define CELL_SYSUTIL_LANG_DANISH             14
- #define CELL_SYSUTIL_LANG_NORWEGIAN          15
- #define CELL_SYSUTIL_LANG_POLISH             16
--#define CELL_SYSUTIL_LANG_PORTUGUESE_BR      17
--#define CELL_SYSUTIL_LANG_ENGLISH_GB         18
-+/* 17 is English (UK) and 18 Portuguese (Brazil), the console's own order
-+ * (RPCS3's system_language list). These two were swapped here, so a title
-+ * asked for Brazilian Portuguese got British English. */
-+#define CELL_SYSUTIL_LANG_ENGLISH_GB         17
-+#define CELL_SYSUTIL_LANG_PORTUGUESE_BR      18
- #define CELL_SYSUTIL_LANG_TURKISH            19
- 
- /* Enter button assign */
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 index 73b7e71..793f97e 100644
 --- a/libs/video/cellGcmSys.c
@@ -6134,7 +6116,7 @@ index ab59cbe..6f63368 100644
                  # right after another branch (fallthrough entry)
                  while k > 0 and seg[k].addr not in targets and not _ends_block(seg[k - 1]):
 diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
-index 00b771d..d78a9ac 100644
+index 00b771d..a18e3d8 100644
 --- a/tools/spu_lifter.py
 +++ b/tools/spu_lifter.py
 @@ -499,7 +499,11 @@ def compute_link_returns(insns, bounds) -> set:
@@ -6275,7 +6257,7 @@ index 00b771d..d78a9ac 100644
              for t in externs:
                  lines.append(f"void {self.prefix}spu_func_{t:08X}(spu_context* ctx) {{")
 -                lines.append(f"    ctx->pc = 0x{t:X}u; "
-+                lines.append(f"    ctx->pc = {self._A(t)}; "
++                lines.append(f"    ctx->pc = {self._A(t) if self.reloc else f'0x{t:X}u'}; "
                               f"g_spu_trampoline_fn = spu_indirect_branch; return;")
                  lines.append("}")
              lines.append("")
