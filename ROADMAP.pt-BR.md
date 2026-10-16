@@ -293,6 +293,7 @@ cada correção é um PR, com teste onde dava para ter um.
 - [x] (2026-10-16) Pedimos dicas de desempenho ao upstream com o perfil de New Marais
   ([issue #337](https://github.com/sp00nznet/ps3recomp/issues/337)): overhead do runtime de SPU, latência de
   sincronização PPU-SPU, SPURS além do nSpus, hash de texturas e busca de vértices no RSX.
+- [x] (2026-10-16, tarde) Terceira leva, do trabalho da linha do tempo. Upstream: [#338](https://github.com/sp00nznet/ps3recomp/pull/338) (`PS3_GAMEDATA_ROOT`: saves e troféus fora do diretório de trabalho) e [#339](https://github.com/sp00nznet/ps3recomp/pull/339) (`PS3_FTRACE` + `tools/ftrace_report.py`, só-header para os testes autocontidos que compilam os arquivos com ganchos continuarem linkando; as 32 verificações headless do `ps3recomp_host` passam). Fork: [#23](https://github.com/NoahBPeterson/ps3recomp/pull/23) (`PS3_GAMEDATA_ROOT`), [#24](https://github.com/NoahBPeterson/ps3recomp/pull/24) (unidades de textura que o FP nunca amostra ficam sem vínculo: o conserto do resolve de profundidade, caminhada 7,5 -> ~11,5 fps; o upstream já faz isso no `sink_bind_textures`, então não há PR lá) e [#25](https://github.com/NoahBPeterson/ps3recomp/pull/25) (`PS3_FTRACE`).
 - [ ] Ainda não enviados: os extras do dump de texturas do Metal (RG16, blocos BC crus, contagem de pulo; o backend
   Metal do upstream não tem dump de texturas), `DUMP_TRIGGER`/`play_dump` e, no upstream, os três só do fork.
 

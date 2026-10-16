@@ -305,6 +305,7 @@ each fix is a PR, with a test wherever one was possible.
 - [x] (2026-10-16) Asked upstream for performance advice with our New Marais profile
   ([issue #337](https://github.com/sp00nznet/ps3recomp/issues/337)): SPU runtime overhead, PPU-SPU sync latency,
   SPURS beyond nSpus, RSX texture hashing and vertex fetch.
+- [x] (2026-10-16, afternoon) Third round, from the frame-timeline work. Upstream: [#338](https://github.com/sp00nznet/ps3recomp/pull/338) (`PS3_GAMEDATA_ROOT`: saves and trophies out of the working directory) and [#339](https://github.com/sp00nznet/ps3recomp/pull/339) (`PS3_FTRACE` + `tools/ftrace_report.py`, header-only so the self-contained tests that compile the hooked files keep linking; all 32 headless `ps3recomp_host` checks pass). Fork: [#23](https://github.com/NoahBPeterson/ps3recomp/pull/23) (`PS3_GAMEDATA_ROOT`), [#24](https://github.com/NoahBPeterson/ps3recomp/pull/24) (texture units the FP never samples stay unbound: the depth-resolve fix, walk 7.5 -> ~11.5 fps; upstream already does this in `sink_bind_textures`, so no upstream PR) and [#25](https://github.com/NoahBPeterson/ps3recomp/pull/25) (`PS3_FTRACE`).
 - [ ] Not sent yet: the Metal texture dump extras (RG16, raw BC blocks, skip count; upstream's Metal backend has no
   texture dump at all), `DUMP_TRIGGER`/`play_dump`, and upstream versions of the three fork-only ones (upstream has
   no RGBA depth snapshot, no `spu_overlay_register_region_at` registry and no keyboard pad).

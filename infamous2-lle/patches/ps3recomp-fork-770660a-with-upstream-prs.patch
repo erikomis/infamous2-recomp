@@ -87,64 +87,227 @@ index 0000000..df98ec6
 +  https://registry.khronos.org/OpenGL/extensions/ARB/ARB_shadow.txt
 diff --git a/include/ps3emu/ps3_ftrace.h b/include/ps3emu/ps3_ftrace.h
 new file mode 100644
-index 0000000..13223e9
+index 0000000..bfa9c6d
 --- /dev/null
 +++ b/include/ps3emu/ps3_ftrace.h
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,223 @@
 +/*
 + * ps3_ftrace -- a timeline of who waits for whom, frame by frame.
 + *
 + * PS3_FTRACE=<start s>:<seconds>:<path> records timestamped spans from the PPU
-+ * syscall dispatcher, the SPU channel waits, the RSX FIFO walker and the present
-+ * path for <seconds> starting <start s> after boot, then writes them to <path>
-+ * as text (one span per line, see ps3_ftrace.c) for tools/ftrace_report.py.
++ * syscall dispatcher, the SPU channel waits, the RSX FIFO walker and the Metal
++ * backend for <seconds> starting <start s> after the first hook ran (~boot),
++ * then writes them to <path> as text for tools/ftrace_report.py:
++ *   # ps3_ftrace start_us=<n> end_us=<n> spans=<n> dropped=<n>
++ *   T <tid> <name>                         PPU thread names
++ *   <kind> <who> <a hex> <b hex> <t0 us> <t1 us>
 + *
-+ * A profile says where CPU time goes; it cannot say why a frame takes 70 ms
-+ * when no thread is busy for 70 ms. That is a latency chain -- the PPU waiting
-+ * on SPU tasks waiting on a DMA waiting on the RSX -- and only a timeline shows
-+ * it. Off by default; with it off every hook is one predictable branch.
++ * A sampling profile says where CPU time goes; it cannot say why a frame takes
++ * 130 ms when no thread is busy for 130 ms. That is a latency chain -- the PPU
++ * waiting on SPU tasks waiting on the RSX waiting on the GPU -- and only a
++ * timeline shows it.
++ *
++ * Header-only on purpose: the hooked files are also compiled on their own by
++ * self-contained tests, and a new link dependency would break each of them.
++ * The state is one weak/selectany object the linker folds into a single copy;
++ * the functions are static inline. Off (the default), every hook is a load
++ * and a predictable branch. Knobs: PS3_FTRACE_MIN_US (shortest span kept,
++ * default 20), PS3_FTRACE_MERGE_US (usleep polls of one thread at one call
++ * site closer than this become one span, default 300), PS3_FTRACE_CAP (spans
++ * kept, default 4M = 128 MB, allocated only when recording).
 + */
 +#ifndef PS3EMU_PS3_FTRACE_H
 +#define PS3EMU_PS3_FTRACE_H
 +
 +#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#ifdef _WIN32
++#  include <windows.h>
++#else
++#  include <time.h>
++#endif
 +
 +#ifdef __cplusplus
 +extern "C" {
 +#endif
 +
 +enum ps3_ft_kind {
-+    PS3_FT_SYSCALL   = 1,  /* who = PPU tid, a = syscall number, b = guest lr       */
-+    PS3_FT_USLEEP    = 2,  /* who = PPU tid, a = usleep calls merged, b = guest lr  */
-+    PS3_FT_SPU_WAIT  = 3,  /* who = SPU id,  a = channel,        b = LS pc          */
-+    PS3_FT_SPU_BUSY  = 4,  /* who = SPU id,  a = lifted image,   b = SPURS wid      */
-+    PS3_FT_SEMA      = 5,  /* RSX blocked on ACQUIRE: a = label offset, b = value   */
-+    PS3_FT_SEMA_GAVEUP = 6,/* same, ended by GCM_SEMA_ACQUIRE_MS                    */
-+    PS3_FT_DRAIN     = 7,  /* one RSX FIFO drain pass, a = 1 if it ended on an ACQUIRE */
-+    PS3_FT_FLIP_FIFO = 8,  /* instant: the RSX reached a flip, a = buffer           */
-+    PS3_FT_FLIP_REQ  = 9,  /* instant: the guest asked for a flip, a = buffer       */
-+    PS3_FT_PRESENT   = 10, /* the host presented a guest frame                      */
-+    PS3_FT_GPU_ENCODE = 11,/* Metal: CPU encode of the recorded draws, a = 1 present / 0 flush, b = records */
-+    PS3_FT_GPU_WAIT  = 12, /* Metal: CPU waits for the GPU, a = 1 present / 0 flush / 2 in-flight bound, b = flush reason */
-+    PS3_FT_READBACK  = 13, /* Metal: render target read back to the CPU, a = w, b = h */
-+    PS3_FT_GPU_EXEC  = 14, /* Metal: the command buffer's own GPU time (GPUStart..GPUEnd), ending when the
-+                            * CPU saw it complete; who = render passes, a = depth resolves | colour copies << 16,
-+                            * b = 1 present / 0 flush */
++    PS3_FT_SYSCALL     = 1,  /* who = PPU tid, a = syscall number, b = guest lr        */
++    PS3_FT_USLEEP      = 2,  /* who = PPU tid, a = usleep calls merged, b = guest lr   */
++    PS3_FT_SPU_WAIT    = 3,  /* who = SPU id,  a = channel,      b = LS pc             */
++    PS3_FT_SPU_BUSY    = 4,  /* who = SPU id,  a = lifted image, b = SPURS wid (LS 0x1DC) */
++    PS3_FT_SEMA        = 5,  /* RSX blocked on ACQUIRE: a = label offset, b = value    */
++    PS3_FT_SEMA_GAVEUP = 6,  /* same, ended by a bounded acquire giving up            */
++    PS3_FT_DRAIN       = 7,  /* one RSX FIFO drain pass, a = 1 if it ended on an ACQUIRE */
++    PS3_FT_FLIP_FIFO   = 8,  /* instant: the RSX reached a flip, a = buffer            */
++    PS3_FT_FLIP_REQ    = 9,  /* instant: the guest asked for a flip, a = buffer        */
++    PS3_FT_PRESENT     = 10, /* the host presented a guest frame                       */
++    PS3_FT_GPU_ENCODE  = 11, /* Metal: CPU encode of the recorded draws, a = 1 present / 0 flush, b = records */
++    PS3_FT_GPU_WAIT    = 12, /* Metal: CPU waits for the GPU, a = 1 present / 0 flush / 2 in-flight bound, b = flush reason */
++    PS3_FT_READBACK    = 13, /* Metal: render target read back to the CPU, a = w, b = h */
++    PS3_FT_GPU_EXEC    = 14, /* Metal: a command buffer's own GPU time, ending when the CPU saw it
++                              * complete; who = render passes, a = depth resolves | colour copies << 16,
++                              * b = 1 present / 0 flush */
 +};
 +
-+extern int g_ps3_ft_on;
++#if defined(_MSC_VER)
++#  define PS3_FT_SHARED __declspec(selectany)
++#else
++#  define PS3_FT_SHARED __attribute__((weak))
++#endif
 +
-+uint64_t ps3_ft_now(void);
-+void ps3_ft_span(int kind, uint32_t who, uint32_t a, uint32_t b,
-+                 uint64_t t0_ns, uint64_t t1_ns);
-+/* Spans shorter than this are not worth a slot (PS3_FTRACE_MIN_US, default 20). */
-+uint64_t ps3_ft_min_ns(void);
++typedef struct { uint64_t t0, t1; uint32_t a, b, who, kind; } ps3_ft_rec;
 +
-+/* sys_timer_usleep polls come 30 000 a second; consecutive sleeps of one thread
-+ * from one call site within PS3_FTRACE_MERGE_US (default 300) become one span. */
-+void ps3_ft_usleep(uint32_t tid, uint32_t lr, uint64_t t0_ns, uint64_t t1_ns);
++enum { PS3_FT_TIDS = 256 };
 +
-+#define PS3_FT_ON() (__builtin_expect(g_ps3_ft_on, 0))
++typedef struct {
++    int on;              /* 0 unknown, 1 initialising, 2 recording, 3 off/done */
++    int dumped;
++    uint32_t n, cap, dropped;
++    uint64_t base, start, end, min, merge;
++    ps3_ft_rec* buf;
++    char path[1024];
++    struct { uint64_t t0, t1; uint32_t lr, n; } us[PS3_FT_TIDS];   /* usleep run being merged */
++    char names[PS3_FT_TIDS][28];
++} ps3_ft_state;
++
++PS3_FT_SHARED ps3_ft_state g_ps3_ft = { 0 };
++
++static inline uint64_t ps3_ft_now(void)
++{
++#ifdef _WIN32
++    LARGE_INTEGER c, f;
++    QueryPerformanceCounter(&c); QueryPerformanceFrequency(&f);
++    return (uint64_t)((double)c.QuadPart * 1e9 / (double)f.QuadPart);
++#else
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
++#endif
++}
++
++static inline void ps3_ft_dump(void)
++{
++    ps3_ft_state* s = &g_ps3_ft;
++    if (__atomic_exchange_n(&s->dumped, 1, __ATOMIC_ACQ_REL)) return;
++    __atomic_store_n(&s->on, 3, __ATOMIC_RELEASE);
++    /* Close the open usleep runs; their threads may still be in them. */
++    for (uint32_t t = 0; t < PS3_FT_TIDS; t++) {
++        if (!s->us[t].n) continue;
++        const uint32_t i = __atomic_fetch_add(&s->n, 1, __ATOMIC_RELAXED);
++        if (i >= s->cap) break;
++        ps3_ft_rec r = { s->us[t].t0, s->us[t].t1, s->us[t].n, s->us[t].lr, t, PS3_FT_USLEEP };
++        s->buf[i] = r;
++    }
++    uint32_t n = __atomic_load_n(&s->n, __ATOMIC_ACQUIRE);
++    if (n > s->cap) n = s->cap;
++    FILE* f = fopen(s->path, "w");
++    if (!f) { fprintf(stderr, "[ftrace] cannot write %s\n", s->path); return; }
++    fprintf(f, "# ps3_ftrace start_us=%.3f end_us=%.3f spans=%u dropped=%u\n",
++            (double)(s->start - s->base) / 1e3, (double)(s->end - s->base) / 1e3, n, s->dropped);
++    for (uint32_t t = 0; t < PS3_FT_TIDS; t++)
++        if (s->names[t][0]) fprintf(f, "T %u %s\n", t, s->names[t]);
++    for (uint32_t i = 0; i < n; i++) {
++        const ps3_ft_rec* r = &s->buf[i];
++        if (!r->kind) continue;   /* claimed but never filled: a writer raced the dump */
++        fprintf(f, "%u %u %x %x %.3f %.3f\n", r->kind, r->who, r->a, r->b,
++                (double)(r->t0 - s->base) / 1e3, (double)(r->t1 - s->base) / 1e3);
++    }
++    fclose(f);
++    fprintf(stderr, "[ftrace] wrote %u spans (%u dropped) to %s\n", n, s->dropped, s->path);
++}
++
++static inline void ps3_ft_dump_atexit(void) { ps3_ft_dump(); }
++
++/* First hook: read PS3_FTRACE once. Hooks see "off" while another thread is
++ * still setting up, which only loses spans before the window anyway. */
++static inline int ps3_ft_init(void)
++{
++    ps3_ft_state* s = &g_ps3_ft;
++    int expect = 0;
++    if (!__atomic_compare_exchange_n(&s->on, &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
++        return expect == 2;
++    int on = 3;
++    const char* e = getenv("PS3_FTRACE");
++    double start = 0, secs = 0;
++    int used = 0;
++    if (e && *e) {
++        if (sscanf(e, "%lf:%lf:%n", &start, &secs, &used) < 2 || !used || secs <= 0) {
++            fprintf(stderr, "[ftrace] PS3_FTRACE=<start s>:<seconds>:<path>, got '%s'\n", e);
++        } else {
++            snprintf(s->path, sizeof s->path, "%s", e + used);
++            const char* m = getenv("PS3_FTRACE_MIN_US");
++            s->min = (m ? strtoull(m, 0, 10) : 20ull) * 1000ull;
++            const char* g = getenv("PS3_FTRACE_MERGE_US");
++            s->merge = (g ? strtoull(g, 0, 10) : 300ull) * 1000ull;
++            const char* c = getenv("PS3_FTRACE_CAP");
++            s->cap = c ? (uint32_t)strtoul(c, 0, 10) : 4u << 20;
++            s->buf = (ps3_ft_rec*)calloc(s->cap, sizeof(ps3_ft_rec));
++            if (!s->buf) {
++                fprintf(stderr, "[ftrace] no memory for %u spans\n", s->cap);
++            } else {
++                s->base = ps3_ft_now();
++                s->start = s->base + (uint64_t)(start * 1e9);
++                s->end = s->start + (uint64_t)(secs * 1e9);
++                atexit(ps3_ft_dump_atexit);
++                fprintf(stderr, "[ftrace] recording %.1f s from t=%.1f s into %s\n", secs, start, s->path);
++                on = 2;
++            }
++        }
++    }
++    __atomic_store_n(&s->on, on, __ATOMIC_RELEASE);
++    return on == 2;
++}
++
++/* The hook guard: one load when off. */
++static inline int ps3_ft_on(void)
++{
++    const int on = __atomic_load_n(&g_ps3_ft.on, __ATOMIC_RELAXED);
++    if (__builtin_expect(on == 2, 0)) return 1;
++    if (__builtin_expect(on != 0, 1)) return 0;
++    return ps3_ft_init();
++}
++#define PS3_FT_ON() ps3_ft_on()
++
++static inline uint64_t ps3_ft_min_ns(void) { return g_ps3_ft.min; }
++
++static inline void ps3_ft_span(int kind, uint32_t who, uint32_t a, uint32_t b,
++                               uint64_t t0, uint64_t t1)
++{
++    ps3_ft_state* s = &g_ps3_ft;
++    if (__atomic_load_n(&s->on, __ATOMIC_RELAXED) != 2) return;
++    if (t1 < s->start) return;
++    if (t0 > s->end) { ps3_ft_dump(); return; }
++    const uint32_t i = __atomic_fetch_add(&s->n, 1, __ATOMIC_RELAXED);
++    if (i >= s->cap) { __atomic_fetch_add(&s->dropped, 1, __ATOMIC_RELAXED); return; }
++    ps3_ft_rec r = { t0, t1, a, b, who, (uint32_t)kind };
++    s->buf[i] = r;
++}
++
++/* sys_timer_usleep polls come tens of thousands a second; consecutive sleeps of
++ * one thread from one call site within PS3_FTRACE_MERGE_US become one span.
++ * Only the sleeping thread touches its slot. */
++static inline void ps3_ft_usleep(uint32_t tid, uint32_t lr, uint64_t t0, uint64_t t1)
++{
++    ps3_ft_state* s = &g_ps3_ft;
++    if (tid >= PS3_FT_TIDS || __atomic_load_n(&s->on, __ATOMIC_RELAXED) != 2) return;
++    if (s->us[tid].n && s->us[tid].lr == lr && t0 - s->us[tid].t1 <= s->merge) {
++        s->us[tid].t1 = t1; s->us[tid].n++;
++        return;
++    }
++    if (s->us[tid].n)
++        ps3_ft_span(PS3_FT_USLEEP, tid, s->us[tid].n, s->us[tid].lr, s->us[tid].t0, s->us[tid].t1);
++    s->us[tid].t0 = t0; s->us[tid].t1 = t1; s->us[tid].lr = lr; s->us[tid].n = 1;
++}
++
++/* A PPU thread's name, for the report's labels. */
++static inline void ps3_ft_name(uint32_t tid, const char* name)
++{
++    if (tid >= PS3_FT_TIDS || !name || !PS3_FT_ON()) return;
++    snprintf(g_ps3_ft.names[tid], sizeof g_ps3_ft.names[tid], "%s", name);
++}
 +
 +#ifdef __cplusplus
 +}
@@ -5971,152 +6134,6 @@ index 5a825a0..1a9ebb9 100644
  
      if (g_fail) { printf("\nRSX texture layout: %d FAILED\n", g_fail); return 1; }
      printf("RSX texture layout tests: all passed\n");
-diff --git a/runtime/diag/ps3_ftrace.c b/runtime/diag/ps3_ftrace.c
-new file mode 100644
-index 0000000..efac839
---- /dev/null
-+++ b/runtime/diag/ps3_ftrace.c
-@@ -0,0 +1,140 @@
-+/*
-+ * ps3_ftrace -- see include/ps3emu/ps3_ftrace.h.
-+ *
-+ * Output (text, after the window closes or at exit):
-+ *   # ps3_ftrace start_ns=<n> end_ns=<n> spans=<n> dropped=<n>
-+ *   T <tid> <name>                         PPU thread names
-+ *   <kind> <who> <a hex> <b hex> <t0 us> <t1 us>
-+ * Times are microseconds since the first hook ran (~boot), as decimals with
-+ * three fractional digits.
-+ *
-+ * Storage is one preallocated array claimed with an atomic increment: no lock
-+ * on the hot path, and a full array drops spans (counted) instead of growing.
-+ */
-+#include "ps3emu/ps3_ftrace.h"
-+
-+#include <stdio.h>
-+#include <stdlib.h>
-+#include <string.h>
-+#include <time.h>
-+
-+typedef struct {
-+    uint64_t t0, t1;
-+    uint32_t a, b, who;
-+    uint32_t kind;
-+} ft_span;
-+
-+int g_ps3_ft_on = 0;
-+
-+static ft_span* s_buf;
-+static uint32_t s_cap;
-+static uint32_t s_n;           /* atomic: next free slot */
-+static uint32_t s_dropped;     /* atomic */
-+static uint64_t s_base, s_start, s_end, s_min = 20000, s_merge = 300000;
-+static char s_path[1024];
-+static int s_dumped;           /* atomic */
-+
-+uint64_t ps3_ft_now(void)
-+{
-+    struct timespec ts;
-+    clock_gettime(CLOCK_MONOTONIC, &ts);
-+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-+}
-+
-+uint64_t ps3_ft_min_ns(void) { return s_min; }
-+
-+static void ft_dump(void);
-+
-+__attribute__((constructor)) static void ft_init(void)
-+{
-+    const char* e = getenv("PS3_FTRACE");
-+    if (!e || !*e) return;
-+    double start = 0, secs = 0;
-+    int used = 0;
-+    if (sscanf(e, "%lf:%lf:%n", &start, &secs, &used) < 2 || !used || secs <= 0) {
-+        fprintf(stderr, "[ftrace] PS3_FTRACE=<start s>:<seconds>:<path>, got '%s'\n", e);
-+        return;
-+    }
-+    snprintf(s_path, sizeof s_path, "%s", e + used);
-+    const char* m = getenv("PS3_FTRACE_MIN_US");
-+    if (m) s_min = (uint64_t)strtoull(m, 0, 10) * 1000ull;
-+    const char* g = getenv("PS3_FTRACE_MERGE_US");
-+    if (g) s_merge = (uint64_t)strtoull(g, 0, 10) * 1000ull;
-+    const char* c = getenv("PS3_FTRACE_CAP");
-+    s_cap = c ? (uint32_t)strtoul(c, 0, 10) : 4u << 20;     /* 4M spans, 128 MB */
-+    s_buf = (ft_span*)calloc(s_cap, sizeof(ft_span));
-+    if (!s_buf) { fprintf(stderr, "[ftrace] no memory for %u spans\n", s_cap); return; }
-+    s_base = ps3_ft_now();
-+    s_start = s_base + (uint64_t)(start * 1e9);
-+    s_end = s_start + (uint64_t)(secs * 1e9);
-+    atexit(ft_dump);
-+    g_ps3_ft_on = 1;
-+    fprintf(stderr, "[ftrace] recording %.1f s from t=%.1f s into %s\n", secs, start, s_path);
-+}
-+
-+void ps3_ft_span(int kind, uint32_t who, uint32_t a, uint32_t b,
-+                 uint64_t t0, uint64_t t1)
-+{
-+    if (!g_ps3_ft_on) return;
-+    if (t1 < s_start) return;
-+    if (t0 > s_end) { ft_dump(); return; }
-+    uint32_t i = __atomic_fetch_add(&s_n, 1, __ATOMIC_RELAXED);
-+    if (i >= s_cap) { __atomic_fetch_add(&s_dropped, 1, __ATOMIC_RELAXED); return; }
-+    ft_span* s = &s_buf[i];
-+    s->t0 = t0; s->t1 = t1; s->a = a; s->b = b; s->who = who; s->kind = (uint32_t)kind;
-+}
-+
-+/* Per PPU thread: the usleep run being merged. */
-+enum { FT_TID_MAX = 256 };
-+static struct { uint64_t t0, t1; uint32_t lr, n; } s_us[FT_TID_MAX];
-+
-+void ps3_ft_usleep(uint32_t tid, uint32_t lr, uint64_t t0, uint64_t t1)
-+{
-+    if (!g_ps3_ft_on || tid >= FT_TID_MAX) return;
-+    /* Only this thread touches its slot (the dump reads it after the window). */
-+    if (s_us[tid].n && s_us[tid].lr == lr && t0 - s_us[tid].t1 <= s_merge) {
-+        s_us[tid].t1 = t1; s_us[tid].n++;
-+        return;
-+    }
-+    if (s_us[tid].n)
-+        ps3_ft_span(PS3_FT_USLEEP, tid, s_us[tid].n, s_us[tid].lr, s_us[tid].t0, s_us[tid].t1);
-+    s_us[tid].t0 = t0; s_us[tid].t1 = t1; s_us[tid].lr = lr; s_us[tid].n = 1;
-+}
-+
-+/* sys_ppu_thread.c: thread names for the header. */
-+int ppu_prof_snapshot(int idx, unsigned* tid, unsigned* cia, const char** name);
-+
-+static void ft_dump(void)
-+{
-+    if (__atomic_exchange_n(&s_dumped, 1, __ATOMIC_ACQ_REL)) return;
-+    g_ps3_ft_on = 0;
-+    /* Close the open usleep runs (their threads may still be in them). */
-+    for (uint32_t t = 0; t < FT_TID_MAX; t++)
-+        if (s_us[t].n) {
-+            uint32_t i = __atomic_fetch_add(&s_n, 1, __ATOMIC_RELAXED);
-+            if (i < s_cap) {
-+                ft_span* s = &s_buf[i];
-+                s->t0 = s_us[t].t0; s->t1 = s_us[t].t1; s->a = s_us[t].n; s->b = s_us[t].lr;
-+                s->who = t; s->kind = PS3_FT_USLEEP;
-+            }
-+        }
-+    uint32_t n = __atomic_load_n(&s_n, __ATOMIC_ACQUIRE);
-+    if (n > s_cap) n = s_cap;
-+    FILE* f = fopen(s_path, "w");
-+    if (!f) { fprintf(stderr, "[ftrace] cannot write %s\n", s_path); return; }
-+    fprintf(f, "# ps3_ftrace start_us=%.3f end_us=%.3f spans=%u dropped=%u\n",
-+            (s_start - s_base) / 1e3, (s_end - s_base) / 1e3, n, s_dropped);
-+    for (int idx = 0; idx < 512; idx++) {
-+        unsigned tid, cia; const char* name = 0;
-+        if (ppu_prof_snapshot(idx, &tid, &cia, &name) || (idx == 0 && name))
-+            fprintf(f, "T %u %s\n", tid, name && *name ? name : "?");
-+    }
-+    for (uint32_t i = 0; i < n; i++) {
-+        const ft_span* s = &s_buf[i];
-+        if (!s->kind) continue;   /* claimed but never filled (writer raced the dump) */
-+        fprintf(f, "%u %u %x %x %.3f %.3f\n", s->kind, s->who, s->a, s->b,
-+                (double)(s->t0 - s_base) / 1e3, (double)(s->t1 - s_base) / 1e3);
-+    }
-+    fclose(f);
-+    fprintf(stderr, "[ftrace] wrote %u spans (%u dropped) to %s\n", n, s_dropped, s_path);
-+}
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
 index 4c03372..e71e799 100644
 --- a/runtime/ppu/ppu_fs.cpp
@@ -7374,6 +7391,42 @@ index f55cfa5..f7944d6 100644
  
      if (--m->lwcond_waiters == INT_MIN) WakeAllConditionVariable(&s_destroy_cv);
      if (--c->lwmutex_waiters == INT_MIN) WakeAllConditionVariable(&s_destroy_cv);
+diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
+index ee91099..eaa677d 100644
+--- a/runtime/syscalls/sys_ppu_thread.c
++++ b/runtime/syscalls/sys_ppu_thread.c
+@@ -25,6 +25,7 @@ static PPU_TLS int     s_exit_done = 0;
+ #include <stddef.h>
+ #include "sys_ppu_thread.h"
+ #include "../platform/win32_compat.h"   /* GetCurrentThreadId on POSIX */
++#include "ps3emu/ps3_ftrace.h"           /* PS3_FTRACE: thread names for the report */
+ #include <string.h>
+ #include <stdio.h>
+ #include <stdlib.h>   /* getenv (else return value truncated to int on x64) */
+@@ -281,6 +282,7 @@ uint64_t ppu_thread_register_main(void)
+         t->joinable = 0;                    /* nobody joins the main thread */
+         t->priority = g_ppu_primary_prio;
+         strncpy(t->name, "main", sizeof(t->name) - 1);
++        ps3_ft_name(1, "main");
+ #ifdef _WIN32
+         t->finish_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+ #else
+@@ -430,6 +432,7 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+         const char* name = (const char*)vm_to_host(name_addr);
+         strncpy(t->name, name, sizeof(t->name) - 1);
+         t->name[sizeof(t->name) - 1] = '\0';
++        ps3_ft_name((uint32_t)(t - g_ppu_threads) + 1u, t->name);
+     }
+ 
+     /* Create synchronization for join */
+@@ -1280,6 +1283,7 @@ int64_t sys_ppu_thread_rename(ppu_context* ctx)
+         const char* name = (const char*)vm_to_host(name_addr);
+         strncpy(t->name, name, sizeof(t->name) - 1);
+         t->name[sizeof(t->name) - 1] = '\0';
++        ps3_ft_name((uint32_t)(t - g_ppu_threads) + 1u, t->name);
+     }
+ 
+     table_unlock();
 diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
 index 877b632..b2831da 100644
 --- a/runtime/syscalls/sys_timer.c
