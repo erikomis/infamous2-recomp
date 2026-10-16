@@ -819,7 +819,7 @@ index ea160aa..a2318a0 100644
  void sceNpSetFakeUsername(const char* username);
  
 diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
-index d1b8f32..2d11339 100644
+index d1b8f32..26de280 100644
 --- a/libs/system/cellSysutil.c
 +++ b/libs/system/cellSysutil.c
 @@ -11,6 +11,9 @@
@@ -832,7 +832,7 @@ index d1b8f32..2d11339 100644
  
  /* Guest-memory stores — out-params from the recompiled title are guest VM
   * addresses, not host pointers. */
-@@ -257,6 +260,134 @@ s32 cellSysutilCheckCallback(void)
+@@ -257,6 +260,143 @@ s32 cellSysutilCheckCallback(void)
   * near the guest's variable, and nothing on the way says a word.
   *
   * A u32 cannot be passed a host pointer by accident. */
@@ -870,11 +870,16 @@ index d1b8f32..2d11339 100644
 +    }
 +    if (!strcmp(ll, "c") || !strcmp(ll, "pos")) { out[0] = 0; return; }   /* C.UTF-8, POSIX */
 +    if (!strcmp(ll, "zh")) {
-+        snprintf(out, n, "%s", (!strcmp(cc, "tw") || !strcmp(cc, "hk") || !strcmp(cc, "mo")) ? "zh-t" : "zh-s");
++        const int hant = strstr(loc, "Hant") || strstr(loc, "hant");
++        snprintf(out, n, "%s", (hant || !strcmp(cc, "tw") || !strcmp(cc, "hk") || !strcmp(cc, "mo")) ? "zh-t" : "zh-s");
 +    } else if (!strcmp(ll, "nb") || !strcmp(ll, "nn")) {
 +        snprintf(out, n, "no");
-+    } else if ((!strcmp(ll, "pt") && !strcmp(cc, "br")) || (!strcmp(ll, "en") && !strcmp(cc, "gb"))) {
-+        snprintf(out, n, "%s-%s", ll, cc);
++    } else if (!strcmp(ll, "pt") && !strcmp(cc, "br")) {
++        snprintf(out, n, "pt-br");
++    } else if (!strcmp(ll, "en") && (!strcmp(cc, "gb") || !strcmp(cc, "au") || !strcmp(cc, "nz") ||
++                                     !strcmp(cc, "ie") || !strcmp(cc, "za") || !strcmp(cc, "in"))) {
++        /* the regions that got the UK English release */
++        snprintf(out, n, "en-gb");
 +    } else {
 +        snprintf(out, n, "%s", ll);
 +    }
@@ -895,9 +900,13 @@ index d1b8f32..2d11339 100644
 +    };
 +    for (unsigned i = 0; i < sizeof w / sizeof w[0]; i++)
 +        if (w[i].prim == prim) { snprintf(out, n, "%s", w[i].code); break; }
-+    if (prim == 0x09 && sub == 0x02) snprintf(out, n, "en-gb");          /* English (UK) */
++    /* UK, Australia, New Zealand, Ireland, South Africa, India: the regions
++     * that got the UK English release */
++    if (prim == 0x09 && (sub == 0x02 || sub == 0x03 || sub == 0x05 || sub == 0x06 ||
++                         sub == 0x07 || sub == 0x10)) snprintf(out, n, "en-gb");
 +    if (prim == 0x16 && sub == 0x01) snprintf(out, n, "pt-br");          /* Portuguese (Brazil) */
-+    if (prim == 0x04) snprintf(out, n, (sub == 0x01 || sub == 0x03 || sub == 0x05) ? "zh-t" : "zh-s");
++    /* Traditional: Taiwan, Hong Kong, Macao and the neutral zh-Hant (0x7C04) */
++    if (prim == 0x04) snprintf(out, n, (sub == 0x01 || sub == 0x03 || sub == 0x05 || sub == 0x1F) ? "zh-t" : "zh-s");
 +#else
 +    const char* vars[] = { "LC_ALL", "LC_MESSAGES", "LANG" };
 +    for (unsigned i = 0; i < 3 && !out[0]; i++) sysutil_locale_code(getenv(vars[i]), out, n);
@@ -967,7 +976,7 @@ index d1b8f32..2d11339 100644
  s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
  {
      if (!value_ea)
-@@ -265,7 +396,7 @@ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
+@@ -265,7 +405,7 @@ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
      s32 v = 0;
      switch (id) {
      case CELL_SYSUTIL_SYSTEMPARAM_ID_LANG:
