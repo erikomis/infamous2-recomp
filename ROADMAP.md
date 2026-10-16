@@ -290,10 +290,20 @@ each fix is a PR, with a test wherever one was possible.
   every PPU thread past the 31st silently shared the main thread's TLS and inFAMOUS 2 creates 33 by the pier (more with
   every cutscene's Bink threads); and the Metal FPS diagnostics (5f86d1d and follow-ups): `PS3RECOMP_METAL_FPS=1` puts
   display/guest FPS and frame times in the window title. Regression run play44: cityfalls passed, pier 12 fps as before.
-- [ ] Not sent yet: 3D textures (upstream's texture cache has diverged, 21 conflicts; needs a dedicated port on
-  top of #331), the diagnostic tools (hash-keyed dumps, `RSX_FP_DEBUG`, `REGDUMP`, `DUMP_TRIGGER`), and upstream
-  versions of the three fork-only ones (upstream has no RGBA depth snapshot, no
-  `spu_overlay_register_region_at` registry and no keyboard pad).
+- [x] (2026-10-16) 3D textures upstream ([#335](https://github.com/sp00nznet/ps3recomp/pull/335), stacked on
+  #331: Morton offsets of a swizzled volume, per-slice upload through optional `texture_create_3d` /
+  `texture_upload_3d` backend calls, `Texture3D` in the decompiler, Metal `MTLTextureType3D`); CI green.
+- [x] (2026-10-16) Fragment-program debug knobs keyed by the program's structural hash
+  ([#336](https://github.com/sp00nznet/ps3recomp/pull/336) upstream,
+  [#22](https://github.com/NoahBPeterson/ps3recomp/pull/22) fork): the hash in the pipeline log (and upstream's
+  `RSX_ENGINE_SHADER_DUMP` `.fp.txt`), `RSX_ENGINE_SKIP_FP`, `RSX_ENGINE_REGDUMP_FP` and `RSX_FP_DEBUG`. The
+  port keeps its own `PS3RECOMP_ENG_*` spellings.
+- [x] (2026-10-16) Asked upstream for performance advice with our New Marais profile
+  ([issue #337](https://github.com/sp00nznet/ps3recomp/issues/337)): SPU runtime overhead, PPU-SPU sync latency,
+  SPURS beyond nSpus, RSX texture hashing and vertex fetch.
+- [ ] Not sent yet: the Metal texture dump extras (RG16, raw BC blocks, skip count; upstream's Metal backend has no
+  texture dump at all), `DUMP_TRIGGER`/`play_dump`, and upstream versions of the three fork-only ones (upstream has
+  no RGBA depth snapshot, no `spu_overlay_register_region_at` registry and no keyboard pad).
 
 The branches live in two worktrees of `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
 for the fork) and `ps3recomp-up/` (based on upstream master); the `mine` remote points to

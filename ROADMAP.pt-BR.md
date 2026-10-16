@@ -278,8 +278,19 @@ cada correção é um PR, com teste onde dava para ter um.
   thread PPU depois da 31ª dividia em silêncio o TLS da thread principal e o inFAMOUS 2 cria 33 até o píer (mais a cada
   cutscene com Bink); e o diagnóstico de FPS do Metal (5f86d1d e seguintes): `PS3RECOMP_METAL_FPS=1` mostra FPS e tempo de
   quadro no título da janela. Corrida de regressão play44: cityfalls passou, píer a 12 fps como antes.
-- [ ] Ainda não enviados: texturas 3D (o cache de texturas do upstream divergiu; precisa de um port dedicado),
-  as ferramentas de diagnóstico e, no upstream, os três só do fork.
+- [x] (2026-10-16) Texturas 3D no upstream ([#335](https://github.com/sp00nznet/ps3recomp/pull/335), empilhado
+  sobre o #331: offsets Morton de um volume swizzled, upload por fatia via as chamadas opcionais
+  `texture_create_3d` / `texture_upload_3d`, `Texture3D` no decompilador, `MTLTextureType3D` no Metal); CI verde.
+- [x] (2026-10-16) Knobs de depuração de fragment program pelo hash estrutural do programa
+  ([#336](https://github.com/sp00nznet/ps3recomp/pull/336) no upstream,
+  [#22](https://github.com/NoahBPeterson/ps3recomp/pull/22) no fork): o hash no log de pipeline (e no `.fp.txt`
+  do `RSX_ENGINE_SHADER_DUMP` do upstream), `RSX_ENGINE_SKIP_FP`, `RSX_ENGINE_REGDUMP_FP` e `RSX_FP_DEBUG`. O port
+  mantém os nomes `PS3RECOMP_ENG_*` próprios.
+- [x] (2026-10-16) Pedimos dicas de desempenho ao upstream com o perfil de New Marais
+  ([issue #337](https://github.com/sp00nznet/ps3recomp/issues/337)): overhead do runtime de SPU, latência de
+  sincronização PPU-SPU, SPURS além do nSpus, hash de texturas e busca de vértices no RSX.
+- [ ] Ainda não enviados: os extras do dump de texturas do Metal (RG16, blocos BC crus, contagem de pulo; o backend
+  Metal do upstream não tem dump de texturas), `DUMP_TRIGGER`/`play_dump` e, no upstream, os três só do fork.
 
 Os branches vivem em dois worktrees do `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
 para o fork) e `ps3recomp-up/` (base no master do upstream); o remote `mine` aponta para
