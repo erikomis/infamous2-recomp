@@ -3140,7 +3140,7 @@ index 7161c4e..830f0a7 100644
   * Useful for disassembly/logging. */
  const char* rsx_fp_opcode_name(u32 opcode);
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..a00d7be 100644
+index 98db285..434d46d 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -53,6 +53,10 @@
@@ -3404,7 +3404,7 @@ index 98db285..a00d7be 100644
              ca.blendingEnabled             = YES;
              ca.sourceRGBBlendFactor        = blend_factor_to_metal(rs->sf_rgb);
              ca.destinationRGBBlendFactor   = blend_factor_to_metal(rs->df_rgb);
-@@ -3068,10 +3171,100 @@ static void eng_bound_reset(void)
+@@ -3068,10 +3171,130 @@ static void eng_bound_reset(void)
  }
  #define ENG_PTR(o) ((__bridge const void*)(o))
  
@@ -3424,6 +3424,29 @@ index 98db285..a00d7be 100644
 +    const int r16 = pf == MTLPixelFormatR16Unorm || pf == MTLPixelFormatR16Float || pf == MTLPixelFormatR16Snorm;
 +    const int r8  = pf == MTLPixelFormatR8Unorm || pf == MTLPixelFormatR8Unorm_sRGB || pf == MTLPixelFormatR8Snorm;
 +    const int rg16 = pf == MTLPixelFormatRG16Unorm || pf == MTLPixelFormatRG16Float || pf == MTLPixelFormatRG16Snorm;
++    /* Block-compressed (DXT1/3/5 = BC1/2/3): the raw blocks go to <path>.bc.bin
++     * (8 or 16 bytes per 4x4 block, row-major), to decode offline. */
++    const NSUInteger bcb = (pf == MTLPixelFormatBC1_RGBA || pf == MTLPixelFormatBC1_RGBA_sRGB) ? 8
++                         : (pf == MTLPixelFormatBC2_RGBA || pf == MTLPixelFormatBC2_RGBA_sRGB ||
++                            pf == MTLPixelFormatBC3_RGBA || pf == MTLPixelFormatBC3_RGBA_sRGB) ? 16 : 0;
++    if (bcb) {
++        const NSUInteger bw = (w + 3) / 4, bh = (h + 3) / 4;
++        id<MTLBuffer> buf = [s_dev newBufferWithLength:bw * bh * bcb options:MTLResourceStorageModeShared];
++        id<MTLCommandBuffer> cb = [s_queue commandBuffer];
++        id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
++        [b copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
++                sourceSize:MTLSizeMake(w, h, 1) toBuffer:buf destinationOffset:0
++         destinationBytesPerRow:bw * bcb destinationBytesPerImage:bw * bh * bcb];
++        [b endEncoding];
++        [cb commit];
++        [cb waitUntilCompleted];
++        char name[600]; snprintf(name, sizeof name, "%s.bc.bin", path);
++        FILE* fb = fopen(name, "wb");
++        if (fb) { fwrite([buf contents], 1, bw * bh * bcb, fb); fclose(fb); }
++        fprintf(stderr, "[rsx engine/metal] dumptex: %lux%lu fmt %lu (BC%lu raw blocks) -> %s\n",
++                (unsigned long)w, (unsigned long)h, (unsigned long)pf, (unsigned long)(bcb == 8 ? 1 : 3), name);
++        return;
++    }
 +    if (!bgra && !r16 && !r8 && !rg16 && pf != MTLPixelFormatRGBA8Unorm && pf != MTLPixelFormatRGBA8Unorm_sRGB) {
 +        fprintf(stderr, "[rsx engine/metal] dumptex: %lux%lu pixel format %lu is not 8-bit RGBA, RG16, R16 or R8, skipped\n",
 +                (unsigned long)w, (unsigned long)h, (unsigned long)pf);
@@ -3498,14 +3521,21 @@ index 98db285..a00d7be 100644
 +                   if (*d == ':') snprintf(dpath, sizeof dpath, "%s", d + 1); } }
 +      if (dp >= 0 && !done && (long)r->pipeline == dp && du < RSX_BE_MAX_TEXTURES) {
 +          static unsigned long long t0; if (!t0) t0 = ps3_ms_now();
++          /* PS3RECOMP_METAL_DBG_DUMPTEX_SKIP=<n>: pass over n draws of the
++           * pipeline first -- a UI pipeline draws several quads a frame with
++           * different textures, and only the first was ever reachable. */
++          static long dskip = -1; if (dskip < 0) { const char* e = getenv("PS3RECOMP_METAL_DBG_DUMPTEX_SKIP"); dskip = e ? strtol(e, 0, 10) : 0; }
 +          if (ps3_ms_now() - t0 >= (unsigned long long)dsec * 1000ull) {
-+              id<MTLTexture> t = eng_obj(r->tex[du]);
-+              if (t) { s_dumptex = t; snprintf(s_dumptex_path, sizeof s_dumptex_path, "%s", dpath); done = 1; }
++              if (dskip > 0) { dskip--; }
++              else {
++                  id<MTLTexture> t = eng_obj(r->tex[du]);
++                  if (t) { s_dumptex = t; snprintf(s_dumptex_path, sizeof s_dumptex_path, "%s", dpath); done = 1; }
++              }
 +          } } }
      /* PS3RECOMP_METAL_SKIP_PIPE=a,b,...: drop draws using those pipelines
       * (pass-log p= numbers) to bisect which pass breaks an image. */
      { static u32 skip[16]; static int nskip = -1;
-@@ -3131,9 +3324,37 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+@@ -3131,9 +3354,37 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
              [enc setFragmentBufferOffset:r->ps_cb_off atIndex:1]; b->fbuf_off = r->ps_cb_off;
          }
      }
@@ -3543,7 +3573,7 @@ index 98db285..a00d7be 100644
          id<MTLSamplerState> sm = r->samp[u] >= 0 ? s_eng_samp[r->samp[u]].samp : s_default_sampler;
          if (b->ftex[u] != ENG_PTR(t)) { [enc setFragmentTexture:t atIndex:(NSUInteger)u]; b->ftex[u] = ENG_PTR(t); }
          if (b->fsamp[u] != ENG_PTR(sm)) { [enc setFragmentSamplerState:sm atIndex:(NSUInteger)u]; b->fsamp[u] = ENG_PTR(sm); }
-@@ -3201,6 +3422,43 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
+@@ -3201,6 +3452,43 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
      return 1;
  }
  
@@ -3587,7 +3617,7 @@ index 98db285..a00d7be 100644
  /* One pass per contiguous run of draws against the same attachments, with any
   * clears immediately ahead of it folded into its load actions. A clear whose
   * targets the following draw does not share becomes a pass of its own, which
-@@ -3233,6 +3491,17 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3233,6 +3521,17 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              if (!e) continue;
              [e setRenderPipelineState:pso];
              [e setFragmentTexture:src atIndex:0];
@@ -3605,7 +3635,7 @@ index 98db285..a00d7be 100644
              [e setFragmentSamplerState:s_eng_point_sampler atIndex:0];
              [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
              [e endEncoding];
-@@ -3243,6 +3512,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3243,6 +3542,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
           * surface and an MRT set arrives as one clear per target, so they are
           * collected rather than compared: they become load actions on the
           * pass below when the draw that follows writes the same targets. */
@@ -3613,7 +3643,7 @@ index 98db285..a00d7be 100644
          u32 n_cc = 0;
          u32 cc_surf[RSX_BE_MAX_COLOR_TARGETS];
          float cc_rgba[RSX_BE_MAX_COLOR_TARGETS][4];
-@@ -3281,6 +3551,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3281,6 +3581,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
          u32 nrt = n_cc;
          for (u32 k = 0; k < n_cc; k++) rt[k] = cc_surf[k];
          u32 depth = have_clear_ds ? cd : 0;
@@ -3621,7 +3651,7 @@ index 98db285..a00d7be 100644
          if (i < s_eng_rec_count && s_eng_rec[i].kind == ENG_REC_DRAW &&
              (!have_clear_ds || s_eng_rec[i].depth == cd)) {
              const EngRecord* d = &s_eng_rec[i];
-@@ -3292,12 +3563,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3292,12 +3593,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
                  covered = found;
              }
              if (covered) {
@@ -3645,7 +3675,7 @@ index 98db285..a00d7be 100644
          /* Metal wants every attachment the same size, and the engine registers
           * an MRT set's members at target A's, so a set whose members disagree
           * is one this frame cannot honour: it stops at the gap, as the vtable
-@@ -3471,16 +3753,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3471,16 +3783,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          /* PS3RECOMP_METAL_PASS_LOG=1: every 600th present, print the frame's
           * record stream grouped into passes (kind, targets, depth, count, and
           * the textures the first draw samples). */
@@ -3687,7 +3717,7 @@ index 98db285..a00d7be 100644
                      fprintf(stderr, "[pass] %5u x%-4u kind=%d rt=", i, j - i, (int)r->kind);
                      for (u32 k = 0; k < r->nrt; k++) fprintf(stderr, "%s%u", k ? "," : "", r->rt[k]);
                      fprintf(stderr, " depth=%u", r->depth);
-@@ -3498,7 +3801,7 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3498,7 +3831,7 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
                      i = j;
                  }
              }
@@ -3696,7 +3726,7 @@ index 98db285..a00d7be 100644
          pt = eng_pt_now();
          id<MTLCommandBuffer> cb = [s_queue commandBuffer];
          eng_encode_records(cb, stage);
-@@ -3521,6 +3824,15 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3521,6 +3854,15 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          } else {
              [cb commit];
              [cb waitUntilCompleted];
@@ -3712,7 +3742,7 @@ index 98db285..a00d7be 100644
          }
  
  
-@@ -3580,7 +3892,11 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -3580,7 +3922,11 @@ static void eng_dump_frame(id<MTLTexture> src)
              fwrite(rgb, 1, 3, f);
          }
          fclose(f);
@@ -3725,7 +3755,7 @@ index 98db285..a00d7be 100644
      }
      free(rgba);
  }
-@@ -3596,13 +3912,29 @@ static float eng_half_to_float(uint16_t h)
+@@ -3596,13 +3942,29 @@ static float eng_half_to_float(uint16_t h)
      else f = (s << 31) | ((e + 112) << 23) | (m << 13);
      float r; memcpy(&r, &f, 4); return r;
  }
@@ -3756,7 +3786,7 @@ index 98db285..a00d7be 100644
      if (!s_headless) { id<MTLCommandBuffer> fence = [s_queue commandBuffer]; [fence commit]; [fence waitUntilCompleted]; }
      for (u32 h = 1; h <= s_eng_obj_count; ++h) {
          id<MTLTexture> t = s_eng_obj[h - 1];
-@@ -3672,7 +4004,13 @@ static void eng_present(void* user, u32 surface)
+@@ -3672,7 +4034,13 @@ static void eng_present(void* user, u32 surface)
      const u32 nrec = s_eng_rec_count;
      eng_encode_and_commit(src);
      eng_dump_frame(src);
@@ -3771,7 +3801,7 @@ index 98db285..a00d7be 100644
  }
  
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
-@@ -3713,6 +4051,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3713,6 +4081,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .texture_create       = eng_texture_create,
      .texture_upload       = eng_texture_upload,
      .texture_release      = eng_obj_release,
@@ -3780,7 +3810,7 @@ index 98db285..a00d7be 100644
      .color_target_create  = eng_color_target_create,
      .color_target_release = eng_obj_release,
      .surface_view         = eng_surface_view,
-@@ -3886,6 +4226,38 @@ static int pump_messages_impl(void)
+@@ -3886,6 +4256,38 @@ static int pump_messages_impl(void)
                                                  inMode:NSDefaultRunLoopMode
                                                 dequeue:YES];
              if (!ev) break;
@@ -3819,7 +3849,7 @@ index 98db285..a00d7be 100644
              /* Keys drive the keyboard pad (cellPad.c): record and swallow
               * them -- unhandled, AppKit beeps on every press. */
              if ([ev type] == NSEventTypeKeyDown || [ev type] == NSEventTypeKeyUp) {
-@@ -3903,6 +4275,8 @@ static int pump_messages_impl(void)
+@@ -3903,6 +4305,8 @@ static int pump_messages_impl(void)
          if (![NSApp isActive]) {
              extern volatile uint32_t g_pad_host_keys[4];
              for (int i = 0; i < 4; i++) g_pad_host_keys[i] = 0;
