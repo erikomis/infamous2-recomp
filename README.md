@@ -11,8 +11,17 @@ principalmente, sobre o **fork do inFAMOUS 1** do
 firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 [CREDITS.md](CREDITS.md).
 
-> **Este repositório não contém o jogo, o firmware nem nada traduzido a partir
-> deles.** Cada pessoa gera tudo localmente a partir da própria cópia legítima.
+> [!WARNING]
+> **Em desenvolvimento, ainda não dá para jogar do começo ao fim.** O jogo roda
+> do boot até as primeiras missões de New Marais, a 7–16 fps (o original roda a
+> 30), só no macOS com Apple Silicon, e montar exige recompilar tudo a partir
+> da sua cópia (não há executável pronto). O que falta está no
+> [ROADMAP.md](ROADMAP.md).
+
+> **Este repositório não contém o jogo, o firmware, chaves da Sony nem nada
+> traduzido a partir deles.** Cada pessoa gera tudo localmente a partir da
+> própria cópia legítima. Projeto de fãs, sem afiliação com a Sony Interactive
+> Entertainment nem com a Sucker Punch Productions.
 
 ## Estado
 
@@ -21,11 +30,14 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Boot, firmware em LLE, SPURS, áudio Wwise (jobs SPU) | ✅ |
 | Aviso de saúde, vídeos Bink, telas de loading | ✅ |
 | Menu principal 3D, menu de pausa, opções | ✅ |
-| Jogo novo → vídeo de abertura → cutscene no motor do jogo | ✅ |
-| Fim da cutscene → tutorial do primeiro combate | ✅ |
-| Gameplay controlável | ✅ por script: tutorial, sequência da Besta e navio cargueiro (~16 fps); teclado/controle com janela ainda por testar |
-| Áudio (mixagem), DLC, todos os imports do firmware | ✅ |
-| T-pose do Cole no fundo do menu de opções | 🐞 conhecido |
+| Jogo novo → vídeo de abertura → cutscenes no motor do jogo | ✅ |
+| Prólogo em Empire City (a Besta, o cargueiro) | ✅ |
+| New Marais: primeiras missões, jogadas com janela e DualSense | ✅ |
+| Dublagem e legendas em português do Brasil (padrão), saves, DLC | ✅ |
+| Desempenho | 🐢 7–16 fps (o jogo foi feito para 30) |
+| Jogo inteiro | ❓ ninguém passou ainda de 1% |
+| Teclado e mouse com janela | 🧪 mapeados, pouco testados |
+| Linux e Windows | ⏳ planejado |
 
 Detalhes e próximos passos em [ROADMAP.md](ROADMAP.md).
 
@@ -75,15 +87,23 @@ cd infamous2-lle
 ./run.sh
 ```
 
-Teclado (enquanto o controle físico não é testado):
+Um controle (DualSense testado) funciona direto. Teclado e mouse somam com ele:
 
 | Tecla | PS3 |
 | ----- | --- |
-| Setas | D-pad |
-| X / espaço | ✕ |
-| Return | START |
 | W A S D | analógico esquerdo |
-| I J K L | analógico direito |
+| I J K L ou mouse | analógico direito (câmera) |
+| Setas | D-pad |
+| Espaço | ✕ |
+| Q / E / R | ○ / □ / △ |
+| U / O | L1 / R1 |
+| Y / P | L2 / R2 |
+| G / H | L3 / R3 |
+| Return / Tab | START / SELECT |
+| Botão esquerdo / direito / do meio do mouse | R1 / R2 / L1 |
+
+O mouse se ajusta com `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1` e
+`PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` desliga.
 
 Para testes sem janela: `tools/capture.sh <nome> <segundos>` salva um PNG do
 frame a cada 10 s, `PAD_SCRIPT="95:0x4000"` aperta ✕ aos 95 s
@@ -104,6 +124,9 @@ No toolkit (em `infamous2-lle/patches/`, aplicadas pelo `setup_toolkit.sh`):
 - **SPU:** o interpretador não voltava ao código traduzido dentro dos módulos de job WWS; o menu rodava a ~0,4 fps.
 - **Fragment shaders:** os opcodes de pack/unpack do NV40 (PK4UB, UP4UB, PKG, UPG e os irmãos de 16 bits) não existiam no decompilador e eram pulados; o jogo os usa como conversão sRGB↔linear nos materiais de personagem, e sem eles o couro cabeludo do Cole saía verde e a pele com tons errados. Implementados seguindo o RPCS3.
 - **Brilho:** a imagem saía escura e lamacenta, com personagens quase pretos em contraluz. O jogo pede ao RSX a conversão linear→sRGB ao escrever o framebuffer e a decodificação sRGB→linear ao ler texturas, e o motor ignorava as duas; portados os PRs #304 e #305 do upstream.
+- **Devolvidas ao upstream:** seis destas correções entraram no ps3recomp
+  v0.15.0 (#311–#316), e o README do ps3recomp cita este port na seção
+  "In the community".
 - **Upstream:** PRs abertos aplicados — #297, #275, #274, #278, #293, #303; #266, #302, #304 e #305 portados à mão (créditos em [CREDITS.md](CREDITS.md)).
 
 No port: extrator dos 27 módulos de job embutidos no EBOOT, registro do

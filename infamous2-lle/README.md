@@ -114,7 +114,7 @@ reference.
 | `tools/boot.sh` | Timed headless run |
 | `tools/capture.sh` | Headless run that keeps a PNG of the presented frame every 10 s |
 | `tools/lldb_barrier.py` | Prints the WWS job barrier lanes (attach did not work here; kept for a debug launch) |
-| `tools/rap2rifkey.py` | Derives an EDAT's RIF key from the player's own `.rap` and writes the `<edat>.rifkey` sidecar |
+| `tools/rap2rifkey.py` | Derives an EDAT's RIF key from the player's own `.rap` and writes the `<edat>.rifkey` sidecar (the RAP key itself comes from `PS3_RAP_KEY`; it is not in this repository) |
 | `tools/relift_jobmod.py` | Re-lifts one WWS job module with extra entry addresses |
 | `tools/lift_datamods.py` | Extracts, lifts and registers the five `DA7ABA5E` modules the job manager streams to LS 0x6C00 |
 | `tools/lift_relocmods.py` | Lifts the ~30 position-independent SPU job blobs New Marais streams from the EBOOT to varying LS addresses (`spu_lifter.py --relocatable`), registered with `spu_overlay_register_region_reloc`; `PS3_RELOCMODS=0` turns them off |
@@ -149,6 +149,7 @@ $P $T/lift_jobmods.py --jobmods spu/jobmods --out spu \
     --register spu/jobmods_register.c --symbol-prefix infamous2
 $P tools/lift_datamods.py ../infamous2/game/EBOOT.elf --extra 0x6C44,0x6C64
 $P tools/lift_relocmods.py ../infamous2/game/EBOOT.elf
+PS3_RAP_KEY=<RAP_KEY from RPCS3 Crypto/key_vault.h, 32 hex digits> \
 $P tools/rap2rifkey.py ../infamous2/vfs/dev_hdd0/game/NPUA80638/USRDIR/dlc/ulf/unlock_review.edat
 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \

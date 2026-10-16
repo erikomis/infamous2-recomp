@@ -244,6 +244,10 @@ cada correção é um PR, com teste onde dava para ter um.
   PAD_SCRIPT com botão segurado e PAD_STICK com vários intervalos ([#8](https://github.com/NoahBPeterson/ps3recomp/pull/8)),
   command buffer do Metal com erro ([#9](https://github.com/NoahBPeterson/ps3recomp/pull/9)),
   diagnósticos do travamento ([#10](https://github.com/NoahBPeterson/ps3recomp/pull/10)).
+- [x] **Aceitos no upstream (2026-10-16), no ps3recomp v0.15.0 "Seventy-Six" (merge #325):**
+  #311, #312, #313, #314, #315 e #316. O README do ps3recomp cita o port em "In the community"
+  ("@erikomis's inFAMOUS 2 bring-up on the same branch sent six fixes (#311-#316)") e as notas
+  da v0.15.0 creditam #311 e #313. Os 11 PRs no fork do inFamous 1 seguem abertos.
 - [x] Jump table do lifter enviada ao upstream ([sp00nznet/ps3recomp#311](https://github.com/sp00nznet/ps3recomp/pull/311)).
 - [x] Opcodes de pack/unpack: fork (#5) e upstream ([#314](https://github.com/sp00nznet/ps3recomp/pull/314)).
   Também no upstream, porque o código é o mesmo no master: FIFO estacionado
@@ -255,6 +259,8 @@ cada correção é um PR, com teste onde dava para ter um.
   ([#11](https://github.com/NoahBPeterson/ps3recomp/pull/11)), na versão validada
   (linha própria do blit, snapshot de profundidade invalidado, `PS3RECOMP_ENG_WRITEBACK`).
 - [ ] Pedir para listar o port no README do ps3recomp (só quando este repositório for público).
+  - Atualização 2026-10-16: o README já cita o port pelo nome e pelo perfil (@erikomis), sem link
+    para o repositório, que ainda é privado. Falta pedir o link depois de abrir (ver "Abrir o repositório").
 - [ ] Ficaram de fora, por enquanto: o layout do `sys_lwcond_t` para o upstream (o PR #213
   já o traz) e as ferramentas da investigação do travamento ainda em aberto
   (`GCM_SEMA_ACQUIRE`/`GCM_SEMA_TRACE`, limites de `SPU_PUT_EA`, `LWCOND_TRACE`, a espera de
@@ -266,6 +272,24 @@ cada correção é um PR, com teste onde dava para ter um.
 Os branches vivem em dois worktrees do `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
 para o fork) e `ps3recomp-up/` (base no master do upstream); o remote `mine` aponta para
 o fork no GitHub.
+
+---
+
+## Abrir o repositório
+
+O repositório `erikomis/infamous2-recomp` é **privado**. Antes de deixá-lo público:
+
+- [x] Nenhum dado do jogo, do firmware, save ou binário no histórico (conferido em 2026-10-16;
+  o `.gitignore` bloqueia `game/`, `fw/`, `vfs/`, os diretórios traduzidos, `gamedata/` e os backups de save).
+- [x] Chave RAP da Sony fora do código: `tools/rap2rifkey.py` lê de `--rap-key`/`PS3_RAP_KEY` e confere
+  pelo SHA-256 (2026-10-16).
+- [x] README com aviso de "em desenvolvimento", estado atual e aviso de não afiliação.
+- [ ] Histórico: a chave RAP continua nos commits antigos de `rap2rifkey.py`, e os commits trazem o
+  e-mail pessoal do autor. Limpar exige reescrever o histórico (`git filter-repo` trocando o texto da
+  chave e o e-mail pelo `noreply` do GitHub) e um force-push, o que muda todos os hashes citados neste
+  roadmap; combinar antes com as outras sessões que commitam aqui.
+- [ ] Mudar a visibilidade no GitHub (`gh repo edit --visibility public`), decisão do Erik.
+- [ ] Depois: pedir o link do repositório no README do ps3recomp (ver item acima).
 
 ---
 
