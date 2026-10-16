@@ -1,0 +1,25 @@
+inFAMOUS 2 New Marais hang with the GPU light path -- lost flip-handler kick (disasm in all.s, scripts elf.py/findg.py/cg.py/cg2.py)
+
+Deferred put protocol (gcm wrapper object at [0x9A35F0] = 0xA6E1F0):
+  0x13AC88(obj, put_ea)   only caller: frame end 0x13C21C @13c368
+      obj+72 = put_ea; lwsync
+      if (obj+76 == 0 && obj+77 != 0) return;          // deferred: put left in obj+72
+      obj+76 = 0; obj+72 = 0; ctrl->put = put_ea - obj+28
+  0x13C21C: ... 0x13BFA8; 0x13ACE8(obj, obj+64) [spin: ref < target -> sc 141 usleep(5), no HLE];
+            ... 0x13AC88(obj, ring+8); stb r26 -> obj+77 (defer mode for next frame)
+  0x13AC34 = flip handler (OPD 0x9B87E0, registered at 0x13BB7C via import 0x742418 = NID 0xA41EF7E8 cellGcmSetFlipHandler)
+      obj+76 = 1; lwsync; p = obj+72; if (p) { obj+76 = 0; obj+72 = 0; ctrl->put = p - obj+28; }
+
+Runtime: flip handler runs only from ppu_gcm_pump(), called only in ps3_hle_call (ppu_hle.cpp:262),
+on whichever guest thread makes an HLE import call. lv2_syscall never pumps.
+
+Light kicker (tid 9, 0x350C2C loop): state 0 wait label133 / state 1 wait label134 (no HLE),
+  state 1 -> 0x35435C kicks the job chain, state 2 polls 0x38A9A8 -> 0x54CE30 -> HLE import 0x740938 (NID 0x4E153E3E)
+  every usleep(table[state]); state 3 polls 0x54EAB4 -> lwmutex HLE imports; state 4 -> sys_semaphore_wait (sc 92).
+  With the 2-10 ms SPU light job, tid 9 sat in state 2/3 pumping GCM callbacks while main spun in 0x13ACE8.
+  With the job finishing at once, tid 9 is in sc 92 by then; nothing pumps; flip pending stays undelivered;
+  obj+72 (the put into the 0x514400 block) is never written; RSX drained at the JUMP (io 0x13058); ref stuck.
+
+To confirm at the hang: u32 [0xA6E1F0+72] != 0 (EA in the 0x514400 block), u8 [+76] == 0, u8 [+77] != 0,
+  s_gcm_pending (cellGcmSys.c) has bit 2 set; [obj+64] = the ref target main waits for.
+Fix: fix_pump_on_usleep.patch (pump at sc 141). Writing [+72] by hand in the debugger should unwedge it.
