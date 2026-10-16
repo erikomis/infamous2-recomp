@@ -78,13 +78,35 @@ jogo.
 
 - [ ] Resolução interna acima de 720p: renderizar os render targets em escala (1080p, 1440p, 4K), com ajuste dos passes de pós-processamento que dependem do tamanho.
 - [ ] Upscaling:
-  - [ ] MetalFX (macOS, equivalente da Apple ao DLSS) — caminho principal neste Mac.
-  - [ ] AMD FSR (espacial, portável).
-  - [ ] NVIDIA DLSS e Intel XeSS: só fazem sentido numa build Windows com GPU NVIDIA/Intel.
+  - [ ] MetalFX (macOS, equivalente da Apple ao DLSS): upscaling espacial e temporal, e geração de quadros onde o macOS oferece. Caminho principal neste Mac.
+  - [ ] AMD FSR: FSR 3.1 (portável, qualquer GPU) e FSR 4 (por IA, só GPUs AMD recentes, numa build Windows).
+  - [ ] NVIDIA DLSS (a versão mais nova disponível) e Intel XeSS: só fazem sentido numa build Windows com GPU NVIDIA/Intel.
+  - O temporal (MetalFX temporal, FSR, DLSS) precisa de vetores de movimento e de jitter na câmera, que o jogo não gera: ou se derivam da profundidade + matrizes do quadro anterior, ou fica só o espacial.
 - [ ] Tela cheia, janela redimensionável e alternância por atalho.
 - [ ] Widescreen/ultrawide (21:9): FOV e HUD corretos.
 - [ ] Taxa de quadros: desbloquear de 30 fps onde a lógica do jogo permitir.
 - [ ] #307 (snapshot de render target) do upstream: exige terminar o merge do motor de desenho (`rsx_draw_engine.c`).
+
+### App para instalar e jogar (launcher)
+
+Um app nativo (macOS primeiro; mesma interface nas outras plataformas depois) que leva da cópia do jogo do jogador até o "Jogar", sem terminal. O app não traz código nem arquivos do jogo: o jogador fornece a própria cópia.
+
+- [ ] **Instalação / rebuild:** escolher a cópia do jogo (pasta do jogo instalado no RPCS3, PKG ou disco) e o `.rap`; o app confere a versão (NPUA80638 01.00), descriptografa, traduz (PPU, SPU, jobs) e compila, com barra de progresso, tempo estimado e log. Depende do script único de rebuild (seção Rebuild). Refazer só o que mudou quando o toolkit é atualizado.
+- [ ] **Tela inicial:** botão Jogar, capa do jogo, último save (missão e data), versão do port.
+- [ ] **Configurações de tela:**
+  - modo janela / tela cheia / tela cheia sem borda, monitor, sincronia vertical;
+  - resolução interna (720p nativo, 1080p, 1440p, 4K) e proporção (16:9, 21:9 ultrawide, com FOV e HUD corretos);
+  - limite de fps (30 original; acima quando a lógica do jogo permitir);
+  - upscaling: MetalFX (Mac), FSR 3.1/FSR 4, DLSS, XeSS, com qualidade (desempenho/equilibrado/qualidade) e escala;
+  - filtragem anisotrópica, anti-aliasing (FXAA/SMAA/TAA), nitidez;
+  - brilho/gamma e HDR (EDR no Mac).
+- [ ] **Controles:** remapear teclado, mouse e controle (DualSense/DualShock/Xbox) com a tela de teste dos botões; sensibilidade e inversão do mouse; vibração; ícones de botão PS3 ou teclado nos prompts.
+- [ ] **Áudio:** volume geral e dispositivo de saída.
+- [ ] **Saves:** listar, fazer backup, restaurar e importar/exportar (inclusive saves do RPCS3), para nunca perder o progresso.
+- [ ] **Pacotes de texturas e mods:** carregar texturas substitutas (alta resolução, refeitas por IA) e patches, ligar/desligar cada um.
+- [ ] **Desempenho e diagnóstico:** contador de fps/tempo de quadro na tela; "reportar problema" que salva o quadro atual com os dados de diagnóstico (`tools/play_dump.sh`) e o log num arquivo para mandar; perfis prontos (qualidade/equilibrado/desempenho).
+- [ ] **Atualizações:** avisar quando o port tiver versão nova e refazer o rebuild sozinho.
+- [ ] **Idioma** da interface (português e inglês).
 
 ### Desempenho
 
