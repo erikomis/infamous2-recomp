@@ -47,5 +47,11 @@ fi
 # bound keeps a label nobody services from wedging the FIFO (none did here).
 export GCM_SEMA_ACQUIRE="${GCM_SEMA_ACQUIRE:-1}"
 export GCM_SEMA_ACQUIRE_MS="${GCM_SEMA_ACQUIRE_MS:-200}"
+# A self-JUMP "park" at the end of a command block is patched by the PPU some
+# time after it moves put. Once the SPUs became the bottleneck that gap can pass
+# the toolkit's 50 ms (the PPU waits on its light tasks in between), the FIFO
+# resyncs past the frame's fence and the game hangs at the New Marais load.
+# The hardware waits for ever; 1 s keeps a truly abandoned park to a hitch.
+export GCM_PARK_GRACE_MS="${GCM_PARK_GRACE_MS:-1000}"
 
 exec "$here/build/Infamous2Recomp" "$vfs/PS3_GAME/USRDIR/EBOOT.elf" "$@"
