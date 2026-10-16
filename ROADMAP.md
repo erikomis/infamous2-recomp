@@ -90,7 +90,7 @@ jogo.
 
 ### App para instalar e jogar (launcher)
 
-Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que leva da cópia do jogo do jogador até o "Jogar", sem terminal: ele mesmo faz o recomp (rebuild) na máquina do jogador e depois abre o jogo. O app não traz código nem arquivos do jogo: o jogador fornece a própria cópia. Backend gráfico por sistema: Metal (macOS), D3D12 ou Vulkan (Windows), Vulkan (Linux). Interface multiplataforma (Qt, ou Tauri/Electron, ou SDL + ImGui como os emuladores); decidir antes de começar.
+Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que leva da cópia do jogo do jogador até o "Jogar", sem terminal: ele mesmo faz o recomp (rebuild) na máquina do jogador e depois abre o jogo. O app não traz código nem arquivos do jogo: o jogador fornece a própria cópia. Backend gráfico por sistema: Metal (macOS), D3D12 ou Vulkan (Windows), Vulkan (Linux). Decidido (2026-10-16): **launcher em Tauri** (núcleo em Rust que roda o rebuild e mostra progresso/log; interface web; instalador pequeno nos três sistemas) + mais tarde um **menu dentro do jogo em SDL + ImGui** (resolução, upscaling, fps sem sair do jogo). Os dois conversam por um `config.toml` que o launcher grava e o jogo lê ao abrir, substituindo as variáveis de ambiente de hoje. Ordem: (1) script único de rebuild, (2) o jogo lendo o `config.toml`, (3) o launcher, (4) o menu no jogo.
 
 - [ ] **Instalação / rebuild:** escolher a cópia do jogo (pasta do jogo instalado no RPCS3, PKG ou disco) e o `.rap`; o app confere a versão (NPUA80638 01.00), descriptografa, traduz (PPU, SPU, jobs) e compila, com barra de progresso, tempo estimado e log. Depende do script único de rebuild (seção Rebuild), que precisa rodar nos três sistemas: Python dos tradutores, CMake + Clang (Xcode no Mac, Clang/MSVC no Windows, Clang/GCC no Linux). O app confere e instala o que faltar (ou traz um toolchain embutido) e mostra o espaço em disco necessário. Refazer só o que mudou quando o toolkit é atualizado.
 - [ ] **Tela inicial:** botão Jogar, capa do jogo, último save (missão e data), versão do port.
@@ -108,6 +108,7 @@ Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que lev
 - [ ] **Desempenho e diagnóstico:** contador de fps/tempo de quadro na tela; "reportar problema" que salva o quadro atual com os dados de diagnóstico (`tools/play_dump.sh`) e o log num arquivo para mandar; perfis prontos (qualidade/equilibrado/desempenho).
 - [ ] **Atualizações:** avisar quando o port tiver versão nova e refazer o rebuild sozinho.
 - [ ] **Idioma** da interface (português e inglês).
+- [ ] **Versões do jogo:** hoje só a PSN (`NPUA80638`, PKG ou pasta do RPCS3 + `.rap` da compra do jogador). Para quem tem o disco: aceitar a .iso (`BCUS98125`) com a chave do disco (`.dkey`/`.ird`) e a atualização oficial, como os ports de Twisted Metal, All-Stars e Drakengard 3 (`decrypt_iso.py`, AES-CBC). Antes, comparar o EBOOT do disco atualizado com o da PSN: se for igual, é só a descriptografia; se não, um segundo perfil de recomp. O app identifica a versão do executável e avisa quando não é suportada.
 
 ### Desempenho
 
