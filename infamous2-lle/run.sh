@@ -53,5 +53,9 @@ export GCM_SEMA_ACQUIRE_MS="${GCM_SEMA_ACQUIRE_MS:-200}"
 # resyncs past the frame's fence and the game hangs at the New Marais load.
 # The hardware waits for ever; 1 s keeps a truly abandoned park to a hitch.
 export GCM_PARK_GRACE_MS="${GCM_PARK_GRACE_MS:-1000}"
+# The SPU light pass runs on the GPU: the light job's formula as a Metal pass,
+# the job itself reduced to its completion bookkeeping (gpu_light.c). New Marais
+# walk ~12 -> ~15 fps. PS3RECOMP_ENG_GPU_LIGHT= (empty) turns it off.
+export PS3RECOMP_ENG_GPU_LIGHT="${PS3RECOMP_ENG_GPU_LIGHT-07000B80:07384B80}"
 
 exec "$here/build/Infamous2Recomp" "$vfs/PS3_GAME/USRDIR/EBOOT.elf" "$@"
