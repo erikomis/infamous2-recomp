@@ -79,7 +79,8 @@ jogo.
 - [ ] Resolução interna acima de 720p: renderizar os render targets em escala (1080p, 1440p, 4K), com ajuste dos passes de pós-processamento que dependem do tamanho.
 - [ ] Upscaling:
   - [ ] MetalFX (macOS, equivalente da Apple ao DLSS): upscaling espacial e temporal, e geração de quadros onde o macOS oferece. Caminho principal neste Mac.
-  - [ ] AMD FSR: FSR 3.1 (portável, qualquer GPU) e FSR 4 (por IA, só GPUs AMD recentes, numa build Windows).
+  - [ ] AMD FSR 3.1: upscaling + geração de quadros, funciona em qualquer GPU (NVIDIA, AMD, Intel) e é o padrão nas builds Windows (D3D12/Vulkan) e Linux (Vulkan); no Mac só com um port próprio para Metal (o SDK oficial não cobre Metal), então lá o padrão é o MetalFX.
+  - [ ] AMD FSR 4.x (incluindo o 4.1): por IA, melhor qualidade, mas só em GPUs AMD que o SDK suporta (RDNA 4 em diante), em Windows e onde o driver Linux oferecer; nas outras GPUs o app cai para o FSR 3.1.
   - [ ] NVIDIA DLSS (a versão mais nova disponível) e Intel XeSS: só fazem sentido numa build Windows com GPU NVIDIA/Intel.
   - O temporal (MetalFX temporal, FSR, DLSS) precisa de vetores de movimento e de jitter na câmera, que o jogo não gera: ou se derivam da profundidade + matrizes do quadro anterior, ou fica só o espacial.
 - [ ] Tela cheia, janela redimensionável e alternância por atalho.
@@ -89,15 +90,15 @@ jogo.
 
 ### App para instalar e jogar (launcher)
 
-Um app nativo (macOS primeiro; mesma interface nas outras plataformas depois) que leva da cópia do jogo do jogador até o "Jogar", sem terminal. O app não traz código nem arquivos do jogo: o jogador fornece a própria cópia.
+Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que leva da cópia do jogo do jogador até o "Jogar", sem terminal: ele mesmo faz o recomp (rebuild) na máquina do jogador e depois abre o jogo. O app não traz código nem arquivos do jogo: o jogador fornece a própria cópia. Backend gráfico por sistema: Metal (macOS), D3D12 ou Vulkan (Windows), Vulkan (Linux). Interface multiplataforma (Qt, ou Tauri/Electron, ou SDL + ImGui como os emuladores); decidir antes de começar.
 
-- [ ] **Instalação / rebuild:** escolher a cópia do jogo (pasta do jogo instalado no RPCS3, PKG ou disco) e o `.rap`; o app confere a versão (NPUA80638 01.00), descriptografa, traduz (PPU, SPU, jobs) e compila, com barra de progresso, tempo estimado e log. Depende do script único de rebuild (seção Rebuild). Refazer só o que mudou quando o toolkit é atualizado.
+- [ ] **Instalação / rebuild:** escolher a cópia do jogo (pasta do jogo instalado no RPCS3, PKG ou disco) e o `.rap`; o app confere a versão (NPUA80638 01.00), descriptografa, traduz (PPU, SPU, jobs) e compila, com barra de progresso, tempo estimado e log. Depende do script único de rebuild (seção Rebuild), que precisa rodar nos três sistemas: Python dos tradutores, CMake + Clang (Xcode no Mac, Clang/MSVC no Windows, Clang/GCC no Linux). O app confere e instala o que faltar (ou traz um toolchain embutido) e mostra o espaço em disco necessário. Refazer só o que mudou quando o toolkit é atualizado.
 - [ ] **Tela inicial:** botão Jogar, capa do jogo, último save (missão e data), versão do port.
 - [ ] **Configurações de tela:**
   - modo janela / tela cheia / tela cheia sem borda, monitor, sincronia vertical;
   - resolução interna (720p nativo, 1080p, 1440p, 4K) e proporção (16:9, 21:9 ultrawide, com FOV e HUD corretos);
   - limite de fps (30 original; acima quando a lógica do jogo permitir);
-  - upscaling: MetalFX (Mac), FSR 3.1/FSR 4, DLSS, XeSS, com qualidade (desempenho/equilibrado/qualidade) e escala;
+  - upscaling: MetalFX (Mac), FSR 3.1 (todas as GPUs, Windows/Linux), FSR 4.x/4.1 (GPUs AMD suportadas), DLSS (NVIDIA, Windows), XeSS (Windows/Linux), mostrando só os que a GPU do jogador suporta, com qualidade (desempenho/equilibrado/qualidade) e escala;
   - filtragem anisotrópica, anti-aliasing (FXAA/SMAA/TAA), nitidez;
   - brilho/gamma e HDR (EDR no Mac).
 - [ ] **Controles:** remapear teclado, mouse e controle (DualSense/DualShock/Xbox) com a tela de teste dos botões; sensibilidade e inversão do mouse; vibração; ícones de botão PS3 ou teclado nos prompts.
@@ -114,8 +115,9 @@ Um app nativo (macOS primeiro; mesma interface nas outras plataformas depois) qu
 
 ### Outras plataformas
 
-- [ ] Linux (Vulkan, já existe no toolkit).
-- [ ] Windows (D3D12, o backend mais maduro do toolkit).
+- [ ] Linux (Vulkan, já existe no toolkit), com o app e o rebuild rodando nativos.
+- [ ] Windows (D3D12, o backend mais maduro do toolkit; Vulkan como alternativa), com o app e o rebuild rodando nativos.
+- [ ] O que é só do macOS no port hoje e precisa de equivalente: a thread principal do AppKit em `main.cpp`, o caminho de vídeo VideoToolbox, o áudio CoreAudio, os shims Win32 em POSIX (no Windows somem).
 
 ### Fora do escopo por enquanto
 
