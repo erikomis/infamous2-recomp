@@ -1,298 +1,299 @@
 # Roadmap
 
-Estado do port nativo do inFAMOUS 2 (`NPUA80638`) em macOS/arm64 e o que vem
-a seguir. `[x]` = feito e verificado; `[ ]` = a fazer. Itens marcados
-"(novo)" entraram na revisão de 2026-10-15; "Atualização" é o que mudou num item
-que já existia.
+🌐 **English** · [Português (BR)](ROADMAP.pt-BR.md)
 
-## Situação atual (2026-10-15)
+Status of the native inFAMOUS 2 (`NPUA80638`) port to macOS/arm64 and what
+comes next. `[x]` = done and verified; `[ ]` = to do. Items marked "(new)"
+came in with the 2026-10-15 revision; "Update" is what changed in an item that
+already existed.
 
-O jogo roda do boot ao início de New Marais e já é jogado com janela e
-DualSense: o save atual é o autosave "3. Forward Momentum" (1% de conclusão,
-13 poderes), gravado e carregado pelo próprio jogo. Menu, vídeos, cutscenes no
-motor, prólogo em Empire City (a Besta, o cargueiro) e as primeiras missões em
-New Marais funcionam, com som.
+## Current state (2026-10-15)
 
-Em 2026-10-15/16 os erros gráficos grandes foram corrigidos (objetos brancos estourados, NPCs pretos, cubos/painéis pretos em volta de props, rio preto, normal maps sem efeito): ver "Gráficos" em Feito. O que separa isso de "100% jogável" está logo abaixo: o fps (7–16, o jogo foi
-feito para 30), um travamento aleatório numa cutscene do prólogo, erros
-gráficos que restam em New Marais e o fato de que ninguém passou ainda de 1% do
-jogo.
+The game runs from boot to the start of New Marais and is already being played
+in a window with a DualSense: the current save is the "3. Forward Momentum"
+autosave (1% complete, 13 powers), written and loaded by the game itself. Menu,
+videos, in-engine cutscenes, the Empire City prologue (the Beast, the
+freighter) and the first missions in New Marais work, with sound.
+
+On 2026-10-15/16 the big graphics bugs were fixed (blown-out white objects, black NPCs, black cubes/panels around props, black river, normal maps with no effect): see "Graphics" under Done. What separates this from "100% playable" is right below: the fps (7–16, the game was
+made for 30), a random hang in a prologue cutscene, the graphics bugs still
+left in New Marais, and the fact that nobody has gone past 1% of the game yet.
 
 ---
 
-## O que falta para ficar 100% jogável
+## What is missing to be 100% playable
 
-### Bloqueantes
+### Blockers
 
-- [ ] Fps em New Marais (7–16): perfilar por thread para achar o gargalo (a sessão do `tools/profile_run.sh`).
-  - Perfil de New Marais (2026-10-16, `profile_run.sh newmarais`, amostras aos 250 e 400 s, agregadas por módulo com o `sample_agg.py` da sessão): os 5 SPUs do jogo ficam ~96% ocupados e são o **kernel SPURS real do próprio jogo** (imagem 100, grupo `CellSpursKernelGroup`, 5 SPUs; todos os workloads com contenção máxima 5). O tempo deles: código de job traduzido ~55% (iluminação `datamod_0087f880/0087ec80` ~23%, `jobmod_c6e7383dc013` 11%, geometria Edge `d0d15ec83992` 9%), runtime ~35% (despachante por passo `spu_task_launch_check`/`spu_check_stack_reset`/`spu_indirect_branch_slow`/`spu_drain_call` ~13%, `spu_ls_write128` 4%, `spu_overlay_note_get` 4%, `mfc_do_transfer` 2%, helpers de float não inlinados `cflts/cfltu/fi/sf_sum` ~8%). A thread do RSX/frame clock usa 0,7 núcleo a ~14 fps = ~50 ms de CPU por quadro (teto de ~20 fps sozinha): `nv3089_blit` ~25% (cópia pixel a pixel, `vm_read32`+`vm_write32`, das superfícies 1280x720 para a XDR que a iluminação SPU lê), decodificação+hash de texturas ~15%, fetch/decodificação de vértices ~20%, encode Metal o resto. A thread principal do PPU usa 0,3 núcleo (espera as light tasks e o flip).
-  - Feito a partir disso: cópia por linha no `nv3089_blit` (`NV3089_ROWCOPY`, padrão 1; `=0` volta à cópia por pixel que os diagnósticos `PPU_WWATCH`/`PPU_WVAL` enxergam): o blit sumiu do perfil da thread do RSX (era ~25% dela), fps igual no cais (o RSX não é o gargalo ali). Knobs experimentais, todos desligados por padrão: `PS3_HOT_QOS=1`, `GCM_FLIP_IMMEDIATE=1`, `GCM_SEMA_FASTPOLL=1` (A/B intercalado base/exp/base/exp, `profile_run.sh newmarais 480`: no cais 12–13 fps nos quatro, na caminhada 7–8 nos quatro; a diferença só apareceu na "rua", que depende de onde o Cole parou, então sem ganho comprovado); `SPURS_EXTRA_SPUS=2` (7 threads de SPU para o kernel SPURS real do jogo: grupo maior, threads clonadas com o número de SPU em r3, contenção máxima dos workloads 5→7 e os sinais de acordar da libsre repassados aos clones); `PS3_USLEEP_SPIN_US=<n>` (sleeps de até n µs viram spin com `sched_yield` em vez de `nanosleep`: o jogo faz `usleep(3)`/`usleep(10)` nos laços que disparam e esperam as light tasks, e no macOS `nanosleep(3 µs)` dorme ≥50 µs; na fase de caminhada os 5 SPUs ficam só 68% ocupados, a thread principal 52% nesse laço e a "SPU Light Task Kicker" 98% dormindo nele, ou seja, latência, não throughput; o ramo Windows já fazia spin abaixo de 1 ms). Resultado do `SPURS_EXTRA_SPUS=2` (ab4_x1, ab6_x2): os 2 SPUs clonados nunca recebem trabalho. A libsre escreve o `readyCount` de cada workload limitado ao seu nSpus (5), então o kernel só distribui para 5 SPUs; os clones acordam ~20 vezes/s e voltam a esperar (`rdch SPU_RdEventStat`). Fazer funcionar exigiria mexer no `readyCount`/`nSpus` do protocolo SPURS, não só na contenção máxima: parado. Efeito colateral curioso: com o knob ligado o jogo pula o menu e o quadrinho e entra no gameplay aos ~40 s em vez de ~115 s, o que muda o percurso da caminhada. Um ponto importante desses runs: na vista da marina (ab6_x2 aos 400 s) o jogo faz 5–6 fps com os 5 SPUs a 40% e o RSX a 41%, ou seja, nas cenas pesadas ninguém está saturado: é latência de sincronização (light tasks disparadas uma a uma com `usleep(3)`/`usleep(10)`), e por isso testei o `PS3_USLEEP_SPIN_US=100`: o run u1 travou aos 140 s (thread principal girando na espera das light tasks, kicker num semáforo, SPUs ociosos); o u2 rodou inteiro e deu o mesmo fps da base (cais 13,1 contra 13,3; caminhada 7,3 contra 7,7). Ou seja, a granularidade do `usleep` não é o que limita, e o spin ainda expõe um travamento: fica desligado. O que limita a caminhada a 7–8 fps com SPUs, RSX e PPU todos parcialmente ociosos continua em aberto (candidatos: o streaming do psarc + inflate Edge Zlib nos SPUs e as esperas de eventos entre PPU e SPU; medir com `PS3_POLLTOP` e o tempo das light tasks por quadro).
-  - Atualização: o prólogo já foi perfilado (ver "Desempenho" em Feito): 12 fps nas cutscenes e no píer, com a thread principal do PPU ~80% parada, 59% num laço `usleep(10)` (`func_00350CE0`) esperando as "SPU light tasks" do quadro. Em New Marais o gargalo **não** é o SPU (traduzir os jobs relocáveis tirou 98% do interpretado e o fps não mexeu); falta o perfil de lá. O jogo trava em 30 fps, então esse é o alvo.
-- [ ] Reduzir o que ainda passa pelo interpretador SPU: no prólogo já é só 3% do tempo de SPU (quase tudo no stub de LS 0x3F000); em New Marais os jobs relocáveis foram traduzidos (d72f62b) e o interpretado caiu de 14,8 G para 0,2 G instruções por 8 min. Falta perfilar New Marais com o mesmo relatório.
-- [ ] Cortar a sobrecarga do runtime SPU: tentado em 2026-10-15 (checagens por passo, `spu_overlay_note_get`, conversões NEON, LS inline, QoS das threads SPU). A sobrecarga medida caiu de 23–31% para 15–22%, mas o fps não mudou (12 no cutscene), a espera do PPU pelas light tasks ficou igual, e o Erik viu cutscenes lentas, áudio ruim e iluminação piscando/branca na janela logo depois. Revertido. O tempo das SPUs está no próprio código de iluminação traduzido (`jobmod_c6e7383dc013`, datamods `0087f880`/`0087ec80`: fm/fma/shufb), não na sobrecarga; os fallbacks de float são só 1,5–2,6%.
-  - (novo) Próximo passo: olhar a qualidade do código que o lifter gera para esse job de iluminação (vetorização das operações de float e shuffle).
-  - Tentado em 2026-10-15, com as ideias do port do Ben 10 (andrebrumdev/ben10-omniverse-recomp, `notes/`): `shufb` NEON sem `rev32` (6 operações em vez de 11), `spu__perm` sem `rev32` (família `rotqby`/`shlqby`) e `fceq`/`fcgt`/`fcmeq`/`fcmgt` em NEON, todos bit a bit iguais às referências. A/B intercalado com `profile_run.sh newmarais 480` (4 corridas): gameplay 12,9 e 14,7 fps (antes) contra 13,7 e 13,9 (depois), média ~13,8 nos dois; a função quente `datamod_0087f880 func_7320` caiu ~9% nas amostras. Sem ganho de fps; revertido. O código está em `infamous2-lle/patches/experiments/spu-neon-helpers.patch` (com os testes) para quando o gargalo de verdade sair. A variação entre duas corridas do mesmo binário (12,9 contra 14,7) é maior que o efeito: um A/B de fps aqui precisa de pelo menos 2 corridas por lado, intercaladas.
-- [x] Travamento intermitente na cutscene — **resolvido** (5 de 5 execuções passam desde a re-tradução da task Edge Zlib, imagem 1; falta só confirmar numa execução com janela). Histórico (9 execuções em 14 travavam): na cena "cityfalls" (Cole, Kuo e Zeke olhando a cidade) o jogo continua renderizando, mas a cena nunca termina. Diagnóstico com `tools/watch_stall.sh` (amostra o processo quando a cena não acaba) e os contadores novos do toolkit (`SPU_INTERP_HIST`, `SPU_INTERP_ENTRY_LOG`, `SPU_IRQSTAT`): um dos seis SPUs fica preso no job de **geometria Edge** (`jobmod_d0d15ec83992`, strings "EDGE ASSERTION FAILURE", skinning, culling), rodando código traduzido num laço que só sai por orçamento de tempo ou quando o trabalho acaba; sem interrupções, sem DMA; o loop passa pelas rotinas atômicas da alocação do ring de saída. A thread principal fica em `cellSpursGetWorkloadInfo` + `usleep(1)` esperando o job. Duas entradas que faltavam noutro módulo (`ab654d30fd90`, LS 0x15280/0x155EC) foram re-traduzidas pelo caminho, e o decrementer do SPU tinha um overflow de 64 bits aos 231 s/462 s (corrigido). Descartado depois: o job chain do Edge (`SPU_ATOMICSTAT`), o áudio (`AUDIO_WAV` continua crescendo a 384 KB/s), as `lwcond` do FIOS (`LWCOND_TRACE`), filas de evento cheias e corrida de `lseek`+`read` entre threads (`FS_READ_ALL` com tid) — tudo normal na parada. O que acontece (visto com `PPU_WWATCH` na lista de grupos de atualização em 0xA8EE50 e lldb no processo vivo): no início da cena o jogo troca de "mundo": `func_002F4E20` libera o grupo 0 (`func_001BF4C4`) e zera a entrada; numa execução que passa, os assets do mundo novo entram no registro e o grupo 0 é recriado (`func_002F02FC`); numa que trava, a thread principal fica consultando o registro por hash (`func_00662EF0`) para sempre. A diferença nas leituras do `infamous1.psarc_s`: a execução boa relê `/jbi_intro_001#31.xpps` depois da troca; a travada não (acha que já tem o pré-carregamento feito segundos antes, que pertencia ao grupo liberado). É uma corrida do próprio jogo entre o pré-carregamento do stream da cutscene e a troca de mundo, que o console nunca perde porque o inflate em SPU (Edge Zlib) termina a tempo. Medido depois (play33, saudável): o pré-carregamento do #31 termina ~158 s antes da troca, então lentidão pura não é o mecanismo. O inflate é a task SPURS Edge Zlib (`spu/images/spu_0000_at_007FA100.elf`, imagem 1), e o log de entradas do interpretador mostra que ela roda em parte **interpretada** (entradas em LS 0x9C84 e 0x9DB8, dentro do código da task, que a descoberta automática de funções não via); uma task de inflate interrompida no meio pelo scheduler enquanto está no interpretador é a hipótese atual para dados descomprimidos inválidos de vez em quando. Em teste: imagem 1 re-traduzida com essas entradas; se não bastar, `SPU_LOCKSTEP=1` e a substituição do inflate por zlib do host (recomendada nos docs do ps3recomp).
-  - Atualização 2026-10-16: com a imagem 1 re-traduzida, 5 execuções em 5 passaram pela cena (play35, play37 do c8/a0; play41–43 desta sessão, com `watch_stall.sh`, cada uma com a cena terminando normalmente). Antes eram ~2 travamentos em 3. Com a taxa antiga, 5 passagens seguidas por acaso teriam ~0,4% de chance: dá para tratar como resolvido, confirmando numa sessão com janela do Erik.
-- [ ] Jogar daí em diante (a Besta, a chegada a New Marais) com teclado ou controle numa execução com janela; a entrada por script só vai até onde o roteiro alcança.
-  - Atualização: com DualSense e janela o Erik passou do prólogo e chegou a New Marais (autosave "3. Forward Momentum", 1%). Com teclado ainda não.
-- [ ] (novo) Jogar o jogo inteiro e anotar o que quebra: todas as missões da história, os dois caminhos de karma, os poderes novos (gelo/fogo), as cutscenes em quadrinhos (Bink), os chefes, a parte alagada e a de Gas Works, as missões secundárias e os dois finais. `tools/play_capture.sh` grava o que um bug gráfico precisa numa sessão com janela.
+- [ ] Fps in New Marais (7–16): profile per thread to find the bottleneck (the `tools/profile_run.sh` session).
+  - New Marais profile (2026-10-16, `profile_run.sh newmarais`, samples at 250 and 400 s, aggregated per module with the session's `sample_agg.py`): the game's 5 SPUs sit at ~96% busy and are the **game's own real SPURS kernel** (image 100, group `CellSpursKernelGroup`, 5 SPUs; every workload with max contention 5). Their time: translated job code ~55% (lighting `datamod_0087f880/0087ec80` ~23%, `jobmod_c6e7383dc013` 11%, Edge geometry `d0d15ec83992` 9%), runtime ~35% (per-step dispatcher `spu_task_launch_check`/`spu_check_stack_reset`/`spu_indirect_branch_slow`/`spu_drain_call` ~13%, `spu_ls_write128` 4%, `spu_overlay_note_get` 4%, `mfc_do_transfer` 2%, non-inlined float helpers `cflts/cfltu/fi/sf_sum` ~8%). The RSX/frame-clock thread uses 0.7 core at ~14 fps = ~50 ms of CPU per frame (a ~20 fps ceiling on its own): `nv3089_blit` ~25% (pixel-by-pixel copy, `vm_read32`+`vm_write32`, from the 1280x720 surfaces to the XDR that the SPU lighting reads), texture decode+hash ~15%, vertex fetch/decode ~20%, Metal encoding the rest. The main PPU thread uses 0.3 core (it waits for the light tasks and the flip).
+  - Done from that: row copy in `nv3089_blit` (`NV3089_ROWCOPY`, default 1; `=0` goes back to the per-pixel copy that the `PPU_WWATCH`/`PPU_WVAL` diagnostics can see): the blit disappeared from the RSX thread profile (it was ~25% of it), same fps at the pier (the RSX is not the bottleneck there). Experimental knobs, all off by default: `PS3_HOT_QOS=1`, `GCM_FLIP_IMMEDIATE=1`, `GCM_SEMA_FASTPOLL=1` (interleaved A/B base/exp/base/exp, `profile_run.sh newmarais 480`: 12–13 fps at the pier in all four, 7–8 on the walk in all four; the difference only showed up on the "street", which depends on where Cole stopped, so no proven gain); `SPURS_EXTRA_SPUS=2` (7 SPU threads for the game's real SPURS kernel: bigger group, cloned threads with the SPU number in r3, workload max contention 5→7 and libsre's wake-up signals forwarded to the clones); `PS3_USLEEP_SPIN_US=<n>` (sleeps of up to n µs become a spin with `sched_yield` instead of `nanosleep`: the game does `usleep(3)`/`usleep(10)` in the loops that kick and wait for the light tasks, and on macOS `nanosleep(3 µs)` sleeps ≥50 µs; in the walking phase the 5 SPUs are only 68% busy, the main thread spends 52% in that loop and the "SPU Light Task Kicker" 98% asleep in it, i.e. latency, not throughput; the Windows branch already spun below 1 ms). Result of `SPURS_EXTRA_SPUS=2` (ab4_x1, ab6_x2): the 2 cloned SPUs never get work. libsre writes each workload's `readyCount` capped at its nSpus (5), so the kernel only hands out to 5 SPUs; the clones wake ~20 times/s and go back to waiting (`rdch SPU_RdEventStat`). Making it work would mean touching `readyCount`/`nSpus` in the SPURS protocol, not just the max contention: parked. Curious side effect: with the knob on, the game skips the menu and the comic and reaches gameplay at ~40 s instead of ~115 s, which changes the walking route. An important point from those runs: at the marina view (ab6_x2 at 400 s) the game does 5–6 fps with the 5 SPUs at 40% and the RSX at 41%, i.e. in the heavy scenes nobody is saturated: it is synchronization latency (light tasks kicked one by one with `usleep(3)`/`usleep(10)`), which is why I tried `PS3_USLEEP_SPIN_US=100`: run u1 hung at 140 s (main thread spinning in the light-task wait, kicker on a semaphore, SPUs idle); u2 ran all the way and gave the same fps as the base (pier 13.1 vs 13.3; walk 7.3 vs 7.7). So the `usleep` granularity is not what limits it, and the spin also exposes a hang: it stays off. What limits the walk to 7–8 fps with SPUs, RSX and PPU all partly idle is still open (candidates: psarc streaming + Edge Zlib inflate on the SPUs, and the event waits between PPU and SPU; measure with `PS3_POLLTOP` and the per-frame light-task timing).
+  - Update: the prologue has been profiled (see "Performance" under Done): 12 fps in the cutscenes and on the pier, with the main PPU thread ~80% stalled, 59% in a `usleep(10)` loop (`func_00350CE0`) waiting for the frame's "SPU light tasks". In New Marais the bottleneck is **not** the SPU (translating the relocatable jobs removed 98% of the interpreted code and the fps did not move); a profile there is still missing. The game is locked to 30 fps, so that is the target.
+- [ ] Cut what still goes through the SPU interpreter: in the prologue it is already only 3% of SPU time (almost all in the LS 0x3F000 stub); in New Marais the relocatable jobs were translated (d72f62b) and interpreted work dropped from 14.8 G to 0.2 G instructions per 8 min. New Marais still needs profiling with the same report.
+- [ ] Cut the SPU runtime overhead: tried on 2026-10-15 (per-step checks, `spu_overlay_note_get`, NEON conversions, inline LS, SPU thread QoS). The measured overhead dropped from 23–31% to 15–22%, but the fps did not change (12 in the cutscene), the PPU wait for the light tasks stayed the same, and Erik saw slow cutscenes, bad audio and flickering/white lighting in the window right after. Reverted. The SPU time is in the translated lighting code itself (`jobmod_c6e7383dc013`, datamods `0087f880`/`0087ec80`: fm/fma/shufb), not in the overhead; the float fallbacks are only 1.5–2.6%.
+  - (new) Next step: look at the quality of the code the lifter generates for that lighting job (vectorization of the float and shuffle operations).
+  - Tried on 2026-10-15, with ideas from the Ben 10 port (andrebrumdev/ben10-omniverse-recomp, `notes/`): NEON `shufb` without `rev32` (6 operations instead of 11), `spu__perm` without `rev32` (the `rotqby`/`shlqby` family) and `fceq`/`fcgt`/`fcmeq`/`fcmgt` in NEON, all bit-exact against the references. Interleaved A/B with `profile_run.sh newmarais 480` (4 runs): gameplay 12.9 and 14.7 fps (before) vs 13.7 and 13.9 (after), ~13.8 average on both; the hot function `datamod_0087f880 func_7320` dropped ~9% in the samples. No fps gain; reverted. The code is in `infamous2-lle/patches/experiments/spu-neon-helpers.patch` (with the tests) for when the real bottleneck is gone. The variation between two runs of the same binary (12.9 vs 14.7) is bigger than the effect: an fps A/B here needs at least 2 interleaved runs per side.
+- [x] Intermittent hang in the cutscene — **solved** (5 out of 5 runs pass since the Edge Zlib task, image 1, was re-translated; only a confirmation in a windowed run is left). History (9 runs out of 14 hung): in the "cityfalls" scene (Cole, Kuo and Zeke looking at the city) the game keeps rendering, but the scene never ends. Diagnosis with `tools/watch_stall.sh` (samples the process when the scene does not end) and the toolkit's new counters (`SPU_INTERP_HIST`, `SPU_INTERP_ENTRY_LOG`, `SPU_IRQSTAT`): one of the six SPUs gets stuck in the **Edge geometry** job (`jobmod_d0d15ec83992`, strings "EDGE ASSERTION FAILURE", skinning, culling), running translated code in a loop that only exits on a time budget or when the work is done; no interrupts, no DMA; the loop goes through the atomic routines of the output ring allocation. The main thread sits in `cellSpursGetWorkloadInfo` + `usleep(1)` waiting for the job. Two missing entry points in another module (`ab654d30fd90`, LS 0x15280/0x155EC) were re-translated along the way, and the SPU decrementer had a 64-bit overflow at 231 s/462 s (fixed). Ruled out afterwards: the Edge job chain (`SPU_ATOMICSTAT`), the audio (`AUDIO_WAV` keeps growing at 384 KB/s), FIOS `lwcond`s (`LWCOND_TRACE`), full event queues, and a `lseek`+`read` race between threads (`FS_READ_ALL` with tid) — all normal at the hang. What happens (seen with `PPU_WWATCH` on the update-group list at 0xA8EE50 and lldb on the live process): at the start of the scene the game switches "world": `func_002F4E20` frees group 0 (`func_001BF4C4`) and clears the entry; in a passing run, the new world's assets enter the registry and group 0 is recreated (`func_002F02FC`); in a hanging one, the main thread keeps querying the registry by hash (`func_00662EF0`) forever. The difference in the `infamous1.psarc_s` reads: the good run re-reads `/jbi_intro_001#31.xpps` after the switch; the hung one does not (it thinks it already has the preload done seconds earlier, which belonged to the freed group). It is a race in the game itself between the cutscene stream preload and the world switch, which the console never loses because the SPU inflate (Edge Zlib) finishes in time. Measured later (play33, healthy): the #31 preload finishes ~158 s before the switch, so plain slowness is not the mechanism. The inflate is the Edge Zlib SPURS task (`spu/images/spu_0000_at_007FA100.elf`, image 1), and the interpreter entry log shows it runs partly **interpreted** (entries at LS 0x9C84 and 0x9DB8, inside the task's code, which automatic function discovery did not see); an inflate task interrupted midway by the scheduler while in the interpreter is the current hypothesis for occasionally invalid decompressed data. Under test: image 1 re-translated with those entries; if that is not enough, `SPU_LOCKSTEP=1` and replacing the inflate with host zlib (recommended in the ps3recomp docs).
+  - Update 2026-10-16: with image 1 re-translated, 5 runs out of 5 got through the scene (play35, play37 from c8/a0; play41–43 from this session, with `watch_stall.sh`, each with the scene ending normally). Before it was ~2 hangs in 3. At the old rate, 5 passes in a row by chance would have a ~0.4% chance: it can be treated as solved, pending confirmation in one of Erik's windowed sessions.
+- [ ] Play on from there (the Beast, the arrival in New Marais) with keyboard or controller in a windowed run; scripted input only goes as far as the script reaches.
+  - Update: with a DualSense and a window Erik got past the prologue and reached New Marais ("3. Forward Momentum" autosave, 1%). Not with the keyboard yet.
+- [ ] (new) Play the whole game and write down what breaks: all the story missions, both karma paths, the new powers (ice/fire), the comic-book cutscenes (Bink), the bosses, the flooded area and Gas Works, the side missions and both endings. `tools/play_capture.sh` records what a graphics bug needs in a windowed session.
 
-### Gráficos
+### Graphics
 
-- [x] Gráficos em New Marais (reconferidos nas capturas do Erik de 2026-10-15 17:36 e 23:5x): inimigos/NPCs pretos → espera do label do SPU (`run.sh`); janelas do barco do Zeke → FACING + `perspective_corr`; retângulos escuros translúcidos perto do Cole → volumes de oclusão (textura 3D + `_bx2`); tudo verificado limpo. Falta só reconferir os blocos de madeira do guindaste (saíam azul-turquesa) quando alguém passar por lá.
-- [x] Objetos estourados em branco (barco no reboque, amplificador do Cole, caixote do píer, lixeira, guincho) e retângulos de brilho alinhados à tela perto dos personagens (capturas do Erik, 11:59). Causa, achada em 2026-10-15 à noite: o walker do FIFO não bloqueava nos ACQUIREs de semáforo (padrão do toolkit), então o compositor diferido (FP 0xF384F111AD5956BA) amostrava os buffers XDR 0x07000B80/0x07384B80 enquanto ainda tinham as cópias NV3089 das normais e da profundidade; o "SPU Light Task" escreve a luz ali alguns ms depois (tiles de 32x40 em volta de cada luz, zero no resto, dump no píer). Com as normais no lugar da luz, `tex5.a` (byte alto da profundidade, ≈1) ligava o reflexo do cubemap em tudo que tem brilho (branco estourado); com máscaras de MRT por alvo a luz saía na cor da normal (verde/magenta); os tiles já escritos pelo SPU eram os retângulos. Conserto: `run.sh` exporta `GCM_SEMA_ACQUIRE=1` e `GCM_SEMA_ACQUIRE_MS=200` (ACQUIRE bloqueante com limite, igual ao hardware; nenhum estourou do boot ao píer; fps igual dentro do ruído). O amplificador volta a ser metal escuro, as cintas das tábuas e o tambor ficam normais. Para olhar os buffers: `PS3RECOMP_ENG_MEMDUMP=47500B80:708000:238s:<arquivo>` (os dois, no píer). Também corrigido no caminho: a expansão `UNSIGNED_REMAP_BIASED` (bit 12 de SET_TEXTURE_ADDRESS) vale para toda leitura da textura, não só TEX com EXP_TEX (o compositor lê as normais assim). Os retângulos escuros translúcidos em volta de props (máquina de venda, caixotes) tinham outra causa, achada em 2026-10-16 de madrugada: o passe de volumes de oclusão (p113) consulta uma textura **3D 8×8×8** (FORMAT dimensão 3, CONTROL3 profundidade 8) com direção/ângulo de cone por célula, e o motor não tinha texturas 3D (subia a primeira fatia como 2D e o shader amostrava `.xy`). Texturas 3D implementadas de ponta a ponta (layout Morton 3D, upload por fatia, `MTLTextureType3D`, `Texture3D`/`.Sample(xyz)` no decompilador, chave de pipeline): o shader do p113 agora declara `Texture3D rsx_tex2` e a caixa da máquina de venda some. Ainda conferir com o Erik na praça ao entardecer (luzes de rua) e o reflexo do céu no rio.
-- [x] **Cubos pretos em volta de props (mesas do café no terraço do EXPO, foto do Erik 22:19) e normal maps sem efeito (2026-10-16):** o decompilador só expandia (x·2−1) leituras de textura quando o registrador da unidade pedia `UNSIGNED_REMAP_BIASED`; mas o modificador `_bx2` (EXP_TEX, bit 21 do OPDEST) é da instrução, não da textura, e expande sempre. 213 dos ~615 fragment programs do jogo usam `TEX_bx2`: os normal maps tangentes (p181 `tex0`) e a LUT 8×8×8 das caixas de oclusão (p113, valores simétricos em torno de 128) chegavam sem sinal → normais erradas em todo material com normal map e direção do cone sempre no octante positivo → cobertura≈1 → caixa inteira preta. Agora `_bx2` expande as 4 lanes sempre (`rsx_fp_texture_bx2_units`). Também: o snapshot de profundidade entrega o **stencil** na lane B (o compositor lê as flags de material dali: bit 7 escala do ambiente, bit 5 desliga o SSAO; p113/p114 excluem personagens pelo bit 6), antes era 0. Ferramentas novas: `tools/play_dump.sh <nome>` (sessão na janela; Enter no terminal grava o quadro, todos os render targets, pass log e shaders — `PS3RECOMP_METAL_DUMP_TRIGGER=<arquivo>`), `PS3RECOMP_METAL_SURF_DUMP_AT=<s>`, analógico direito no `PAD_SCRIPT` (0x100000 cima, 0x200000 baixo, 0x400000/0x800000 lados), log `texture bind FAILED`, `DUMPTEX` para R16/R8, comentário `/* EXP_TEX unexpanded */` nos shaders dumpados.
-- [ ] (novo) Retângulos **claros** translúcidos em volta de personagens/NPCs (fundo atrás deles mais claro, bordas retas) — **não apareceram** nos três quadros do Erik de 23:5x depois do conserto do `_bx2` (os passes de luz leem as normais do G-buffer, que mudaram com os normal maps certos); reconferir na praça ao entardecer com NPCs perto. Histórico: vêm dos passes de luz em volume (pular todos os FPs p116–p122/p303 os remove; só o p120 — luz em caixa com o mesmo VS dos volumes de oclusão — não basta). Esses passes desenham as faces traseiras do volume com LEQUAL e reconstroem a posição da profundidade (a simulação offline do p114, mesmo VS e mesma leitura de profundidade, dá alpha≈1 longe da caixa, então a entrada parece certa); descartados (2026-10-16): convenção do `position.w` (`PS3RECOMP_FRAGCOORD_W=w` não muda), rampa 1024×8 (é a LUT de especular, lida de volta), constantes por draw (staging por record), load das attachments de profundidade/stencil, stencil (p116/p120 rodam com teste desligado), cull/winding/compare (iguais ao RPCS3). O p118 (luz de personagem) com constantes + profundidade reais da cena "FOR RENT" simula atenuação ≈ 0 (as luzes capturadas estavam a ~110 m); pular p116, p117/118/303, p120, p122 ou p119+p121 **isoladamente** deixa caixas fracas, só pular todos limpa. Teste rápido na janela: `PS3RECOMP_ENG_SKIP_FP=d98fefc56d43594b,83d934dc18efcea3,db0f414789b4ad56,6d715ad65444fa49,c5e0d94ef8e23ba3,7f104f9b0f3b938f ./run.sh` (sem luzes-volume) e depois um hash por vez. Dumps por hash: `PS3RECOMP_ENG_FPK_FP=<hash> PS3RECOMP_ENG_FPK_AFTER=<s>` (constantes FP+VP) e `PS3RECOMP_ENG_DUMPTEX_FP=<hash>:<unidade>:<s>:<arquivo>` (textura lida de volta); simuladores `p118_sim.py`/`p120_sim.py`/`p114_sim.py` reproduzem a conta dos shaders a partir desses dumps. Ferramentas: `PS3RECOMP_ENG_SKIP_FP=<hash,..>` (pula draws por hash do FP, estável entre execuções; `manifest.txt` no `PS3RECOMP_ENG_SHADER_DUMP` lista p= → fp/vp), `PS3RECOMP_METAL_DBG_DUMPTEX=<p>:<unidade>:<seg>:<arquivo>` (lê de volta a textura que um pipeline amostra), `PS3RECOMP_ENG_TEXSTATE_PIPE=<p>` (registradores de textura de um pipeline, com dimensão/profundidade/cor de borda), `PS3RECOMP_ENG_FPK_AFTER`/`[vpk]` (constantes FP e VP de um draw numa cena), `PS3RECOMP_ENG_VPC_WATCH=<p>:<c>`, `TCONST_SLOT`/`TCONST_AFTER`, e o analógico esquerdo no `PAD_SCRIPT` (bits 0x10000 cima, 0x20000 baixo, 0x40000/0x80000 lados, `:<seg>` segura) — `175:0x10000:9,184:0x90000:8,192:0x10000:25,218:0x80000:3,221:0x10000:30` leva o Cole do píer à rua do Club Bar (não determinístico: ~1 em 3).
-- [ ] (novo) Rio/água sem o reflexo do céu (capturas do Erik 23:5x: água cinza chapada sob um pôr do sol laranja). O passe da água (p149/p150) lê a cópia da cena em 0x00E3C000 com `perspective_corr`; falta ver se o termo de reflexo usa um cubemap/normal da água que chega sem sinal ou um render target que não resolvemos (`tools/play_dump.sh` + `manifest.txt` do shader da água).
-  - Atualização 2026-10-16 (capturas w83–w92 com `RSX_FP_DEBUG`, `PS3RECOMP_ENG_FPK_FP` e dump de texturas): as entradas do shader da água (FP 2bc5c87f50037448) estão certas: constantes sãs (c2 = posição do olho em cm, c6=2/c7=−1 são a expansão 2w−1 que o próprio shader faz do mapa de ondas Y16_X16, lido sem expansão; c19=1), RT de ondulações uniforme em (128,128,0) e lido com `_bx2` (vira 0), tc0 = posição no mundo. O sintoma medido: as componentes xy da normal saturam perto de ±1 e o termo de Fresnel vai a 1, então o rio sai 100% reflexo (escuro, com os postes refletidos e sem céu). Suspeitos que restam: amplitude/lanes do mapa de ondas Y16_X16 (dumpar a unidade 0 como RG16 e ver o histograma; o crossbar 0xE4→0x56 põe .y/.w = X/Y) e se o RT de reflexo planar 256x256 (unidade 4, 0x0F6F0000) contém o céu. Cuidado com o `RSX_FP_DEBUG`: o índice n é contado antes da instrução n "tratada" e não bate com a contagem manual do HLSL; usar junto com `PS3RECOMP_ENG_SHADER_DUMP` (criar o diretório antes) para ver onde o `_rsx_dbg =` caiu.
-  - Atualização 2026-10-16 (manhã, capturas w93–w102): fechado sem bug encontrado. Mapa de ondas Y16_X16 praticamente plano (X,Y = 0,5 ± 0,016: normal certa, a leitura anterior de "normal saturada" era um índice errado do `RSX_FP_DEBUG`; com o dump do shader junto o índice bate com a contagem dos blocos do HLSL, e a saída sobrepõe por blend aditivo, então "branco" não é confiável). O RT de reflexo planar 256x256 (0x0F6F0000) tem o céu em cima, horizonte a 66% e preto embaixo: é a vista de uma câmera abaixo da água olhando para cima **sem** espelhar o eixo vertical, e é assim que o jogo faz (determinantes das matrizes do passe de reflexo com o mesmo sinal da view-projection principal; viewport, clip, janela e cull iguais aos outros passes; registradores inteiros comparados com `PS3RECOMP_ENG_REGDUMP_PIPE`; dumps de textura confirmados de cabeça para cima com `PS3RECOMP_METAL_DBG_DUMPTEX`/`DUMPTEX_FP`). Com isso a água perto amostra o preto do RT (sem reflexo, domina a refração escura) e a água longe amostra a faixa do horizonte (névoa cinza), que é o cinza que se vê. Amostrar o reflexo com v invertido (`RSX_FP_FLIPV=2bc5c87f50037448:4`, knob de teste) dá reflexos do píer na água perto mas não tem base no hardware. Para ir além é preciso uma referência do original no mesmo ponto (RPCS3 com o save do cais, ou vídeo), porque a conta do shader com as entradas verificadas dá exatamente isto.
-- [x] "SPU Light Task": roda a cada frame, consome as cópias XDR das normais/profundidade e escreve de volta a luz difusa (0x07000B80: RGB luz, A intensidade) e a especular (0x07384B80), em tiles de 32x40 só onde há luz; no menu não há luz nenhuma, por isso parecia não escrever. O RSX precisa esperar o label 137 antes do compositor (ver item acima).
-- [ ] (novo) Menu principal: o contorno cinza-azulado do Cole e os destroços escuros não aparecem; há um borrão cinza estático sob a barra que não existe no original.
-  - Atualização 2026-10-16: o "borrão cinza" **existe no original**: aparece igual, no mesmo lugar, em dois dos quadros automáticos do vídeo do título (`i.ytimg.com/vi/-AlLTVzztbI/maxres1.jpg` e `maxres3.jpg`); no quadro de referência antigo ele estava escondido atrás do raio. É um quad de UI (FP 2921adcb9c915692, o mesmo da barra "START A NEW GAME") com uma textura DXT1 256x128 de riscos, alfa de vértice 0,3 e blend ONE / ONE_MINUS_SRC_COLOR, achado por varredura de shaders com `PS3RECOMP_ENG_SKIP_FP` e conferido com o dump da textura (`PS3RECOMP_METAL_DBG_DUMPTEX` agora grava blocos BC brutos em `<path>.bc.bin`, e `PS3RECOMP_METAL_DBG_DUMPTEX_SKIP=<n>` pula n draws do pipeline). Resta só o contorno do Cole e os destroços escuros (nos quadros 1 e 2 do vídeo os destroços são muitos e bem visíveis).
+- [x] Graphics in New Marais (rechecked on Erik's captures of 2026-10-15 17:36 and 23:5x): black enemies/NPCs → wait for the SPU label (`run.sh`); Zeke's boat windows → FACING + `perspective_corr`; dark translucent rectangles near Cole → occlusion volumes (3D texture + `_bx2`); all verified clean. Only the crane's wooden blocks (they came out turquoise) still need rechecking when someone goes by there.
+- [x] Blown-out white objects (the towed boat, Cole's amp, the pier crate, trash can, winch) and screen-aligned glow rectangles near the characters (Erik's captures, 11:59). Cause, found on the evening of 2026-10-15: the FIFO walker did not block on semaphore ACQUIREs (the toolkit default), so the deferred compositor (FP 0xF384F111AD5956BA) sampled the XDR buffers 0x07000B80/0x07384B80 while they still held the NV3089 copies of the normals and depth; the "SPU Light Task" writes the light there a few ms later (32x40 tiles around each light, zero elsewhere, dump at the pier). With the normals in place of the light, `tex5.a` (high byte of depth, ≈1) turned on the cubemap reflection on everything glossy (blown-out white); with per-target MRT masks the light came out in the normal's color (green/magenta); the tiles already written by the SPU were the rectangles. Fix: `run.sh` exports `GCM_SEMA_ACQUIRE=1` and `GCM_SEMA_ACQUIRE_MS=200` (blocking ACQUIRE with a limit, like the hardware; none timed out from boot to the pier; same fps within noise). The amp is dark metal again, and the plank straps and the drum look normal. To look at the buffers: `PS3RECOMP_ENG_MEMDUMP=47500B80:708000:238s:<file>` (both, at the pier). Also fixed along the way: the `UNSIGNED_REMAP_BIASED` expansion (bit 12 of SET_TEXTURE_ADDRESS) applies to every read of the texture, not only TEX with EXP_TEX (the compositor reads the normals that way). The dark translucent rectangles around props (vending machine, crates) had another cause, found in the early hours of 2026-10-16: the occlusion-volume pass (p113) looks up an **8×8×8 3D texture** (FORMAT dimension 3, CONTROL3 depth 8) with a cone direction/angle per cell, and the engine had no 3D textures (it uploaded the first slice as 2D and the shader sampled `.xy`). 3D textures implemented end to end (3D Morton layout, per-slice upload, `MTLTextureType3D`, `Texture3D`/`.Sample(xyz)` in the decompiler, pipeline key): the p113 shader now declares `Texture3D rsx_tex2` and the vending machine's box is gone. Still to check with Erik at the plaza at dusk (street lights) and the sky reflection on the river.
+- [x] **Black cubes around props (café tables on the EXPO terrace, Erik's photo 22:19) and normal maps with no effect (2026-10-16):** the decompiler only expanded (x·2−1) texture reads when the unit's register asked for `UNSIGNED_REMAP_BIASED`; but the `_bx2` modifier (EXP_TEX, bit 21 of OPDEST) belongs to the instruction, not the texture, and always expands. 213 of the game's ~615 fragment programs use `TEX_bx2`: the tangent-space normal maps (p181 `tex0`) and the 8×8×8 LUT of the occlusion boxes (p113, values symmetric around 128) arrived unsigned → wrong normals on every normal-mapped material and the cone direction always in the positive octant → coverage≈1 → whole box black. Now `_bx2` always expands all 4 lanes (`rsx_fp_texture_bx2_units`). Also: the depth snapshot delivers the **stencil** in lane B (the compositor reads material flags from there: bit 7 ambient scale, bit 5 disables SSAO; p113/p114 exclude characters via bit 6), it used to be 0. New tools: `tools/play_dump.sh <name>` (windowed session; Enter in the terminal saves the frame, all render targets, pass log and shaders — `PS3RECOMP_METAL_DUMP_TRIGGER=<file>`), `PS3RECOMP_METAL_SURF_DUMP_AT=<s>`, right stick in `PAD_SCRIPT` (0x100000 up, 0x200000 down, 0x400000/0x800000 sides), `texture bind FAILED` log, `DUMPTEX` for R16/R8, `/* EXP_TEX unexpanded */` comment in dumped shaders.
+- [ ] (new) **Light** translucent rectangles around characters/NPCs (background behind them lighter, straight edges) — they **did not show up** in Erik's three 23:5x frames after the `_bx2` fix (the light passes read the G-buffer normals, which changed with the correct normal maps); recheck at the plaza at dusk with NPCs nearby. History: they come from the volume light passes (skipping all FPs p116–p122/p303 removes them; skipping only p120 — box light with the same VS as the occlusion volumes — is not enough). These passes draw the volume's back faces with LEQUAL and rebuild the position from depth (the offline simulation of p114, same VS and same depth read, gives alpha≈1 away from the box, so the input looks right); ruled out (2026-10-16): the `position.w` convention (`PS3RECOMP_FRAGCOORD_W=w` changes nothing), the 1024×8 ramp (it is the specular LUT, read back), per-draw constants (per-record staging), loading of the depth/stencil attachments, stencil (p116/p120 run with the test off), cull/winding/compare (same as RPCS3). p118 (character light) with real constants + depth from the "FOR RENT" scene simulates attenuation ≈ 0 (the captured lights were ~110 m away); skipping p116, p117/118/303, p120, p122 or p119+p121 **in isolation** leaves faint boxes, only skipping all of them cleans it up. Quick test in the window: `PS3RECOMP_ENG_SKIP_FP=d98fefc56d43594b,83d934dc18efcea3,db0f414789b4ad56,6d715ad65444fa49,c5e0d94ef8e23ba3,7f104f9b0f3b938f ./run.sh` (no volume lights) and then one hash at a time. Per-hash dumps: `PS3RECOMP_ENG_FPK_FP=<hash> PS3RECOMP_ENG_FPK_AFTER=<s>` (FP+VP constants) and `PS3RECOMP_ENG_DUMPTEX_FP=<hash>:<unit>:<s>:<file>` (texture read back); the simulators `p118_sim.py`/`p120_sim.py`/`p114_sim.py` reproduce the shaders' math from those dumps. Tools: `PS3RECOMP_ENG_SKIP_FP=<hash,..>` (skips draws by FP hash, stable across runs; `manifest.txt` in `PS3RECOMP_ENG_SHADER_DUMP` lists p= → fp/vp), `PS3RECOMP_METAL_DBG_DUMPTEX=<p>:<unit>:<sec>:<file>` (reads back the texture a pipeline samples), `PS3RECOMP_ENG_TEXSTATE_PIPE=<p>` (a pipeline's texture registers, with dimension/depth/border color), `PS3RECOMP_ENG_FPK_AFTER`/`[vpk]` (FP and VP constants of a draw in a scene), `PS3RECOMP_ENG_VPC_WATCH=<p>:<c>`, `TCONST_SLOT`/`TCONST_AFTER`, and the left stick in `PAD_SCRIPT` (bits 0x10000 up, 0x20000 down, 0x40000/0x80000 sides, `:<sec>` holds) — `175:0x10000:9,184:0x90000:8,192:0x10000:25,218:0x80000:3,221:0x10000:30` takes Cole from the pier to the Club Bar street (not deterministic: ~1 in 3).
+- [ ] (new) River/water without the sky reflection (Erik's 23:5x captures: flat grey water under an orange sunset). The water pass (p149/p150) reads the scene copy at 0x00E3C000 with `perspective_corr`; still to see whether the reflection term uses a water cubemap/normal that arrives unsigned or a render target we do not resolve (`tools/play_dump.sh` + `manifest.txt` for the water shader).
+  - Update 2026-10-16 (captures w83–w92 with `RSX_FP_DEBUG`, `PS3RECOMP_ENG_FPK_FP` and texture dumps): the water shader's inputs (FP 2bc5c87f50037448) are correct: sane constants (c2 = eye position in cm, c6=2/c7=−1 are the 2w−1 expansion the shader itself applies to the Y16_X16 wave map, read without expansion; c19=1), ripple RT uniform at (128,128,0) and read with `_bx2` (becomes 0), tc0 = world position. The measured symptom: the normal's xy components saturate near ±1 and the Fresnel term goes to 1, so the river comes out 100% reflection (dark, with the lampposts reflected and no sky). Remaining suspects: amplitude/lanes of the Y16_X16 wave map (dump unit 0 as RG16 and look at the histogram; the 0xE4→0x56 crossbar puts .y/.w = X/Y) and whether the 256x256 planar reflection RT (unit 4, 0x0F6F0000) contains the sky. Careful with `RSX_FP_DEBUG`: index n is counted before the n-th "handled" instruction and does not match a manual count of the HLSL; use it together with `PS3RECOMP_ENG_SHADER_DUMP` (create the directory first) to see where `_rsx_dbg =` landed.
+  - Update 2026-10-16 (morning, captures w93–w102): closed with no bug found. The Y16_X16 wave map is practically flat (X,Y = 0.5 ± 0.016: correct normal; the earlier "saturated normal" reading was a wrong `RSX_FP_DEBUG` index; with the shader dump alongside, the index matches the HLSL block count, and the output overlays with additive blending, so "white" is not reliable). The 256x256 planar reflection RT (0x0F6F0000) has the sky at the top, the horizon at 66% and black at the bottom: it is the view of a camera below the water looking up **without** flipping the vertical axis, and that is how the game does it (determinants of the reflection pass matrices with the same sign as the main view-projection; viewport, clip, window and cull the same as the other passes; integer registers compared with `PS3RECOMP_ENG_REGDUMP_PIPE`; texture dumps confirmed upright with `PS3RECOMP_METAL_DBG_DUMPTEX`/`DUMPTEX_FP`). So nearby water samples the RT's black (no reflection, the dark refraction dominates) and far water samples the horizon band (grey fog), which is the grey you see. Sampling the reflection with v flipped (`RSX_FP_FLIPV=2bc5c87f50037448:4`, a test knob) gives pier reflections on nearby water but has no basis in the hardware. Going further needs a reference from the original at the same spot (RPCS3 with the pier save, or video), because the shader math with the verified inputs gives exactly this.
+- [x] "SPU Light Task": runs every frame, consumes the XDR copies of the normals/depth and writes back the diffuse light (0x07000B80: RGB light, A intensity) and the specular (0x07384B80), in 32x40 tiles only where there is light; the menu has no light at all, which is why it looked like it did not write. The RSX has to wait for label 137 before the compositor (see the item above).
+- [ ] (new) Main menu: Cole's grey-blue outline and the dark debris do not show up; there is a static grey smudge under the bar that does not exist in the original.
+  - Update 2026-10-16: the "grey smudge" **exists in the original**: it shows up the same, in the same place, in two of the automatic frames of the title video (`i.ytimg.com/vi/-AlLTVzztbI/maxres1.jpg` and `maxres3.jpg`); in the old reference frame it was hidden behind the lightning bolt. It is a UI quad (FP 2921adcb9c915692, the same as the "START A NEW GAME" bar) with a 256x128 DXT1 scratch texture, vertex alpha 0.3 and ONE / ONE_MINUS_SRC_COLOR blending, found by sweeping shaders with `PS3RECOMP_ENG_SKIP_FP` and checked against the texture dump (`PS3RECOMP_METAL_DBG_DUMPTEX` now writes raw BC blocks to `<path>.bc.bin`, and `PS3RECOMP_METAL_DBG_DUMPTEX_SKIP=<n>` skips n draws of the pipeline). Only Cole's outline and the dark debris remain (in frames 1 and 2 of the video there is a lot of debris and it is very visible).
 
-### Estabilidade
+### Stability
 
-- [ ] Congelamento no gameplay (a imagem para de vez; ~1 execução em 5 em New Marais, e no píer diurno do `m2` aos ~40 s de jogo): o walker do FIFO para num JUMP para si mesmo (o "estacionamento" no fim de um bloco de comandos montado pelas SPUs, que o jogo depois troca por um JUMP para o bloco seguinte) e o watchdog "stuck-get" desiste dele depois de 8 passadas, poucos milissegundos, antes do prazo próprio do estacionamento (`GCM_PARK_GRACE_MS`), pulando para o `put` e perdendo os comandos do quadro. Corrigido: o watchdog não conta passadas paradas num estacionamento (o prazo de 50 ms decide). Validação em andamento (3 execuções a partir do save). Não é a causa do travamento da cena "cityfalls": a maioria das execuções travadas ali não tem nenhum stuck-get.
-  - Atualização: as 3 execuções de validação rodaram sem congelar (c1ba4b3). Falta confirmar em sessões longas com janela.
-  - Atualização 2026-10-16: em 88 execuções headless de New Marais de 2026-10-15/16 (~4 min cada, píer e caminhada até a rua) nenhuma congelou; 4 tiveram um "FIFO resync (jump-park)" (o prazo de 50 ms do estacionamento venceu: um quadro perdido, não um travamento). Pode ser marcado como resolvido depois de uma sessão longa do Erik na janela.
+- [ ] Freeze during gameplay (the image stops for good; ~1 run in 5 in New Marais, and on the `m2` daytime pier at ~40 s of play): the FIFO walker stops on a JUMP to itself (the "park" at the end of a command block built by the SPUs, which the game later swaps for a JUMP to the next block) and the "stuck-get" watchdog gives up on it after 8 passes, a few milliseconds, before the park's own deadline (`GCM_PARK_GRACE_MS`), jumping to `put` and losing the frame's commands. Fixed: the watchdog does not count passes stopped at a park (the 50 ms deadline decides). Validation in progress (3 runs from the save). Not the cause of the "cityfalls" scene hang: most of the runs that hang there have no stuck-get at all.
+  - Update: the 3 validation runs went through without freezing (c1ba4b3). Still to confirm in long windowed sessions.
+  - Update 2026-10-16: in 88 headless New Marais runs on 2026-10-15/16 (~4 min each, pier and walk to the street) none froze; 4 had a "FIFO resync (jump-park)" (the park's 50 ms deadline expired: one lost frame, not a freeze). Can be marked solved after a long windowed session by Erik.
 
 ### Saves
 
-- [ ] Saves: conferir criação, carregamento e local dos arquivos.
-  - Atualização: criação e carregamento funcionam (o autosave do Erik é gravado e carregado pelo próprio jogo). O local é o problema: o `/dev_hdd0` é `gamedata/` relativo ao diretório de onde o jogo foi aberto, então abrir de outra pasta é começar sem save. Precisa de um caminho fixo (por exemplo em `~/Library/Application Support`).
+- [ ] Saves: check creation, loading and file location.
+  - Update: creation and loading work (Erik's autosave is written and loaded by the game itself). The location is the problem: `/dev_hdd0` is `gamedata/` relative to the directory the game was launched from, so launching from another folder means starting without a save. It needs a fixed path (for example under `~/Library/Application Support`).
 
-### Controles
+### Controls
 
-- [ ] Testar o teclado com janela (`./run.sh`) do menu ao gameplay.
-- [ ] Captura do cursor na janela e atalho para soltá-lo.
-- [ ] Mapeamento configurável (arquivo de configuração em vez de teclas fixas no código).
-- [ ] Controle físico via SDL2 (DualShock/DualSense/Xbox) testado, incluindo vibração.
-  - Atualização: o DualSense funciona (botões e analógicos) no jogo com janela. Faltam vibração, Xbox e DualShock.
-- [ ] Prompts de botão: opção de trocar os ícones de PS3 pelos de teclado.
-- [ ] Portão do píer, "Hold L1 to aim": o script só tocava em L1; agora `PAD_SCRIPT` aceita `seg:máscara:duração` e segura. Em teste.
-  - Atualização: `tools/play_prologue.sh` segura L1 aos 760 s, mas o roteiro nunca foi conferido até o fim. Jogando à mão o portão já foi passado.
+- [ ] Test the keyboard in a window (`./run.sh`) from the menu to gameplay.
+- [ ] Cursor capture in the window and a shortcut to release it.
+- [ ] Configurable mapping (a config file instead of keys hard-coded).
+- [ ] Physical controller via SDL2 (DualShock/DualSense/Xbox) tested, including rumble.
+  - Update: the DualSense works (buttons and sticks) in the windowed game. Rumble, Xbox and DualShock are still missing.
+- [ ] Button prompts: option to swap the PS3 icons for keyboard ones.
+- [ ] Pier gate, "Hold L1 to aim": the script only tapped L1; now `PAD_SCRIPT` accepts `sec:mask:duration` and holds. Under test.
+  - Update: `tools/play_prologue.sh` holds L1 at 760 s, but the script was never checked to the end. Playing by hand, the gate has been passed.
 
 ### Rebuild
 
-- [ ] Um único script para o resto do rebuild do zero: descriptografar, traduzir e compilar (hoje a receita está no README do port).
+- [ ] A single script for the rest of the rebuild from scratch: decrypt, translate and compile (today the recipe is in the port's README).
 
 ---
 
-## Depois de jogável (melhorias)
+## After it is playable (improvements)
 
-### Gráficos e resolução
+### Graphics and resolution
 
-- [ ] Resolução interna acima de 720p: renderizar os render targets em escala (1080p, 1440p, 4K), com ajuste dos passes de pós-processamento que dependem do tamanho.
+- [ ] Internal resolution above 720p: render the render targets scaled (1080p, 1440p, 4K), adjusting the post-processing passes that depend on size.
 - [ ] Upscaling:
-  - [ ] MetalFX (macOS, equivalente da Apple ao DLSS): upscaling espacial e temporal, e geração de quadros onde o macOS oferece. Caminho principal neste Mac.
-  - [ ] AMD FSR 3.1: upscaling + geração de quadros, funciona em qualquer GPU (NVIDIA, AMD, Intel) e é o padrão nas builds Windows (D3D12/Vulkan) e Linux (Vulkan); no Mac só com um port próprio para Metal (o SDK oficial não cobre Metal), então lá o padrão é o MetalFX.
-  - [ ] AMD FSR 4.x (incluindo o 4.1): por IA, melhor qualidade, mas só em GPUs AMD que o SDK suporta (RDNA 4 em diante), em Windows e onde o driver Linux oferecer; nas outras GPUs o app cai para o FSR 3.1.
-  - [ ] NVIDIA DLSS (a versão mais nova disponível) e Intel XeSS: só fazem sentido numa build Windows com GPU NVIDIA/Intel.
-  - O temporal (MetalFX temporal, FSR, DLSS) precisa de vetores de movimento e de jitter na câmera, que o jogo não gera: ou se derivam da profundidade + matrizes do quadro anterior, ou fica só o espacial.
-- [ ] Tela cheia, janela redimensionável e alternância por atalho.
-- [ ] Widescreen/ultrawide (21:9): FOV e HUD corretos.
-- [ ] Taxa de quadros: desbloquear de 30 fps onde a lógica do jogo permitir.
-- [ ] #307 (snapshot de render target) do upstream: exige terminar o merge do motor de desenho (`rsx_draw_engine.c`).
+  - [ ] MetalFX (macOS, Apple's DLSS equivalent): spatial and temporal upscaling, and frame generation where macOS offers it. The main path on this Mac.
+  - [ ] AMD FSR 3.1: upscaling + frame generation, works on any GPU (NVIDIA, AMD, Intel) and is the default in the Windows (D3D12/Vulkan) and Linux (Vulkan) builds; on the Mac only with a custom Metal port (the official SDK does not cover Metal), so there the default is MetalFX.
+  - [ ] AMD FSR 4.x (including 4.1): AI-based, better quality, but only on AMD GPUs the SDK supports (RDNA 4 onward), on Windows and wherever the Linux driver offers it; on other GPUs the app falls back to FSR 3.1.
+  - [ ] NVIDIA DLSS (the newest available version) and Intel XeSS: only make sense in a Windows build with an NVIDIA/Intel GPU.
+  - The temporal ones (MetalFX temporal, FSR, DLSS) need motion vectors and camera jitter, which the game does not produce: either they are derived from depth + the previous frame's matrices, or only spatial is left.
+- [ ] Fullscreen, resizable window and a toggle shortcut.
+- [ ] Widescreen/ultrawide (21:9): correct FOV and HUD.
+- [ ] Frame rate: unlock past 30 fps where the game logic allows.
+- [ ] Upstream #307 (render-target snapshot): requires finishing the draw-engine merge (`rsx_draw_engine.c`).
 
-### App para instalar e jogar (launcher)
+### App to install and play (launcher)
 
-Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que leva da cópia do jogo do jogador até o "Jogar", sem terminal: ele mesmo faz o recomp (rebuild) na máquina do jogador e depois abre o jogo. O app não traz código nem arquivos do jogo: o jogador fornece a própria cópia. Backend gráfico por sistema: Metal (macOS), D3D12 ou Vulkan (Windows), Vulkan (Linux). Decidido (2026-10-16): **launcher em Tauri** (núcleo em Rust que roda o rebuild e mostra progresso/log; interface web; instalador pequeno nos três sistemas) + mais tarde um **menu dentro do jogo em SDL + ImGui** (resolução, upscaling, fps sem sair do jogo). Os dois conversam por um `config.toml` que o launcher grava e o jogo lê ao abrir, substituindo as variáveis de ambiente de hoje. Ordem: (1) script único de rebuild, (2) o jogo lendo o `config.toml`, (3) o launcher, (4) o menu no jogo.
+An app for **macOS, Windows and Linux**, with the same interface on all three, that takes the player from their copy of the game to "Play" without a terminal: it does the recomp (rebuild) itself on the player's machine and then opens the game. The app ships no game code or files: the player provides their own copy. Graphics backend per system: Metal (macOS), D3D12 or Vulkan (Windows), Vulkan (Linux). Decided (2026-10-16): **a Tauri launcher** (Rust core that runs the rebuild and shows progress/log; web interface; small installer on all three systems) + later an **in-game menu in SDL + ImGui** (resolution, upscaling, fps without leaving the game). The two talk through a `config.toml` that the launcher writes and the game reads on startup, replacing today's environment variables. Order: (1) single rebuild script, (2) the game reading `config.toml`, (3) the launcher, (4) the in-game menu.
 
-- [ ] **Instalação / rebuild:** escolher a cópia do jogo (pasta do jogo instalado no RPCS3, PKG ou disco) e o `.rap`; o app confere a versão (NPUA80638 01.00), descriptografa, traduz (PPU, SPU, jobs) e compila, com barra de progresso, tempo estimado e log. Depende do script único de rebuild (seção Rebuild), que precisa rodar nos três sistemas: Python dos tradutores, CMake + Clang (Xcode no Mac, Clang/MSVC no Windows, Clang/GCC no Linux). O app confere e instala o que faltar (ou traz um toolchain embutido) e mostra o espaço em disco necessário. Refazer só o que mudou quando o toolkit é atualizado.
-- [ ] **Instalador nativo em cada sistema** (gerado pelo Tauri): Windows `.exe` (NSIS) ou `.msi` com atalho no Menu Iniciar/área de trabalho e desinstalação pelo sistema; macOS `.dmg` com o `.app` para a pasta Aplicativos; Linux `.AppImage`, `.deb` e Flatpak com ícone no menu. O executável do jogo gerado pelo recomp fica na pasta de dados do app; opção de criar um atalho que abre o jogo direto. Assinatura de código para não aparecer o aviso de app desconhecido: conta Apple Developer (US$ 99/ano + notarização) e certificado de assinatura no Windows; sem isso funciona, com o aviso na primeira abertura.
-- [ ] **Ícones e identidade visual:** ícone original do app (sem logo nem arte da Sony, que são marca registrada), gerado em todos os formatos com `tauri icon` (Windows `.ico`, macOS `.icns`, PNGs do Linux); o mesmo ícone na janela e no Dock/barra de tarefas do próprio jogo (hoje a janela Metal não tem ícone); tela de abertura do launcher. A arte oficial vem da cópia do jogador na instalação: `PS3_GAME/ICON0.PNG` (ícone), `PIC1.PNG` (fundo) e o título de `PARAM.SFO`, mostrados na tela inicial, sem nada disso ir no instalador.
-- [ ] **Tela inicial:** botão Jogar, capa do jogo, último save (missão e data), versão do port.
-- [ ] **Configurações de tela:**
-  - modo janela / tela cheia / tela cheia sem borda, monitor, sincronia vertical;
-  - resolução interna (720p nativo, 1080p, 1440p, 4K) e proporção (16:9, 21:9 ultrawide, com FOV e HUD corretos);
-  - limite de fps (30 original; acima quando a lógica do jogo permitir);
-  - upscaling: MetalFX (Mac), FSR 3.1 (todas as GPUs, Windows/Linux), FSR 4.x/4.1 (GPUs AMD suportadas), DLSS (NVIDIA, Windows), XeSS (Windows/Linux), mostrando só os que a GPU do jogador suporta, com qualidade (desempenho/equilibrado/qualidade) e escala;
-  - filtragem anisotrópica, anti-aliasing (FXAA/SMAA/TAA), nitidez;
-  - brilho/gamma e HDR (EDR no Mac).
-- [ ] **Controles:** remapear teclado, mouse e controle (DualSense/DualShock/Xbox) com a tela de teste dos botões; sensibilidade e inversão do mouse; vibração; ícones de botão PS3 ou teclado nos prompts.
-- [ ] **Áudio:** volume geral e dispositivo de saída.
-- [ ] **Saves:** listar, fazer backup, restaurar e importar/exportar (inclusive saves do RPCS3), para nunca perder o progresso.
-- [ ] **Pacotes de texturas e mods:** carregar texturas substitutas (alta resolução, refeitas por IA) e patches, ligar/desligar cada um.
-- [ ] **Desempenho e diagnóstico:** contador de fps/tempo de quadro na tela; "reportar problema" que salva o quadro atual com os dados de diagnóstico (`tools/play_dump.sh`) e o log num arquivo para mandar; perfis prontos (qualidade/equilibrado/desempenho).
-- [ ] **Atualizações:** avisar quando o port tiver versão nova e refazer o rebuild sozinho.
-- [ ] **Idioma** da interface do app (português e inglês).
-- [ ] **Idioma do jogo (dublagem, legendas e menus)** escolhível no launcher e no menu dentro do jogo, entre os que a cópia do jogador traz (`cache/psarc/<idioma>.psarc` e `<idioma>_text.psarc`: português do Brasil, de Portugal, espanhol latino, inglês e outros). Grava `PS3_LANG` no `config.toml`. Feito (2026-10-16): o `run.sh` já abre em português do Brasil (`PS3_LANG=pt`, código 7: o jogo trata todo idioma do sistema acima de 16 como desconhecido e cai para o inglês, e nesta versão das Américas o "Português" 7 é o que escolhe os arquivos `brazilian*`; `func_0009D9DC`). Também corrigido no toolkit: os códigos 17 (inglês do Reino Unido) e 18 (português do Brasil) estavam trocados. O jogo carrega o idioma ao abrir, então trocar pede reiniciar; o app avisa e reinicia sozinho. Opcional: voz e legenda em idiomas diferentes (ex.: voz em inglês, legenda em português), redirecionando a abertura dos `.psarc` de voz ou de texto.
-- [ ] **Versões do jogo:** hoje só a PSN (`NPUA80638`, PKG ou pasta do RPCS3 + `.rap` da compra do jogador). Para quem tem o disco: aceitar a .iso (`BCUS98125`) com a chave do disco (`.dkey`/`.ird`) e a atualização oficial, como os ports de Twisted Metal, All-Stars e Drakengard 3 (`decrypt_iso.py`, AES-CBC). Antes, comparar o EBOOT do disco atualizado com o da PSN: se for igual, é só a descriptografia; se não, um segundo perfil de recomp. O app identifica a versão do executável e avisa quando não é suportada.
+- [ ] **Install / rebuild:** pick the copy of the game (the game folder installed in RPCS3, a PKG or a disc) and the `.rap`; the app checks the version (NPUA80638 01.00), decrypts, translates (PPU, SPU, jobs) and compiles, with a progress bar, estimated time and log. Depends on the single rebuild script (Rebuild section), which has to run on all three systems: Python for the translators, CMake + Clang (Xcode on the Mac, Clang/MSVC on Windows, Clang/GCC on Linux). The app checks for and installs whatever is missing (or ships a bundled toolchain) and shows the disk space needed. Only redo what changed when the toolkit is updated.
+- [ ] **Native installer on each system** (generated by Tauri): Windows `.exe` (NSIS) or `.msi` with a Start Menu/desktop shortcut and uninstall through the system; macOS `.dmg` with the `.app` going to Applications; Linux `.AppImage`, `.deb` and Flatpak with a menu icon. The game executable produced by the recomp lives in the app's data folder; option to create a shortcut that opens the game directly. Code signing so the unknown-app warning does not show: an Apple Developer account (US$ 99/year + notarization) and a code-signing certificate on Windows; without it everything works, with the warning on first launch.
+- [ ] **Icons and visual identity:** an original app icon (no Sony logo or art, which are trademarks), generated in every format with `tauri icon` (Windows `.ico`, macOS `.icns`, Linux PNGs); the same icon on the window and in the Dock/taskbar of the game itself (today the Metal window has no icon); a launcher splash screen. The official art comes from the player's copy at install time: `PS3_GAME/ICON0.PNG` (icon), `PIC1.PNG` (background) and the title from `PARAM.SFO`, shown on the home screen, with none of it going into the installer.
+- [ ] **Home screen:** Play button, game cover, last save (mission and date), port version.
+- [ ] **Display settings:**
+  - windowed / fullscreen / borderless fullscreen, monitor, vertical sync;
+  - internal resolution (native 720p, 1080p, 1440p, 4K) and aspect ratio (16:9, 21:9 ultrawide, with correct FOV and HUD);
+  - fps limit (30 original; higher where the game logic allows);
+  - upscaling: MetalFX (Mac), FSR 3.1 (all GPUs, Windows/Linux), FSR 4.x/4.1 (supported AMD GPUs), DLSS (NVIDIA, Windows), XeSS (Windows/Linux), showing only the ones the player's GPU supports, with quality (performance/balanced/quality) and scale;
+  - anisotropic filtering, anti-aliasing (FXAA/SMAA/TAA), sharpening;
+  - brightness/gamma and HDR (EDR on the Mac).
+- [ ] **Controls:** remap keyboard, mouse and controller (DualSense/DualShock/Xbox) with a button test screen; mouse sensitivity and inversion; rumble; PS3 or keyboard button icons in prompts.
+- [ ] **Audio:** master volume and output device.
+- [ ] **Saves:** list, back up, restore and import/export (including RPCS3 saves), so progress is never lost.
+- [ ] **Texture packs and mods:** load replacement textures (high resolution, AI-remade) and patches, toggle each one.
+- [ ] **Performance and diagnostics:** on-screen fps/frame-time counter; "report a problem" that saves the current frame with the diagnostic data (`tools/play_dump.sh`) and the log to a file to send; ready-made profiles (quality/balanced/performance).
+- [ ] **Updates:** notify when the port has a new version and redo the rebuild automatically.
+- [ ] **Language** of the app interface (Portuguese and English).
+- [ ] **Game language (dub, subtitles and menus)** selectable in the launcher and in the in-game menu, among the ones the player's copy ships (`cache/psarc/<language>.psarc` and `<language>_text.psarc`: Brazilian Portuguese, European Portuguese, Latin American Spanish, English and others). Writes `PS3_LANG` to `config.toml`. Done (2026-10-16): `run.sh` already starts in Brazilian Portuguese (`PS3_LANG=pt`, code 7: the game treats any system language above 16 as unknown and falls back to English, and in this Americas release "Portuguese" 7 is what selects the `brazilian*` files; `func_0009D9DC`). The game loads the language at startup, so switching requires a restart; the app warns and restarts on its own. Optional: voice and subtitles in different languages (e.g. English voice, Portuguese subtitles), by redirecting which voice or text `.psarc` gets opened.
+- [ ] **Game versions:** today only the PSN one (`NPUA80638`, PKG or RPCS3 folder + the `.rap` from the player's purchase). For disc owners: accept the .iso (`BCUS98125`) with the disc key (`.dkey`/`.ird`) and the official update, like the Twisted Metal, All-Stars and Drakengard 3 ports (`decrypt_iso.py`, AES-CBC). First, compare the updated disc EBOOT with the PSN one: if it is the same, it is only decryption; if not, a second recomp profile. The app identifies the executable's version and warns when it is not supported.
 
-### Desempenho
+### Performance
 
-- [ ] `libgcm_sys` e `libfs` em LLE (o RPCS3 roda os dois assim).
+- [ ] `libgcm_sys` and `libfs` in LLE (RPCS3 runs both that way).
 
-### Outras plataformas
+### Other platforms
 
-- [ ] Linux (Vulkan, já existe no toolkit), com o app e o rebuild rodando nativos.
-- [ ] Windows (D3D12, o backend mais maduro do toolkit; Vulkan como alternativa), com o app e o rebuild rodando nativos.
-- [ ] O que é só do macOS no port hoje e precisa de equivalente: a thread principal do AppKit em `main.cpp`, o caminho de vídeo VideoToolbox, o áudio CoreAudio, os shims Win32 em POSIX (no Windows somem).
+- [ ] Linux (Vulkan, already in the toolkit), with the app and the rebuild running natively.
+- [ ] Windows (D3D12, the toolkit's most mature backend; Vulkan as an alternative), with the app and the rebuild running natively.
+- [ ] What is macOS-only in the port today and needs an equivalent: the AppKit main thread in `main.cpp`, the VideoToolbox video path, CoreAudio audio, the Win32-on-POSIX shims (they go away on Windows).
 
-### Fora do escopo por enquanto
+### Out of scope for now
 
-- [ ] (novo) Missões de usuário (UGC): dependem da PSN, que não existe mais; só com um servidor da comunidade.
+- [ ] (new) User-generated missions (UGC): they depend on PSN, which no longer exists; only possible with a community server.
 
 ---
 
-## Feito e finalizado
+## Done and finished
 
-### Boot e pipeline
+### Boot and pipeline
 
-- [x] EBOOT descriptografado com o RPCS3 (`--decrypt`), usando a licença do próprio jogador.
-- [x] PPU traduzido para C++: 32.426 funções.
-- [x] Programas SPU do EBOOT: descompressão zlib, Bink, policy module `Wws_Job`.
-- [x] 27 módulos de job WWS (`C0DEC0DE`) extraídos do EBOOT e traduzidos.
-- [x] Jobs SPURS de áudio do Wwise capturados em execução e traduzidos.
-- [x] Trecho SPU interpretado (`LS 0x6C64`): eram cinco módulos `DA7ABA5E` embutidos no EBOOT que o gerenciador de jobs carrega em LS 0x6C00 e ninguém traduzia. `tools/lift_datamods.py` os traduz e registra como regiões de código; zero trechos longos no menu e ~30 fps nesse trecho (eram ~17).
-- [x] Firmware em LLE, traduzido do `dev_flash` do jogador: liblv2, libsysmodule, libsre e o kernel SPU do SPURS.
-- [x] Metal com os shaders do próprio jogo (glslang + SPIRV-Cross).
-- [x] Dados do jogo isolados num clone copy-on-write; o RPCS3 nunca é escrito.
-- [x] Execução com janela no macOS: o guest roda fora da thread principal (a janela ficava cinza num deadlock com o Metal).
+- [x] EBOOT decrypted with RPCS3 (`--decrypt`), using the player's own license.
+- [x] PPU translated to C++: 32,426 functions.
+- [x] EBOOT SPU programs: zlib decompression, Bink, `Wws_Job` policy module.
+- [x] 27 WWS job modules (`C0DEC0DE`) extracted from the EBOOT and translated.
+- [x] Wwise audio SPURS jobs captured at runtime and translated.
+- [x] Interpreted SPU stretch (`LS 0x6C64`): it was five `DA7ABA5E` modules embedded in the EBOOT that the job manager loads at LS 0x6C00 and nobody translated. `tools/lift_datamods.py` translates them and registers them as code regions; zero long stretches in the menu and ~30 fps in that stretch (it was ~17).
+- [x] Firmware in LLE, translated from the player's `dev_flash`: liblv2, libsysmodule, libsre and the SPURS SPU kernel.
+- [x] Metal with the game's own shaders (glslang + SPIRV-Cross).
+- [x] Game data isolated in a copy-on-write clone; RPCS3 is never written to.
+- [x] Windowed run on macOS: the guest runs off the main thread (the window stayed grey in a deadlock with Metal).
 
-### Do menu ao gameplay
+### From the menu to gameplay
 
-- [x] Boot pelo `module_start` da liblv2, como no console.
-- [x] FIOS, `.psarc`, descompressão em SPU.
-- [x] Aviso de saúde, vídeo Bink, tela de loading.
-- [x] Menu principal 3D. Conferido contra o vídeo do título original (2026-10-14): é um vazio preto com o Cole de costas quase em silhueta, um raio, faíscas e a barra "START A NEW GAME"; o nosso é igual (as diferenças pequenas estão em "Gráficos", acima).
-- [x] Jogo novo, vídeo de abertura, cutscene no motor do jogo.
-- [x] Menu de pausa e tela de opções.
-- [x] "Cole em T-pose no menu de opções": não é visível. Pausar a cutscene (START) mostra o menu de pausa com a cena congelada na pose correta ao fundo, e a tela de opções usa a arte estilizada da cidade, como no original; a figura em T-pose que eu tinha visto estava num render target intermediário que nunca vai para a tela.
-- [x] Passar da cutscene das docas para a primeira missão: o tutorial do primeiro combate aparece sem intervenção.
-- [x] Exercitar o gameplay: os prompts do tutorial respondem à entrada por script. Olhar com o analógico direito (a câmera sobe até a Besta), andar com o esquerdo ("Head towards the disturbance": Cole anda pelo Píer 13 até o portão, e sobe no cargueiro ao lado quando o script o leva lá), pular com ✕. ~16 fps sem janela; 19.080 frames em 900 s e 19.320 em 1200 s, sem travar.
-- [x] Áudio: a mixagem produz som (146 s gravados com `AUDIO_WAV`, pico 0,61, primeiro som aos 6 s); ouvido pelo alto-falante com janela.
-- [x] **Som picotado em New Marais / jobs SPU relocáveis (2026-10-15):** os ~30 blocos de código SPU que o kernel do SPURS copia do EBOOT (0x8E8C00–0x928150) para uma posição diferente da LS a cada execução rodavam inteiros no interpretador. Agora são traduzidos uma vez em modo relocável (`spu_lifter.py --relocatable`, `tools/lift_relocmods.py`, `spu_overlay_register_region_reloc`), e o corpo do `libsre` em 0x2A180 (política das cadeias de jobs, LS 0xA00) foi traduzido também. Medido no mesmo roteiro: instruções interpretadas 14,8 bi → 0,2 bi em 8 min; blocos de áudio com som ~35% → 100%. O fps **não** mudou (10–16 no pântano, 7–10 nas ruas): o gargalo de fps está em outro lugar (PPU, RSX ou Metal). `PS3_RELOCMODS=0` e `FW_SPU_INTERP=104` desligam cada parte para comparar.
-- [x] Imports sem implementação: `cellGemGetMemorySize` e `cellCameraSetNotifyEventQueue2` implementados no toolkit; `cellFsGetDirectoryEntries` veio do PR #247 do upstream.
-- [x] DLC `unlock_review.edat`: `tools/rap2rifkey.py` deriva a chave RIF do `.rap` do jogador e grava o sidecar que o runtime lê; o EDAT é decifrado.
+- [x] Boot through liblv2's `module_start`, as on the console.
+- [x] FIOS, `.psarc`, SPU decompression.
+- [x] Health warning, Bink video, loading screen.
+- [x] 3D main menu. Checked against the original title video (2026-10-14): it is a black void with Cole from behind, almost in silhouette, a lightning bolt, sparks and the "START A NEW GAME" bar; ours matches (the small differences are under "Graphics", above).
+- [x] New game, intro video, in-engine cutscene.
+- [x] Pause menu and options screen.
+- [x] "Cole in T-pose in the options menu": not visible. Pausing the cutscene (START) shows the pause menu with the scene frozen in the correct pose behind it, and the options screen uses the stylized city art, as in the original; the T-pose figure I had seen was in an intermediate render target that never reaches the screen.
+- [x] Get from the docks cutscene to the first mission: the first combat tutorial shows up without intervention.
+- [x] Exercise gameplay: the tutorial prompts respond to scripted input. Look with the right stick (the camera tilts up to the Beast), walk with the left ("Head towards the disturbance": Cole walks along Pier 13 to the gate, and climbs onto the freighter next to it when the script takes him there), jump with ✕. ~16 fps headless; 19,080 frames in 900 s and 19,320 in 1200 s, without hanging.
+- [x] Audio: the mix produces sound (146 s recorded with `AUDIO_WAV`, peak 0.61, first sound at 6 s); heard through the speaker in a window.
+- [x] **Choppy sound in New Marais / relocatable SPU jobs (2026-10-15):** the ~30 SPU code blocks that the SPURS kernel copies from the EBOOT (0x8E8C00–0x928150) to a different LS position on each run were running entirely in the interpreter. Now they are translated once in relocatable mode (`spu_lifter.py --relocatable`, `tools/lift_relocmods.py`, `spu_overlay_register_region_reloc`), and the `libsre` body at 0x2A180 (job-chain policy, LS 0xA00) was translated too. Measured on the same script: interpreted instructions 14.8 bn → 0.2 bn in 8 min; audio blocks with sound ~35% → 100%. The fps did **not** change (10–16 in the swamp, 7–10 on the streets): the fps bottleneck is elsewhere (PPU, RSX or Metal). `PS3_RELOCMODS=0` and `FW_SPU_INTERP=104` turn each part off for comparison.
+- [x] Unimplemented imports: `cellGemGetMemorySize` and `cellCameraSetNotifyEventQueue2` implemented in the toolkit; `cellFsGetDirectoryEntries` came from upstream PR #247.
+- [x] `unlock_review.edat` DLC: `tools/rap2rifkey.py` derives the RIF key from the player's `.rap` and writes the sidecar the runtime reads; the EDAT gets decrypted.
 
-### Gráficos
+### Graphics
 
-- [x] Iluminação dos personagens nas cutscenes (comparação de profundidade das sombras).
-- [x] Cor dos materiais de personagem: o decompilador pulava os opcodes de pack/unpack (PK4UB, UP4UB, PKG, UPG) que o jogo usa como conversão sRGB↔linear; era a mancha verde no couro cabeludo do Cole e tons de pele errados.
-- [x] Brilho e contraste: a imagem saía escura e lamacenta (personagens quase pretos nas cenas de contraluz, sombras esmagadas). O jogo pede ao RSX a conversão linear→sRGB na escrita do framebuffer (`SET_SHADER_PACKER`) e a decodificação sRGB→linear ao ler texturas (bits de gamma do `TEXTURE_ADDRESS`), e o motor do fork ignorava as duas. PRs #304 e #305 do upstream portados à mão para o motor do fork.
-- [x] **Trepadeiras e plantas pretas, paredes roxas, rostos de NPC pretos (2026-10-15):** o decompilador de fragment programs devolvia zero para as entradas FACING (0xE), TC8 (0xC) e TC9 (0xD). Os materiais de dois lados fazem `normal × FACING` para virar a normal da face de trás; com zero, a normal virava NaN no G-buffer e o pixel ficava preto. Agora FACING é `SV_IsFrontFace ? +1 : −1` (o `ssa` do RPCS3), TC8 vem de `o[15]` e TC9 de `o[6]` do vertex program. Eram 116 dos 513 pixel shaders de New Marais (71 FACING, 45 TC8/9). Na mesma cena: trepadeiras verdes, paredes de madeira (não mais roxas). Teste em `test_shader_msl` (`[[front_facing]]`, `locn11/12`).
-- [x] **Rio preto em New Marais (2026-10-15):** a água copia a cena já desenhada (alvo em VRAM 0x00E3C000) e a lê na posição da tela. O vertex program escreve `uv × w` em TC2 e o fragment program lê TC2 com o bit `perspective_corr` (bit 31 da palavra SRC2) ligado, que no RSX multiplica a entrada por 1/w. O decompilador ignorava esse bit: a água lia `uv × w`, muito fora da cópia, e saía preta. Agora a leitura vira `tcN * _rsx_inv_w(input.position)` (como o `* gl_FragCoord.w` do RPCS3); nos caminhos via glslang (Metal, Vulkan) `position.w` já é 1/w (`RSX_FRAGCOORD_W_IS_RCP`), no FXC (D3D12) o helper divide. 163 pixel shaders de New Marais usam o bit. Na mesma cena: o rio aparece ao lado do píer e atrás da Kuo. Testes em `test_fp_decompiler` e `test_shader_msl`. Achado com `PS3RECOMP_METAL_DBG_NOZ=<alvo>` (a água era desenhada, mas preta), `SKIP_PIPE` e `DBG_SHOWTEX` (a textura estava certa, as coordenadas não). Diagnósticos novos, desligados por padrão: `RSX_FP_NAN_COLOR=1` (NaN magenta, Inf ciano) e `PS3RECOMP_ENG_FPK_PIPE=<p>` (constantes do FP por draw).
+- [x] Character lighting in the cutscenes (shadow depth compare).
+- [x] Character material color: the decompiler skipped the pack/unpack opcodes (PK4UB, UP4UB, PKG, UPG) that the game uses for sRGB↔linear conversion; that was the green patch on Cole's scalp and the wrong skin tones.
+- [x] Brightness and contrast: the image came out dark and muddy (characters nearly black in backlit scenes, crushed shadows). The game asks the RSX for linear→sRGB conversion on framebuffer writes (`SET_SHADER_PACKER`) and sRGB→linear decoding on texture reads (the gamma bits of `TEXTURE_ADDRESS`), and the fork's engine ignored both. Upstream PRs #304 and #305 ported by hand to the fork's engine.
+- [x] **Black vines and plants, purple walls, black NPC faces (2026-10-15):** the fragment program decompiler returned zero for the FACING (0xE), TC8 (0xC) and TC9 (0xD) inputs. Two-sided materials do `normal × FACING` to flip the back face's normal; with zero, the normal became NaN in the G-buffer and the pixel went black. Now FACING is `SV_IsFrontFace ? +1 : −1` (RPCS3's `ssa`), TC8 comes from the vertex program's `o[15]` and TC9 from `o[6]`. That was 116 of New Marais's 513 pixel shaders (71 FACING, 45 TC8/9). In the same scene: green vines, wooden walls (no longer purple). Test in `test_shader_msl` (`[[front_facing]]`, `locn11/12`).
+- [x] **Black river in New Marais (2026-10-15):** the water copies the already-drawn scene (VRAM target 0x00E3C000) and reads it at the screen position. The vertex program writes `uv × w` to TC2 and the fragment program reads TC2 with the `perspective_corr` bit (bit 31 of the SRC2 word) set, which on the RSX multiplies the input by 1/w. The decompiler ignored that bit: the water read `uv × w`, far outside the copy, and came out black. Now the read becomes `tcN * _rsx_inv_w(input.position)` (like RPCS3's `* gl_FragCoord.w`); on the glslang paths (Metal, Vulkan) `position.w` is already 1/w (`RSX_FRAGCOORD_W_IS_RCP`), on FXC (D3D12) the helper divides. 163 New Marais pixel shaders use the bit. In the same scene: the river shows up next to the pier and behind Kuo. Tests in `test_fp_decompiler` and `test_shader_msl`. Found with `PS3RECOMP_METAL_DBG_NOZ=<target>` (the water was drawn, but black), `SKIP_PIPE` and `DBG_SHOWTEX` (the texture was right, the coordinates were not). New diagnostics, off by default: `RSX_FP_NAN_COLOR=1` (NaN magenta, Inf cyan) and `PS3RECOMP_ENG_FPK_PIPE=<p>` (per-draw FP constants).
 
-### Desempenho
+### Performance
 
-- [x] Medir fps no gameplay; perfilar PPU e SPU (`tools/profile_run.sh` + `tools/profile_report.py`, 2026-10-15, prólogo sem janela): menu ~30 fps; cutscene das docas e píer **11–13 fps**, estável em 12 (≈ 5 vblanks por quadro). A thread principal do PPU fica ~80% do tempo parada: 59% num laço `usleep(10)` (`func_00350CE0`) esperando zerar o contador de "SPU light tasks" pendentes, que a thread "SPU Light Task Kicker" vai submetendo. Os 5 SPUs de trabalho ficam a ~93%, e o tempo deles se divide em: código de job traduzido 54–70%, **helpers do runtime 23–31%** (`spu_ls_write128`, `spu_overlay_note_get`, `spu_task_launch_check`/`spu_check_stack_reset` a cada passo do drain, `mfc_do_transfer`, conversões de float), interpretador 3%, RSX/Metal 2–7%. Ou seja: o quadro é limitado pela vazão das SPUs, e um quarto a um terço dela vai para sobrecarga do runtime.
+- [x] Measure gameplay fps; profile PPU and SPU (`tools/profile_run.sh` + `tools/profile_report.py`, 2026-10-15, headless prologue): menu ~30 fps; docks cutscene and pier **11–13 fps**, steady at 12 (≈ 5 vblanks per frame). The main PPU thread is stalled ~80% of the time: 59% in a `usleep(10)` loop (`func_00350CE0`) waiting for the pending "SPU light tasks" counter to reach zero, which the "SPU Light Task Kicker" thread keeps submitting. The 5 worker SPUs sit at ~93%, and their time splits into: translated job code 54–70%, **runtime helpers 23–31%** (`spu_ls_write128`, `spu_overlay_note_get`, `spu_task_launch_check`/`spu_check_stack_reset` on every drain step, `mfc_do_transfer`, float conversions), interpreter 3%, RSX/Metal 2–7%. In other words: the frame is bound by SPU throughput, and a quarter to a third of it goes to runtime overhead.
 
-### Controles
+### Controls
 
-- [x] Teclado como controle (já existe no toolkit, `cellPad.c`): analógico esquerdo W/A/S/D, direito I/J/K/L, D-pad nas setas; ✕ Espaço, ○ Q, □ E, △ R; L1 U, R1 O, L2 Y, R2 P, L3 G, R3 H; START Return, SELECT Tab. A tecla X não faz nada.
-- [x] Mouse para a câmera (2026-10-14): com a janela em foco, o movimento vira o analógico direito, proporcional à velocidade; botão esquerdo = R1 (raio), direito = R2 (granada), do meio = L1 (mirar). Configuração por variável de ambiente: `PS3_MOUSE_SENS=<fator>` (padrão 1.0), `PS3_MOUSE_INVERT_Y=1`, `PS3_MOUSE_DEADZONE=<0-120>` (padrão 30), `PS3_MOUSE=0` desliga; `PS3_MOUSE_LOG=1` registra o que chega. Junto: teclado e mouse deixaram de ser desligados quando há um controle físico conectado; agora somam com ele (um DualSense pareado e parado fazia todas as teclas não responderem).
+- [x] Keyboard as a controller (already in the toolkit, `cellPad.c`): left stick W/A/S/D, right I/J/K/L, D-pad on the arrows; ✕ Space, ○ Q, □ E, △ R; L1 U, R1 O, L2 Y, R2 P, L3 G, R3 H; START Return, SELECT Tab. The X key does nothing.
+- [x] Mouse for the camera (2026-10-14): with the window focused, movement becomes the right stick, proportional to speed; left button = R1 (bolt), right = R2 (grenade), middle = L1 (aim). Configured by environment variable: `PS3_MOUSE_SENS=<factor>` (default 1.0), `PS3_MOUSE_INVERT_Y=1`, `PS3_MOUSE_DEADZONE=<0-120>` (default 30), `PS3_MOUSE=0` turns it off; `PS3_MOUSE_LOG=1` logs what comes in. Along with it: keyboard and mouse are no longer disabled when a physical controller is connected; they now add on top of it (a paired, idle DualSense made every key stop responding).
 
-### Correções no toolkit
+### Toolkit fixes
 
-Aplicadas pelo `tools/setup_toolkit.sh` a partir de
+Applied by `tools/setup_toolkit.sh` from
 `infamous2-lle/patches/ps3recomp-fork-770660a-with-upstream-prs.patch`.
 
-Feitas neste port:
+Made in this port:
 
-- [x] Lifter PPU: jump tables perdidas atrás de um epílogo com tail-call.
-- [x] cellGcm: o FIFO pulava comandos quando o jogo "estacionava" a GPU antes de religar o bloco; o menu congelava.
-- [x] SPU: o interpretador não voltava ao código traduzido dentro dos módulos de job WWS; o menu rodava a ~0,4 fps.
-- [x] SPU: overflow de 64 bits do decrementer aos 231 s/462 s.
-- [x] Fragment shaders: opcodes de pack/unpack do NV40 (PK4UB, UP4UB, PKG, UPG, PK4B, UP4B, PK2H, UP2H, PK2US, UP2US).
+- [x] PPU lifter: jump tables lost behind a tail-call epilogue.
+- [x] cellGcm: the FIFO skipped commands when the game "parked" the GPU before re-linking the block; the menu froze.
+- [x] SPU: the interpreter did not return to translated code inside WWS job modules; the menu ran at ~0.4 fps.
+- [x] SPU: 64-bit decrementer overflow at 231 s/462 s.
+- [x] Fragment shaders: NV40 pack/unpack opcodes (PK4UB, UP4UB, PKG, UPG, PK4B, UP4B, PK2H, UP2H, PK2US, UP2US).
 - [x] HLE: `cellGemGetMemorySize`, `cellCameraSetNotifyEventQueue2`/`RemoveNotifyEventQueue2`.
-- [x] Entrada programada: `PAD_STICK` com vários intervalos numa execução; `PAD_SCRIPT` com botão segurado por N segundos (`seg:máscara:duração`).
-- [x] `sys_lwcond_t` com layout errado (FIOS recusava toda espera). Só no upstream; o fork já tinha.
-- [x] Metal: command buffers que terminam com erro (GPU travada, recurso inválido) são reportados com o código, em vez de passarem em silêncio.
-- [x] cellGcm: o dump das palavras do FIFO numa recuperação (branch inválido, `get` parado) sai sem precisar de `GCM_RECDBG`, que é barulhento demais para uma execução longa.
-- [x] Texturas de um canal (X16, X32_FLOAT, DEPTH16/24): o crossbar lia a lane vazia; o LUT 1024×8 X16 da iluminação deste jogo (crossbar "R ← B") dava zero. Com teste unitário.
-- [x] Write-back GPU → memória do jogo nos blits NV3089: o jogo copia os buffers de normais e de profundidade para a XDR a cada frame (entrada da iluminação nas SPUs) e a cópia era feita pela CPU a partir de uma memória que nunca recebia o que a GPU desenhou. Agora o motor submete o trabalho pendente e lê o render target (ou o depth, em bytes Z24S8) de volta antes da cópia.
-- [x] `GCM_SEMA_ACQUIRE=1` + `GCM_SEMA_ACQUIRE_MS`: o walker do FIFO espera o ACQUIRE de semáforo (com limite), e o watchdog "stuck-get" não ressincroniza enquanto espera. Desligado por padrão. `GCM_SEMA_TRACE=<n>` mostra o protocolo de labels.
-- [x] cellPad: `PS3_PAD_SDL=0` ignora controles físicos; `tools/boot.sh` o liga, para uma execução sem janela não pegar o START do DualSense de quem está jogando.
-- [x] `ps3_ms_now()` devolvia 0 no macOS (upstream 91ee29f): os limites `GCM_PARK_GRACE_MS`/`GCM_SEMA_ACQUIRE_MS` nunca expiravam e os logs de taxa liam 0. Agora usa `CLOCK_MONOTONIC`.
-- [x] Máscara de cor e blend por alvo de MRT (`COLOR_MASK_MRT`/`BLEND_ENABLE_MRT`), padrão desde 2026-10-15 à noite, depois do ACQUIRE bloqueante (`PS3RECOMP_METAL_MRT_MASK=0` volta ao antigo) (ver Gráficos).
+- [x] Scripted input: `PAD_STICK` with several ranges in one run; `PAD_SCRIPT` with a button held for N seconds (`sec:mask:duration`).
+- [x] `sys_lwcond_t` with the wrong layout (FIOS refused every wait). Upstream only; the fork already had it.
+- [x] Metal: command buffers that end in an error (GPU hang, invalid resource) are reported with the code, instead of passing silently.
+- [x] cellGcm: the FIFO word dump on a recovery (invalid branch, stalled `get`) comes out without needing `GCM_RECDBG`, which is too noisy for a long run.
+- [x] Single-channel textures (X16, X32_FLOAT, DEPTH16/24): the crossbar read the empty lane; this game's 1024×8 X16 lighting LUT (crossbar "R ← B") gave zero. With a unit test.
+- [x] GPU → game memory write-back on NV3089 blits: the game copies the normal and depth buffers to XDR every frame (the input of the SPU lighting) and the copy was done by the CPU from memory that never got what the GPU drew. Now the engine submits pending work and reads back the render target (or the depth, as Z24S8 bytes) before the copy.
+- [x] `GCM_SEMA_ACQUIRE=1` + `GCM_SEMA_ACQUIRE_MS`: the FIFO walker waits on semaphore ACQUIREs (with a limit), and the "stuck-get" watchdog does not resync while it waits. Off by default. `GCM_SEMA_TRACE=<n>` shows the label protocol.
+- [x] cellPad: `PS3_PAD_SDL=0` ignores physical controllers; `tools/boot.sh` turns it on, so a headless run does not pick up the START of the DualSense of whoever is playing.
+- [x] `ps3_ms_now()` returned 0 on macOS (upstream 91ee29f): the `GCM_PARK_GRACE_MS`/`GCM_SEMA_ACQUIRE_MS` limits never expired and the rate logs read 0. Now it uses `CLOCK_MONOTONIC`.
+- [x] Per-MRT-target color mask and blend (`COLOR_MASK_MRT`/`BLEND_ENABLE_MRT`), the default since the evening of 2026-10-15, after the blocking ACQUIRE (`PS3RECOMP_METAL_MRT_MASK=0` goes back to the old one) (see Graphics).
 
-PRs abertos do upstream aplicados:
+Open upstream PRs applied:
 
 - [x] #297, #275, #274, #278, #293, #303.
-- [x] #266, #302, #304 e #305, portados à mão para o motor do fork; #247 com uma adaptação de assinatura.
-- [x] #268 já estava no fork.
+- [x] #266, #302, #304 and #305, ported by hand to the fork's engine; #247 with a signature adaptation.
+- [x] #268 was already in the fork.
 
-### Ferramentas e infraestrutura
+### Tools and infrastructure
 
-- [x] `tools/setup_toolkit.sh`: clona o fork do inFAMOUS 1 no commit usado e aplica o patch; testado num checkout limpo.
-- [x] Montagem do toolkit por script (`tools/setup_toolkit.sh`).
-- [x] Execução sem janela com tempo limite (`boot.sh`) e captura de um frame a cada 10 s (`capture.sh`); cada execução roda num diretório próprio e nunca grava por cima do save do jogador (`SAVE=<dir>` copia um save para dentro).
-- [x] Entrada de controle por script (`PAD_SCRIPT`, `PAD_STICK`) para testar menus e gameplay sem controle; `tools/play_prologue.sh` joga o prólogo inteiro num comando.
-- [x] Perfil por thread: `tools/profile_run.sh <nome> prologue|menu|newmarais` + `tools/profile_report.py`.
-- [x] Diagnóstico de travamento: `tools/watch_stall.sh`.
-- [x] Diagnóstico do renderizador: pass log por material, limiares configuráveis, dump de shaders e render targets, e análise com `passlog.py`, `psfeatures.py`, `surfstats.py` e `greenshare.py`; `tools/play_capture.sh` para sessões com janela.
-- [x] Extrator dos 27 módulos de job do EBOOT (`extract_eboot_jobmods.py`), tradução dos jobs SPURS capturados (`lift_spu_jobs.sh`), re-tradução de um módulo com entradas extras (`relift_jobmod.py`), tradução dos cinco módulos `DA7ABA5E` (`lift_datamods.py`) e dos jobs relocáveis (`lift_relocmods.py`).
-- [x] `rap2rifkey.py`: chave RIF de um EDAT a partir do `.rap` do jogador.
-- [x] Repositório no GitHub com README, créditos, licença e `.gitignore` que bloqueia dados do jogo, do firmware e saves.
+- [x] `tools/setup_toolkit.sh`: clones the inFAMOUS 1 fork at the commit in use and applies the patch; tested on a clean checkout.
+- [x] Scripted toolkit setup (`tools/setup_toolkit.sh`).
+- [x] Headless run with a time limit (`boot.sh`) and a frame capture every 10 s (`capture.sh`); each run uses its own directory and never overwrites the player's save (`SAVE=<dir>` copies a save in).
+- [x] Scripted controller input (`PAD_SCRIPT`, `PAD_STICK`) to test menus and gameplay without a controller; `tools/play_prologue.sh` plays the whole prologue in one command.
+- [x] Per-thread profile: `tools/profile_run.sh <name> prologue|menu|newmarais` + `tools/profile_report.py`.
+- [x] Hang diagnosis: `tools/watch_stall.sh`.
+- [x] Renderer diagnostics: per-material pass log, configurable thresholds, shader and render-target dumps, and analysis with `passlog.py`, `psfeatures.py`, `surfstats.py` and `greenshare.py`; `tools/play_capture.sh` for windowed sessions.
+- [x] Extractor for the EBOOT's 27 job modules (`extract_eboot_jobmods.py`), translation of the captured SPURS jobs (`lift_spu_jobs.sh`), re-translation of a module with extra entry points (`relift_jobmod.py`), translation of the five `DA7ABA5E` modules (`lift_datamods.py`) and of the relocatable jobs (`lift_relocmods.py`).
+- [x] `rap2rifkey.py`: an EDAT's RIF key from the player's `.rap`.
+- [x] GitHub repository with README, credits, license and a `.gitignore` that blocks game data, firmware and saves.
 
 ---
 
-## Contribuir de volta
+## Giving back
 
-Branches em [github.com/erikomis/ps3recomp](https://github.com/erikomis/ps3recomp);
-cada correção é um PR, com teste onde dava para ter um.
+Branches at [github.com/erikomis/ps3recomp](https://github.com/erikomis/ps3recomp);
+each fix is a PR, with a test wherever one was possible.
 
-- [x] Correções deste port enviadas ao fork do inFamous 1 (NoahBPeterson, base do
-  upstream PR #213): jump table atrás de tail-call no lifter ([#1](https://github.com/NoahBPeterson/ps3recomp/pull/1)),
-  FIFO estacionado do cellGcm e dump da recuperação ([#2](https://github.com/NoahBPeterson/ps3recomp/pull/2)),
-  overlay residente no lookup do SPU ([#3](https://github.com/NoahBPeterson/ps3recomp/pull/3)),
-  overflow do decrementer ([#4](https://github.com/NoahBPeterson/ps3recomp/pull/4)),
-  opcodes de pack/unpack ([#5](https://github.com/NoahBPeterson/ps3recomp/pull/5)),
-  texturas de um canal no crossbar ([#6](https://github.com/NoahBPeterson/ps3recomp/pull/6)),
+- [x] Fixes from this port sent to the inFamous 1 fork (NoahBPeterson, the base of
+  upstream PR #213): lifter jump table behind a tail-call ([#1](https://github.com/NoahBPeterson/ps3recomp/pull/1)),
+  cellGcm parked FIFO and recovery dump ([#2](https://github.com/NoahBPeterson/ps3recomp/pull/2)),
+  resident overlay in the SPU lookup ([#3](https://github.com/NoahBPeterson/ps3recomp/pull/3)),
+  decrementer overflow ([#4](https://github.com/NoahBPeterson/ps3recomp/pull/4)),
+  pack/unpack opcodes ([#5](https://github.com/NoahBPeterson/ps3recomp/pull/5)),
+  single-channel textures in the crossbar ([#6](https://github.com/NoahBPeterson/ps3recomp/pull/6)),
   cellGem/cellCamera ([#7](https://github.com/NoahBPeterson/ps3recomp/pull/7)),
-  PAD_SCRIPT com botão segurado e PAD_STICK com vários intervalos ([#8](https://github.com/NoahBPeterson/ps3recomp/pull/8)),
-  command buffer do Metal com erro ([#9](https://github.com/NoahBPeterson/ps3recomp/pull/9)),
-  diagnósticos do travamento ([#10](https://github.com/NoahBPeterson/ps3recomp/pull/10)).
-- [x] **Aceitos no upstream (2026-10-16), no ps3recomp v0.15.0 "Seventy-Six" (merge #325):**
-  #311, #312, #313, #314, #315 e #316. O README do ps3recomp cita o port em "In the community"
-  ("@erikomis's inFAMOUS 2 bring-up on the same branch sent six fixes (#311-#316)") e as notas
-  da v0.15.0 creditam #311 e #313. Os 11 PRs no fork do inFamous 1 seguem abertos.
-- [x] Jump table do lifter enviada ao upstream ([sp00nznet/ps3recomp#311](https://github.com/sp00nznet/ps3recomp/pull/311)).
-- [x] Opcodes de pack/unpack: fork (#5) e upstream ([#314](https://github.com/sp00nznet/ps3recomp/pull/314)).
-  Também no upstream, porque o código é o mesmo no master: FIFO estacionado
+  PAD_SCRIPT with held buttons and PAD_STICK with several ranges ([#8](https://github.com/NoahBPeterson/ps3recomp/pull/8)),
+  Metal command buffer errors ([#9](https://github.com/NoahBPeterson/ps3recomp/pull/9)),
+  hang diagnostics ([#10](https://github.com/NoahBPeterson/ps3recomp/pull/10)).
+- [x] **Accepted upstream (2026-10-16), in ps3recomp v0.15.0 "Seventy-Six" (merge #325):**
+  #311, #312, #313, #314, #315 and #316. The ps3recomp README mentions the port under "In the community"
+  ("@erikomis's inFAMOUS 2 bring-up on the same branch sent six fixes (#311-#316)") and the v0.15.0
+  notes credit #311 and #313. The 11 PRs on the inFamous 1 fork are still open.
+- [x] Lifter jump table sent upstream ([sp00nznet/ps3recomp#311](https://github.com/sp00nznet/ps3recomp/pull/311)).
+- [x] Pack/unpack opcodes: fork (#5) and upstream ([#314](https://github.com/sp00nznet/ps3recomp/pull/314)).
+  Also upstream, because the code is the same on master: parked FIFO
   ([#312](https://github.com/sp00nznet/ps3recomp/pull/312)), decrementer
   ([#313](https://github.com/sp00nznet/ps3recomp/pull/313)), cellGem/cellCamera
-  ([#315](https://github.com/sp00nznet/ps3recomp/pull/315)) e command buffer do Metal
+  ([#315](https://github.com/sp00nznet/ps3recomp/pull/315)) and Metal command buffer
   ([#316](https://github.com/sp00nznet/ps3recomp/pull/316)).
-- [x] Write-back dos render targets para a memória do guest antes dos blits NV3089
-  ([#11](https://github.com/NoahBPeterson/ps3recomp/pull/11)), na versão validada
-  (linha própria do blit, snapshot de profundidade invalidado, `PS3RECOMP_ENG_WRITEBACK`).
-- [ ] Pedir para listar o port no README do ps3recomp (só quando este repositório for público).
-  - Atualização 2026-10-16: o README já cita o port pelo nome e pelo perfil (@erikomis), sem link
-    para o repositório, que ainda é privado. Falta pedir o link depois de abrir (ver "Abrir o repositório").
-- [ ] Ficaram de fora, por enquanto: o layout do `sys_lwcond_t` para o upstream (o PR #213
-  já o traz) e as ferramentas da investigação do travamento ainda em aberto
-  (`GCM_SEMA_ACQUIRE`/`GCM_SEMA_TRACE`, limites de `SPU_PUT_EA`, `LWCOND_TRACE`, a espera de
-  250 ms do push de evento do SPU), que vão quando a causa estiver fechada.
-- [ ] (novo) Ainda não enviados: FACING/TC8/TC9 e `perspective_corr` no decompilador de fragment programs,
-  o watchdog que respeita o estacionamento do FIFO, os jobs SPU relocáveis
-  (`--relocatable`) e o mouse para a câmera.
+- [x] Render-target write-back to guest memory before NV3089 blits
+  ([#11](https://github.com/NoahBPeterson/ps3recomp/pull/11)), in the validated version
+  (the blit's own line, depth snapshot invalidated, `PS3RECOMP_ENG_WRITEBACK`).
+- [ ] Ask for the port to be listed in the ps3recomp README (only once this repository is public).
+  - Update 2026-10-16: the README already mentions the port by name and by profile (@erikomis), with no link
+    to the repository. The repository is public since 2026-10-16; asking for the link is what is left (see "Opening the repository").
+- [ ] Left out for now: the `sys_lwcond_t` layout for upstream (PR #213
+  already brings it) and the tools from the still-open hang investigation
+  (`GCM_SEMA_ACQUIRE`/`GCM_SEMA_TRACE`, `SPU_PUT_EA` limits, `LWCOND_TRACE`, the
+  250 ms wait on the SPU event push), which go in once the cause is pinned down.
+- [ ] (new) Not sent yet: FACING/TC8/TC9 and `perspective_corr` in the fragment program decompiler,
+  the watchdog that respects the FIFO park, the relocatable SPU jobs
+  (`--relocatable`) and the mouse for the camera.
 
-Os branches vivem em dois worktrees do `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
-para o fork) e `ps3recomp-up/` (base no master do upstream); o remote `mine` aponta para
-o fork no GitHub.
-
----
-
-## Abrir o repositório
-
-O repositório `erikomis/infamous2-recomp` é **privado**. Antes de deixá-lo público:
-
-- [x] Nenhum dado do jogo, do firmware, save ou binário no histórico (conferido em 2026-10-16;
-  o `.gitignore` bloqueia `game/`, `fw/`, `vfs/`, os diretórios traduzidos, `gamedata/` e os backups de save).
-- [x] Chave RAP da Sony fora do código: `tools/rap2rifkey.py` lê de `--rap-key`/`PS3_RAP_KEY` e confere
-  pelo SHA-256 (2026-10-16).
-- [x] README com aviso de "em desenvolvimento", estado atual e aviso de não afiliação.
-- [x] Histórico: a chave RAP foi removida de todos os commits com `git filter-repo --replace-text`
-  (2026-10-16; os commits de `f7a081c` em diante ganharam hashes novos, e os citados aqui foram
-  corrigidos). O e-mail dos commits ficou como está, por escolha do Erik.
-- [ ] Mudar a visibilidade no GitHub (`gh repo edit --visibility public`), decisão do Erik.
-- [ ] Depois: pedir o link do repositório no README do ps3recomp (ver item acima).
+The branches live in two worktrees of `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
+for the fork) and `ps3recomp-up/` (based on upstream master); the `mine` remote points to
+the fork on GitHub.
 
 ---
 
-O repositório nunca terá dados do jogo, do firmware ou nada traduzido a
-partir deles (`game/`, `fw/`, `vfs/`, `recompiled/`, `lle/`, `lle_spu/`,
-`spu/`, `prx/`). Cada pessoa gera isso localmente a partir da própria cópia.
+## Opening the repository
+
+The `erikomis/infamous2-recomp` repository is **public** since 2026-10-16. What was checked before opening it:
+
+- [x] No game data, firmware, save or binary in the history (checked on 2026-10-16;
+  `.gitignore` blocks `game/`, `fw/`, `vfs/`, the translated directories, `gamedata/` and the save backups).
+- [x] Sony's RAP key out of the code: `tools/rap2rifkey.py` reads it from `--rap-key`/`PS3_RAP_KEY` and checks it
+  by SHA-256 (2026-10-16).
+- [x] README with a "work in progress" warning, current status and a non-affiliation notice.
+- [x] History: the RAP key was removed from every commit with `git filter-repo --replace-text`
+  (2026-10-16; commits from `f7a081c` onward got new hashes, and the ones cited here were
+  corrected). The commit e-mail was left as is, by Erik's choice.
+- [x] Change the visibility on GitHub (`gh repo edit --visibility public`), Erik's decision (done on 2026-10-16).
+- [ ] Afterwards: ask for the repository link in the ps3recomp README (see the item above).
+
+---
+
+The repository will never contain game data, firmware, or anything translated
+from them (`game/`, `fw/`, `vfs/`, `recompiled/`, `lle/`, `lle_spu/`,
+`spu/`, `prx/`). Everyone generates that locally from their own copy.
