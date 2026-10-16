@@ -286,6 +286,10 @@ each fix is a PR, with a test wherever one was possible.
   - Review found the `CELL_SYSUTIL_LANG_ENGLISH_GB`/`PORTUGUESE_BR` (17/18) swap wrong: RPCS3 has
     PORTUGUESE_BR = 17 and ENGLISH_GB = 18, as the header already had. Reverted in the toolkit; the port uses
     `PS3_LANG=pt` (7), so nothing changes for it.
+- [x] (2026-10-16) Taken from upstream v0.15.0 into the port: TLS blocks sized by the TLS image (088befa), since
+  every PPU thread past the 31st silently shared the main thread's TLS and inFAMOUS 2 creates 33 by the pier (more with
+  every cutscene's Bink threads); and the Metal FPS diagnostics (5f86d1d and follow-ups): `PS3RECOMP_METAL_FPS=1` puts
+  display/guest FPS and frame times in the window title. Regression run play44: cityfalls passed, pier 12 fps as before.
 - [ ] Not sent yet: 3D textures (upstream's texture cache has diverged, 21 conflicts; needs a dedicated port on
   top of #331), the diagnostic tools (hash-keyed dumps, `RSX_FP_DEBUG`, `REGDUMP`, `DUMP_TRIGGER`), and upstream
   versions of the three fork-only ones (upstream has no RGBA depth snapshot, no

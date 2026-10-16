@@ -177,9 +177,17 @@ extern "C" unsigned ppu_boot_frames_presented(void)
  * ~8 ms on average for nothing. */
 static int g_flip_immediate = 0;
 
+#if defined(__APPLE__)
+/* PS3RECOMP_METAL_FPS=1: the window title shows display and guest FPS. */
+extern "C" void rsx_metal_backend_note_guest_frame(void);
+#endif
+
 static void present_guest_frame(void)
 {
     rsx_backend_present();
+#if defined(__APPLE__)
+    rsx_metal_backend_note_guest_frame();
+#endif
     if (g_flip_immediate) cellGcmTickFlip();
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */

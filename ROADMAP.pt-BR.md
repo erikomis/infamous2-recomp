@@ -274,6 +274,10 @@ cada correção é um PR, com teste onde dava para ter um.
   Fork do inFamous 1: #12–#17 e #19 (os mesmos onde a base comporta), #18 (stencil na leitura de profundidade e
   snapshot invalidado por escrita), #20 (jobs SPU relocáveis) e #21 (câmera no mouse).
   - A troca 17/18 de `CELL_SYSUTIL_LANG_*` estava errada (o RPCS3 tem PORTUGUESE_BR = 17, ENGLISH_GB = 18) e foi revertida.
+- [x] (2026-10-16) Trazidos do upstream v0.15.0 para o port: blocos de TLS do tamanho da imagem (088befa), porque toda
+  thread PPU depois da 31ª dividia em silêncio o TLS da thread principal e o inFAMOUS 2 cria 33 até o píer (mais a cada
+  cutscene com Bink); e o diagnóstico de FPS do Metal (5f86d1d e seguintes): `PS3RECOMP_METAL_FPS=1` mostra FPS e tempo de
+  quadro no título da janela. Corrida de regressão play44: cityfalls passou, píer a 12 fps como antes.
 - [ ] Ainda não enviados: texturas 3D (o cache de texturas do upstream divergiu; precisa de um port dedicado),
   as ferramentas de diagnóstico e, no upstream, os três só do fork.
 
