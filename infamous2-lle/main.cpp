@@ -345,12 +345,16 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
     ppu_guest_call(opd, a0, a1, a2, a3, a4, a5, a6, a7);
 }
 
+extern "C" void infamous2_gpu_light_install(void);   /* gpu_light.c */
+
 int main(int argc, char** argv)
 {
     if (argc < 2) {
         printf("usage: %s <PPU ELF>\n", argv[0]);
         return 2;
     }
+    /* PS3RECOMP_ENG_GPU_LIGHT: the SPU light job's pixel work moves to the GPU. */
+    infamous2_gpu_light_install();
 
 #ifdef _WIN32
 #pragma comment(lib, "winmm.lib")

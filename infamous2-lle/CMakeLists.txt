@@ -198,6 +198,7 @@ message(STATUS "Firmware LLE:    ${LLE_SOURCE_COUNT} file(s)")
 add_executable(${PROJECT_NAME}
     main.cpp
     stubs.cpp
+    gpu_light.c
     ${LLE_SOURCES}
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
