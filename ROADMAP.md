@@ -267,9 +267,29 @@ each fix is a PR, with a test wherever one was possible.
   already brings it) and the tools from the still-open hang investigation
   (`GCM_SEMA_ACQUIRE`/`GCM_SEMA_TRACE`, `SPU_PUT_EA` limits, `LWCOND_TRACE`, the
   250 ms wait on the SPU event push), which go in once the cause is pinned down.
-- [ ] (new) Not sent yet: FACING/TC8/TC9 and `perspective_corr` in the fragment program decompiler,
-  the watchdog that respects the FIFO park, the relocatable SPU jobs
-  (`--relocatable`) and the mouse for the camera.
+- [x] **Second round (2026-10-16).** Upstream (sp00nznet/ps3recomp): bounded semaphore acquire and a
+  stuck-get watchdog that leaves acquires and parks alone ([#327](https://github.com/sp00nznet/ps3recomp/pull/327)),
+  FACING/TC8/TC9 ([#328](https://github.com/sp00nznet/ps3recomp/pull/328)),
+  `perspective_corr` ([#329](https://github.com/sp00nznet/ps3recomp/pull/329)),
+  per-target MRT colour mask and blend ([#330](https://github.com/sp00nznet/ps3recomp/pull/330); the CI `--mrt`
+  check now enables target B as a title does), texture sign expansion (biased remap and `_bx2`,
+  [#331](https://github.com/sp00nznet/ps3recomp/pull/331)), Y16_X16/HILO8 crossbar
+  ([#332](https://github.com/sp00nznet/ps3recomp/pull/332)), `PS3_LANG`
+  ([#333](https://github.com/sp00nznet/ps3recomp/pull/333)) and the NV3089 row copy
+  ([#334](https://github.com/sp00nznet/ps3recomp/pull/334)); CI green on all of them.
+  inFamous 1 fork (NoahBPeterson): the same where its base allows (#12-#17, #19) plus three that only fit there:
+  stencil in the depth-as-colour read and the snapshot retired by depth writes
+  ([#18](https://github.com/NoahBPeterson/ps3recomp/pull/18)), relocatable SPU jobs
+  ([#20](https://github.com/NoahBPeterson/ps3recomp/pull/20)) and the mouse camera
+  ([#21](https://github.com/NoahBPeterson/ps3recomp/pull/21)). Sign expansion did not go to the fork (its base lacks
+  the texture gamma it builds on).
+  - Review found the `CELL_SYSUTIL_LANG_ENGLISH_GB`/`PORTUGUESE_BR` (17/18) swap wrong: RPCS3 has
+    PORTUGUESE_BR = 17 and ENGLISH_GB = 18, as the header already had. Reverted in the toolkit; the port uses
+    `PS3_LANG=pt` (7), so nothing changes for it.
+- [ ] Not sent yet: 3D textures (upstream's texture cache has diverged, 21 conflicts; needs a dedicated port on
+  top of #331), the diagnostic tools (hash-keyed dumps, `RSX_FP_DEBUG`, `REGDUMP`, `DUMP_TRIGGER`), and upstream
+  versions of the three fork-only ones (upstream has no RGBA depth snapshot, no
+  `spu_overlay_register_region_at` registry and no keyboard pad).
 
 The branches live in two worktrees of `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
 for the fork) and `ps3recomp-up/` (based on upstream master); the `mine` remote points to

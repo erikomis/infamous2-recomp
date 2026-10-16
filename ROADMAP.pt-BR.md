@@ -268,9 +268,14 @@ cada correção é um PR, com teste onde dava para ter um.
   já o traz) e as ferramentas da investigação do travamento ainda em aberto
   (`GCM_SEMA_ACQUIRE`/`GCM_SEMA_TRACE`, limites de `SPU_PUT_EA`, `LWCOND_TRACE`, a espera de
   250 ms do push de evento do SPU), que vão quando a causa estiver fechada.
-- [ ] (novo) Ainda não enviados: FACING/TC8/TC9 e `perspective_corr` no decompilador de fragment programs,
-  o watchdog que respeita o estacionamento do FIFO, os jobs SPU relocáveis
-  (`--relocatable`) e o mouse para a câmera.
+- [x] **Segunda leva (2026-10-16).** Upstream: #327 (semáforo com limite e watchdog), #328 (FACING/TC8/TC9),
+  #329 (`perspective_corr`), #330 (máscara/blend por alvo MRT), #331 (expansão de sinal: remap "biased" e `_bx2`),
+  #332 (crossbar Y16_X16/HILO8), #333 (`PS3_LANG`) e #334 (cópia por linha do blit NV3089), CI verde.
+  Fork do inFamous 1: #12–#17 e #19 (os mesmos onde a base comporta), #18 (stencil na leitura de profundidade e
+  snapshot invalidado por escrita), #20 (jobs SPU relocáveis) e #21 (câmera no mouse).
+  - A troca 17/18 de `CELL_SYSUTIL_LANG_*` estava errada (o RPCS3 tem PORTUGUESE_BR = 17, ENGLISH_GB = 18) e foi revertida.
+- [ ] Ainda não enviados: texturas 3D (o cache de texturas do upstream divergiu; precisa de um port dedicado),
+  as ferramentas de diagnóstico e, no upstream, os três só do fork.
 
 Os branches vivem em dois worktrees do `ps3recomp-fork/`: `ps3recomp-pr/` (base 770660a,
 para o fork) e `ps3recomp-up/` (base no master do upstream); o remote `mine` aponta para
