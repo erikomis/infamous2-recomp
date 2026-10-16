@@ -6860,10 +6860,46 @@ index c610dad..b582c7a 100644
              ctx->pc = pc;
              __attribute__((musttail)) return fn(ctx);
 diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
-index 142931a..f3e3d08 100644
+index 142931a..224f4a1 100644
 --- a/runtime/spu/spu_dma.h
 +++ b/runtime/spu/spu_dma.h
-@@ -834,7 +834,14 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
+@@ -642,7 +642,17 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+         { static _Atomic int on = -1; static _Atomic uint32_t lo, hi;
+           if (on < 0) { const char* e = getenv("SPU_GET_EA"); on = e != 0;
+               if (e) { char* d; lo = (uint32_t)strtoul(e, &d, 16); hi = (uint32_t)strtoul(d + 1, 0, 16); } }
+-          if (on && (uint32_t)ea < hi && (uint32_t)ea + size > lo)
++          extern unsigned long long ps3_ms_now(void);
++          static _Atomic int after = -1; static _Atomic long max_n; static _Atomic long n;
++          if (after < 0) { const char* e = getenv("SPU_GET_EA_AFTER"); after = e ? atoi(e) : 0;
++                           const char* m = getenv("SPU_GET_EA_MAX"); max_n = m ? atol(m) : 4000; }
++          /* SPU_GET_JOB=<hex>: only while that word is the WWS job header at
++           * LS 0x4010, i.e. one job's inputs (use a wide SPU_GET_EA range). */
++          static _Atomic int jon = -1; static _Atomic uint32_t job;
++          if (jon < 0) { const char* e = getenv("SPU_GET_JOB"); jon = e != 0; if (e) job = (uint32_t)strtoul(e, 0, 16); }
++          if (on && (uint32_t)ea < hi && (uint32_t)ea + size > lo &&
++              (!jon || spu_ls_read32(spu, 0x4010) == job) &&
++              ps3_ms_now() >= (unsigned long long)after * 1000ull && n++ < max_n)
+               fprintf(stderr, "[mfc] GETEA ea=0x%08x size=0x%x lsa=0x%05x job@4000: %08x %08x %08x %08x\n",
+                       (uint32_t)ea, size, lsa, spu_ls_read32(spu, 0x4010), spu_ls_read32(spu, 0x4014),
+                       spu_ls_read32(spu, 0x4018), spu_ls_read32(spu, 0x4020)); }
+@@ -828,13 +838,30 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
+           static _Atomic int gon = -1; static _Atomic uint32_t glo, ghi;
+           if (gon < 0) { const char* e = getenv("SPU_GET_EA"); gon = e != 0;
+               if (e) { char* d; glo = (uint32_t)strtoul(e, &d, 16); ghi = (uint32_t)strtoul(d + 1, 0, 16); } }
+-          if (gon && (base_cmd & 0x40) && eal < ghi && eal + xfer_size > glo)
++          /* SPU_GET_EA_AFTER=<sec> / SPU_GET_EA_MAX=<n> (default 4000): the
++           * same window and cap as the PUT log, or a lit frame floods it. */
++          extern unsigned long long ps3_ms_now(void);
++          static _Atomic int gafter = -1; static _Atomic long gmax; static _Atomic long gn;
++          if (gafter < 0) { const char* e = getenv("SPU_GET_EA_AFTER"); gafter = e ? atoi(e) : 0;
++                            const char* m = getenv("SPU_GET_EA_MAX"); gmax = m ? atol(m) : 4000; }
++          static _Atomic int gjon = -1; static _Atomic uint32_t gjob;
++          if (gjon < 0) { const char* e = getenv("SPU_GET_JOB"); gjon = e != 0; if (e) gjob = (uint32_t)strtoul(e, 0, 16); }
++          if (gon && (base_cmd & 0x40) && eal < ghi && eal + xfer_size > glo &&
++              (!gjon || spu_ls_read32(spu, 0x4010) == gjob) &&
++              ps3_ms_now() >= (unsigned long long)gafter * 1000ull && gn++ < gmax)
+               fprintf(stderr, "[mfc-list] GETL-elem ea=0x%08x size=0x%x lsa=0x%05x job@4000: %08x %08x %08x %08x\n",
+                       eal, xfer_size, (dest_lsa & ~15u) | (eal & 15u), spu_ls_read32(spu, 0x4010),
                        spu_ls_read32(spu, 0x4014), spu_ls_read32(spu, 0x4018), spu_ls_read32(spu, 0x4020));
            if (on < 0) { const char* e = getenv("SPU_PUT_EA"); on = e != 0;
                if (e) { char* d; lo = (uint32_t)strtoul(e, &d, 16); hi = (uint32_t)strtoul(d + 1, 0, 16); } }
@@ -6879,7 +6915,7 @@ index 142931a..f3e3d08 100644
                fprintf(stderr, "[mfc-list] PUTL-elem ea=0x%08x size=0x%x lsa=0x%05x job@4000: %08x %08x %08x %08x\n",
                        eal, xfer_size, (dest_lsa & ~15u) | (eal & 15u), spu_ls_read32(spu, 0x4010),
                        spu_ls_read32(spu, 0x4014), spu_ls_read32(spu, 0x4018), spu_ls_read32(spu, 0x4020)); }
-@@ -981,6 +988,17 @@ static inline int mfc_submit_body(mfc_engine* mfc, spu_context* spu, uint32_t cm
+@@ -981,6 +1008,17 @@ static inline int mfc_submit_body(mfc_engine* mfc, spu_context* spu, uint32_t cm
      uint32_t tag  = spu->mfc_tag & 0x1F;
      int rc = 0;
  
