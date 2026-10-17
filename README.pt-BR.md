@@ -36,7 +36,7 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Prólogo em Empire City (a Besta, o cargueiro) | ✅ |
 | New Marais: primeiras missões, jogadas com janela e DualSense | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), saves, DLC | ✅ |
-| Desempenho | 🐢 7–16 fps (o jogo foi feito para 30) |
+| Desempenho | 🚶 ~21 fps andando em New Marais, 25–27 com SSAO na GPU (o jogo foi feito para 30) |
 | Jogo inteiro | ❓ ninguém passou ainda de 1% |
 | Teclado e mouse com janela | 🧪 mapeados, pouco testados |
 | Linux e Windows | ⏳ planejado |
@@ -111,6 +111,28 @@ Saves e troféus ficam em `~/Library/Application Support/infamous2-recomp/gameda
 (Linux: `~/.local/share/infamous2-recomp`), não importa de qual pasta o jogo é aberto;
 o primeiro `./run.sh` com janela copia para lá um `infamous2-lle/gamedata` antigo.
 `PS3_GAMEDATA_ROOT=<dir>` escolhe outro lugar.
+
+Opções úteis:
+
+| Variável | O que faz |
+| --- | --- |
+| `PS3RECOMP_ENG_GPU_SSAO=0F800000` | roda também o job de SSAO na GPU: ~21 → 25–27 fps andando (opcional enquanto é validado) |
+| `PS3RECOMP_ENG_GPU_LIGHT=` (vazio) | devolve a iluminação para os SPUs (mais lento; por padrão ela roda na GPU) |
+| `PS3_DISPLAY_GAMMA=<0.8..1.2>` | força o gamma da saída de vídeo; por padrão vale o brilho escolhido nas opções do jogo, como no console |
+
+`tools/play_dump.sh <nome>` abre o jogo na janela e, a cada Enter no terminal,
+salva aquele frame (render targets, shaders, log de passes) em `out/<nome>/`:
+o jeito mais rápido de reportar um defeito de imagem.
+
+Problemas conhecidos:
+
+- Algumas fachadas de prédios fora do sol saem quase pretas no Metal (no
+  Windows não acontece); em investigação.
+- Raramente, um SPU rodando o job de geometria do Edge falha e o jogo para;
+  diagnosticado até um registrador sobrescrito dentro de um laço atômico, ainda
+  sem correção.
+- Com menos de uns 3 GB livres no disco o jogo mostra um erro de "espaço
+  insuficiente" no boot, que na janela aparece só como tela preta.
 
 Para testes sem janela: `tools/capture.sh <nome> <segundos>` salva um PNG do
 frame a cada 10 s, `PAD_SCRIPT="95:0x4000"` aperta ✕ aos 95 s
