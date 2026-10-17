@@ -35,7 +35,7 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Empire City prologue (the Beast, the freighter) | ✅ |
 | New Marais: first missions, played in a window with a DualSense | ✅ |
 | Brazilian Portuguese dub and subtitles (default), saves, DLC | ✅ |
-| Performance | 🐢 7–16 fps (the game targets 30) |
+| Performance | 🚶 ~21 fps walking in New Marais, 25–27 with GPU SSAO (the game targets 30) |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Keyboard and mouse in a window | 🧪 mapped, barely tested |
 | Linux and Windows | ⏳ planned |
@@ -111,6 +111,27 @@ Saves and trophies live in `~/Library/Application Support/infamous2-recomp/gamed
 (Linux: `~/.local/share/infamous2-recomp`), whatever directory the game is launched from;
 the first windowed `./run.sh` copies an older `infamous2-lle/gamedata` there.
 `PS3_GAMEDATA_ROOT=<dir>` picks another place.
+
+Options worth knowing:
+
+| Variable | What it does |
+| --- | --- |
+| `PS3RECOMP_ENG_GPU_SSAO=0F800000` | runs the SSAO job on the GPU too: ~21 → 25–27 fps walking (opt-in while it is validated) |
+| `PS3RECOMP_ENG_GPU_LIGHT=` (empty) | puts the light pass back on the SPUs (slower; on the GPU by default) |
+| `PS3_DISPLAY_GAMMA=<0.8..1.2>` | overrides the display gamma; by default the game's own brightness setting is applied, as on the console |
+
+`tools/play_dump.sh <name>` opens the game in a window and, each time Return is
+pressed in its terminal, saves that frame (render targets, shaders, pass log)
+under `out/<name>/`: the quickest way to report a rendering bug.
+
+Known problems:
+
+- Some building facades out of the sun come out almost black on Metal (the
+  Windows build does not show it); being investigated.
+- Rarely, an SPU running the Edge geometry job faults and the game stops;
+  diagnosed down to a register clobbered inside an atomic loop, not fixed yet.
+- With less than about 3 GB free on the disk the game shows a "not enough
+  space" error at boot, which in the window is just a black screen.
 
 For headless tests: `tools/capture.sh <name> <seconds>` saves a PNG of the
 frame every 10 s, `PAD_SCRIPT="95:0x4000"` presses ✕ at 95 s
