@@ -263,6 +263,7 @@ function renderHome() {
   play.disabled = rebuildRunning || !status.hostSupported;
   show($("run-state"), gameRunning);
   show($("home-unsupported"), !status.hostSupported);
+  show($("go-install"), status.hostSupported);
 
   const s = status.lastSave;
   const box = $("save-info");
@@ -375,11 +376,11 @@ function renderPrereqs() {
   for (const c of [...fails, ...p.checks.filter((c) => c.level !== "fail")]) {
     const li = document.createElement("li");
     li.className = `check-${c.level}`;
-    li.innerHTML = `<span class="ico"></span><span class="what"><b></b><span class="msg"></span></span>`;
+    li.innerHTML = `<span class="ico"></span><span class="what"><b></b><span class="tip"></span><span class="msg"></span></span>`;
     li.querySelector(".ico")!.textContent = ICON[c.level] ?? "·";
     li.querySelector("b")!.textContent = checkLabel(c.name);
-    const hint = c.level === "fail" && hints[c.name] ? ` ${t(hints[c.name])}` : "";
-    li.querySelector(".msg")!.textContent = c.message + hint;
+    li.querySelector(".tip")!.textContent = c.level === "fail" && hints[c.name] ? t(hints[c.name]) : "";
+    li.querySelector(".msg")!.textContent = c.message;
     const act = prereqAction(c);
     if (act) li.appendChild(act);
     list.appendChild(li);
