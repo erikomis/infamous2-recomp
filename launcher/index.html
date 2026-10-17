@@ -148,8 +148,21 @@
           <div class="slider"><input id="gamma" type="range" min="0.8" max="1.2" step="0.01" /><output id="gamma-out"></output></div>
           <p class="hint" data-i18n="settings.gammaHint"></p>
           <label for="display" data-i18n="settings.display">Modo de exibição</label>
-          <select id="display" disabled><option data-i18n="settings.windowed">Janela</option></select>
+          <select id="display">
+            <option value="windowed" data-i18n="settings.windowed">Janela</option>
+            <option value="fullscreen" data-i18n="settings.fullscreen">Tela cheia (macOS)</option>
+            <option value="borderless" data-i18n="settings.borderless">Tela cheia sem bordas</option>
+          </select>
           <p class="hint" data-i18n="settings.displayHint"></p>
+          <label for="window-size" data-i18n="settings.windowSize">Tamanho da janela</label>
+          <select id="window-size">
+            <option value="" data-i18n="settings.windowSizeDefault">1280 × 720 (padrão)</option>
+            <option value="1600x900">1600 × 900</option>
+            <option value="1920x1080">1920 × 1080</option>
+            <option value="2560x1440">2560 × 1440</option>
+          </select>
+          <label class="check"><input id="game-icon" type="checkbox" /> <span data-i18n="settings.gameIcon"></span></label>
+          <p class="hint" data-i18n="settings.gameIconHint"></p>
         </fieldset>
 
         <fieldset>
@@ -160,6 +173,8 @@
           <label class="check"><input id="mouse-invert" type="checkbox" /> <span data-i18n="settings.mouseInvert"></span></label>
           <label data-i18n="settings.mouseDeadzone">Zona morta</label>
           <div class="slider"><input id="mouse-dz" type="range" min="0" max="120" step="1" /><output id="mouse-dz-out"></output></div>
+          <label class="check"><input id="mouse-capture" type="checkbox" /> <span data-i18n="settings.mouseCapture"></span></label>
+          <p class="hint" data-i18n="settings.mouseCaptureHint"></p>
         </fieldset>
 
         <fieldset>
