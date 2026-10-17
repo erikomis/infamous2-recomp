@@ -27,6 +27,9 @@ revision=, self_type= (or program_type=), erk=, riv=, and `[NP_klic_key]`
 / `[NP_klic_free]` blocks with key= -- and may also hold plain `name=hex`
 lines (NP_klic_key=, NP_klic_free=, RAP_KEY=). The RAP key can also come from
 $PS3_RAP_KEY, as for rap2rifkey.py; it is checked against its SHA-256.
+Blocks with type=PKG (or category=PKG) and erk=/riv=, or SCEPKG_ERK= /
+SCEPKG_RIV= lines (RPCS3's names), are the firmware-package key set
+tools/pup_extract.py uses; this tool does not need them.
 
 The SELF layout and the decryption chain follow sp00nznet/twistedmetal's
 tools/decrypt_self.py (MIT, Copyright (c) 2026 Ned Heller / sp00nznet) and
@@ -73,6 +76,7 @@ class Keys:
 
     def __init__(self):
         self.self_keys = []      # [(program type name, revision, erk, riv)]
+        self.pkg_keys = []       # [(revision or None, erk, riv)]: SCE PKG (firmware packages)
         self.named = {}          # lower-case name -> bytes
 
     @classmethod
@@ -112,6 +116,9 @@ class Keys:
             try:
                 if kind == 'SELF' and b.get('erk') and b.get('riv') and b.get('revision'):
                     self.self_keys.append((ptype, int(b['revision'], 16), _hex(b['erk']), _hex(b['riv'])))
+                elif kind == 'PKG' and b.get('erk') and b.get('riv'):
+                    rev = int(b['revision'], 16) if b.get('revision') else None
+                    self.pkg_keys.append((rev, _hex(b['erk']), _hex(b['riv'])))
                 elif b.get('key'):
                     self.named.setdefault(b['name'].lower(), _hex(b['key']))
             except ValueError:
@@ -123,6 +130,22 @@ class Keys:
                 return erk, riv
         raise SelfError('no SELF key for program type %s, key revision 0x%04X in the key file'
                         % (ptype, revision))
+
+    def pkg_key_sets(self, revision=None):
+        """The SCE PKG key sets (erk, riv) worth trying for a package of this key
+        revision: exact revision first, then those without one, then the rest
+        (the metadata check tells which one is right)."""
+        sets = [(r, e, v) for r, e, v in self.pkg_keys if len(e) == 32 and len(v) == 16]
+        e, v = self.named.get('scepkg_erk'), self.named.get('scepkg_riv')
+        if e is not None and v is not None and len(e) == 32 and len(v) == 16:
+            sets.append((None, e, v))
+        rank = lambda r: 0 if r == revision else (1 if r is None else 2)
+        seen, out = set(), []
+        for r, e, v in sorted(sets, key=lambda t: rank(t[0])):
+            if (e, v) not in seen:
+                seen.add((e, v))
+                out.append((e, v))
+        return out
 
     def get(self, name, size=16):
         v = self.named.get(name.lower())
@@ -152,6 +175,29 @@ def _need_aes():
 def aes_ctr(key, iv, data):
     _need_aes()
     return AES.new(key, AES.MODE_CTR, nonce=b'', initial_value=iv).decrypt(data)
+
+
+SECTION_FIELDS = ('data_off', 'data_size', 'type', 'prog_idx', 'hashed', 'sha1_idx',
+                  'encrypted', 'key_idx', 'iv_idx', 'compressed')
+
+
+def sce_metadata(d, off, header_len, info):
+    """Section table and data keys of an SCE container (SELF or PKG), from its
+    decrypted 0x40-byte metadata info (at file offset `off`)."""
+    key, key_pad, iv, iv_pad = info[0:16], info[16:32], info[32:48], info[48:64]
+    if key_pad != bytes(16) or iv_pad != bytes(16):
+        raise SelfError('metadata info did not decrypt (wrong key, or the wrong .rap for this copy)')
+    if header_len > len(d) or header_len < off + 0x40 + 0x20:
+        raise SelfError('bad SCE header length')
+    hdrs = aes_ctr(key, iv, d[off + 0x40:header_len])
+    _sig, _u1, nsec, nkeys, _opt = struct.unpack_from('>QIIII', hdrs, 0)
+    if not (0 < nsec < 256 and 0 < nkeys < 1024) or 0x20 + nsec * 0x30 + nkeys * 0x10 > len(hdrs):
+        raise SelfError('implausible metadata (%d sections, %d keys)' % (nsec, nkeys))
+    sections = [dict(zip(SECTION_FIELDS, struct.unpack_from('>QQIIIIIIII', hdrs, 0x20 + i * 0x30)))
+                for i in range(nsec)]
+    ko = 0x20 + nsec * 0x30
+    dkeys = [hdrs[ko + i * 0x10:ko + (i + 1) * 0x10] for i in range(nkeys)]
+    return sections, dkeys
 
 
 class Self:
@@ -237,22 +283,7 @@ class Self:
                 k = AES.new(klic_key, AES.MODE_ECB).decrypt(klic)
                 info = AES.new(k, AES.MODE_CBC, bytes(16)).decrypt(info)
             info = AES.new(erk, AES.MODE_CBC, riv).decrypt(info)
-        key, key_pad, iv, iv_pad = info[0:16], info[16:32], info[32:48], info[48:64]
-        if key_pad != bytes(16) or iv_pad != bytes(16):
-            raise SelfError('metadata info did not decrypt (wrong key, or the wrong .rap for this copy)')
-        if self.header_len > len(self.d) or self.header_len < off + 0x40 + 0x20:
-            raise SelfError('bad SELF header length')
-        hdrs = aes_ctr(key, iv, self.d[off + 0x40:self.header_len])
-        _sig, _u1, nsec, nkeys, _opt = struct.unpack_from('>QIIII', hdrs, 0)
-        if not (0 < nsec < 256 and 0 < nkeys < 1024) or 0x20 + nsec * 0x30 + nkeys * 0x10 > len(hdrs):
-            raise SelfError('implausible metadata (%d sections, %d keys)' % (nsec, nkeys))
-        names = ('data_off', 'data_size', 'type', 'prog_idx', 'hashed', 'sha1_idx',
-                 'encrypted', 'key_idx', 'iv_idx', 'compressed')
-        sections = [dict(zip(names, struct.unpack_from('>QQIIIIIIII', hdrs, 0x20 + i * 0x30)))
-                    for i in range(nsec)]
-        ko = 0x20 + nsec * 0x30
-        dkeys = [hdrs[ko + i * 0x10:ko + (i + 1) * 0x10] for i in range(nkeys)]
-        return sections, dkeys
+        return sce_metadata(self.d, off, self.header_len, info)
 
     def to_elf(self, keys, rap=None, log=None):
         _need_aes()
@@ -399,8 +430,9 @@ def _fake_self(elf_hdr, phdrs, segs, shdrs, erk, riv, rev, ptype, npd=None, klic
     return head + info + hdrs + payload
 
 
-def selftest():
-    # a tiny ELF64: header, 2 program headers, 2 segments, 1 section header
+def selftest_elf():
+    """A tiny ELF64 (header, 2 program headers, 2 segments, 1 section header):
+    (elf header, program headers, segments, section headers, the expected ELF)."""
     code = struct.pack('>II', 0x10208, 0x18000) + bytes(range(256)) * 8
     data = b'inFAMOUS-2-selftest' * 300
     ph = [(1, 5, 0x200, 0x10000, 0x10000, len(code), len(code), 0x10000),
@@ -418,8 +450,11 @@ def selftest():
     want[0x200:0x200 + len(code)] = code
     want[0x200 + len(code):shoff] = data
     want[shoff:] = shdrs
-    want = bytes(want)
+    return eh, phdrs, code, data, shdrs, bytes(want)
 
+
+def selftest():
+    eh, phdrs, code, data, shdrs, want = selftest_elf()
     erk, riv = bytes(range(32)), bytes(range(16, 32))           # made up
     klic_key, rap_key = bytes([0xA5] * 16), bytes([0x3C] * 16)  # made up
     keys = Keys()
