@@ -12,5 +12,9 @@ awake=""; command -v caffeinate >/dev/null 2>&1 && awake="caffeinate -i"
 HEADLESS=1 SDL_AUDIODRIVER=dummy PS3_PAD_SDL="${PS3_PAD_SDL:-0}" $awake "$here/run.sh" > "$log" 2>&1 &
 pid=$!; start=$(date +%s)
 while kill -0 $pid 2>/dev/null && [ $(( $(date +%s) - start )) -lt "$secs" ]; do /bin/sleep 1; done
-if kill -0 $pid 2>/dev/null; then echo "still running after ${secs}s -> killed"; kill -9 $pid
+# $pid is caffeinate when it is available, and run.sh execs the game as its
+# CHILD: killing caffeinate alone left the game running as an orphan, so a
+# hung run kept going underneath the next one (2026-10-17: v8 lived 519 s of a
+# 290 s run and the following runs' menus dropped to 4-8 fps).
+if kill -0 $pid 2>/dev/null; then echo "still running after ${secs}s -> killed"; pkill -9 -P $pid; kill -9 $pid
 else wait $pid; echo "exited by itself after $(( $(date +%s) - start ))s, status=$?"; fi
