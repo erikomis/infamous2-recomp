@@ -92,7 +92,8 @@ DECRYPT_SELF = os.path.join(HERE, 'decrypt_self.py')
 
 # Port files copied into <out>/infamous2-lle (the build's sources and tools).
 PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
-              'ssao_gpu.c', 'ssao_gpu.h', 'run.sh', 'config.toml')
+              'ssao_gpu.c', 'ssao_gpu.h', 'run.sh', 'config.toml',
+              'window_icon.png')   # the Dock icon run.sh points the game at
 
 # Extra lifted entry points beyond the README recipe, found at run time and
 # present in the build the port is tested with (an interrupted SPU job that

@@ -84,6 +84,7 @@ jogo.
 
 - [ ] Testar o teclado com janela (`./run.sh`) do menu ao gameplay.
 - [ ] Captura do cursor na janela e atalho para soltá-lo.
+  - Atualização 2026-10-17: implementado, falta testar em janela (patch do toolkit `infamous2-lle/patches/pending/window-modes.patch`): um clique esquerdo no jogo captura o mouse (cursor escondido e preso, o movimento move a câmera; esse clique não dispara nada), Esc, Cmd, outra janela ou outro app soltam, e o próximo clique captura de novo. Solto, mexer o mouse não gira nada. `PS3_MOUSE_CAPTURE=0` volta para a câmera sem captura.
 - [ ] Mapeamento configurável (arquivo de configuração em vez de teclas fixas no código).
 - [ ] Controle físico via SDL2 (DualShock/DualSense/Xbox) testado, incluindo vibração.
   - Atualização: o DualSense funciona (botões e analógicos) no jogo com janela. Faltam vibração, Xbox e DualShock.
@@ -109,6 +110,7 @@ jogo.
   - [ ] NVIDIA DLSS (a versão mais nova disponível) e Intel XeSS: só fazem sentido numa build Windows com GPU NVIDIA/Intel.
   - O temporal (MetalFX temporal, FSR, DLSS) precisa de vetores de movimento e de jitter na câmera, que o jogo não gera: ou se derivam da profundidade + matrizes do quadro anterior, ou fica só o espacial.
 - [ ] Tela cheia, janela redimensionável e alternância por atalho.
+  - Atualização 2026-10-17: implementado, falta testar em janela (mesmo patch). A janela muda de tamanho e a imagem fica em 16:9 com faixas pretas (o drawable continua na resolução do jogo e a layer escala mantendo a proporção). `PS3_WINDOW_MODE=windowed|fullscreen|borderless` (tela cheia do macOS num Space só dela, ou sem bordas: cobre a tela no lugar, sem barra de menus nem Dock), `PS3_WINDOW_SIZE=<l>x<a>`; Cmd+F / Option+Return alternam a tela cheia (sem bordas quando esse é o modo), Cmd+Ctrl+F alterna a do macOS; Cmd+tecla não chega mais ao pad do teclado. O modo de exibição do launcher agora oferece os três modos e o tamanho da janela. Falta: escolher o monitor, sincronia vertical.
 - [ ] Widescreen/ultrawide (21:9): FOV e HUD corretos.
 - [ ] Taxa de quadros: desbloquear de 30 fps onde a lógica do jogo permitir.
 - [ ] #307 (snapshot de render target) do upstream: exige terminar o merge do motor de desenho (`rsx_draw_engine.c`).
@@ -120,6 +122,7 @@ Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que lev
 - [ ] **Instalação / rebuild:** escolher a cópia do jogo (pasta do jogo instalado no RPCS3, PKG ou disco) e o `.rap`; o app confere a versão (NPUA80638 01.00), descriptografa, traduz (PPU, SPU, jobs) e compila, com barra de progresso, tempo estimado e log. Depende do script único de rebuild (seção Rebuild), que precisa rodar nos três sistemas: Python dos tradutores, CMake + Clang (Xcode no Mac, Clang/MSVC no Windows, Clang/GCC no Linux). O app confere e instala o que faltar (ou traz um toolchain embutido) e mostra o espaço em disco necessário. Refazer só o que mudou quando o toolkit é atualizado.
 - [ ] **Instalador nativo em cada sistema** (gerado pelo Tauri): Windows `.exe` (NSIS) ou `.msi` com atalho no Menu Iniciar/área de trabalho e desinstalação pelo sistema; macOS `.dmg` com o `.app` para a pasta Aplicativos; Linux `.AppImage`, `.deb` e Flatpak com ícone no menu. O executável do jogo gerado pelo recomp fica na pasta de dados do app; opção de criar um atalho que abre o jogo direto. Assinatura de código para não aparecer o aviso de app desconhecido: conta Apple Developer (US$ 99/ano + notarização) e certificado de assinatura no Windows; sem isso funciona, com o aviso na primeira abertura.
 - [ ] **Ícones e identidade visual:** ícone original do app (sem logo nem arte da Sony, que são marca registrada), gerado em todos os formatos com `tauri icon` (Windows `.ico`, macOS `.icns`, PNGs do Linux); o mesmo ícone na janela e no Dock/barra de tarefas do próprio jogo (hoje a janela Metal não tem ícone); tela de abertura do launcher. A arte oficial vem da cópia do jogador na instalação: `PS3_GAME/ICON0.PNG` (ícone), `PIC1.PNG` (fundo) e o título de `PARAM.SFO`, mostrados na tela inicial, sem nada disso ir no instalador.
+  - Atualização 2026-10-17: o ícone do jogo no Dock é o placeholder do launcher (`infamous2-lle/window_icon.png`, cópia de `launcher/src-tauri/icons/icon.png`), passado pelo `run.sh` em `PS3_WINDOW_ICON`; `PS3_WINDOW_ICON=game` (no launcher: "Ícone da sua cópia no Dock") usa o `PS3_GAME/ICON0.PNG` da própria cópia do jogador. Falta aplicar o patch do toolkit e ver em janela.
 - [ ] **Tela inicial:** botão Jogar, capa do jogo, último save (missão e data), versão do port.
 - [ ] **Configurações de tela:**
   - modo janela / tela cheia / tela cheia sem borda, monitor, sincronia vertical;
