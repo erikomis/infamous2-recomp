@@ -18,6 +18,10 @@ interface Settings {
   mouseSens: number;
   mouseInvertY: boolean;
   mouseDeadzone: number;
+  mouseCapture: boolean;
+  windowMode: string;
+  windowSize: string;
+  gameIcon: boolean;
   extraEnv: string;
   gamePaths: string[];
   rapPath: string;
@@ -166,6 +170,19 @@ function bindSettings() {
   bindCheck("gamma-on", "gammaOverride");
   bindCheck("mouse-on", "mouse");
   bindCheck("mouse-invert", "mouseInvertY");
+  bindCheck("mouse-capture", "mouseCapture");
+  bindCheck("game-icon", "gameIcon");
+  const bindSelect = (id: string, key: "windowMode" | "windowSize") => {
+    const el = $<HTMLSelectElement>(id);
+    el.value = settings[key];
+    if (el.value !== settings[key]) el.selectedIndex = 0; // a value the list does not offer
+    el.addEventListener("change", () => {
+      settings[key] = el.value;
+      persist();
+    });
+  };
+  bindSelect("display", "windowMode");
+  bindSelect("window-size", "windowSize");
   bindRange("gamma", "gamma", (v) => v.toFixed(2));
   bindRange("mouse-sens", "mouseSens", (v) => `${v.toFixed(2)}×`);
   bindRange("mouse-dz", "mouseDeadzone", (v) => String(Math.round(v)));
@@ -215,6 +232,10 @@ function bindSettings() {
       mouseSens: 1.0,
       mouseInvertY: false,
       mouseDeadzone: 30,
+      mouseCapture: true,
+      windowMode: "windowed",
+      windowSize: "",
+      gameIcon: false,
       extraEnv: "",
     }, keep);
     await invoke("save_settings", { settings });
@@ -228,7 +249,7 @@ function syncDependent() {
   const ssao = $<HTMLInputElement>("gpu-ssao");
   ssao.disabled = !settings.gpuLight;
   $<HTMLInputElement>("gamma").disabled = !settings.gammaOverride;
-  for (const id of ["mouse-sens", "mouse-invert", "mouse-dz"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
+  for (const id of ["mouse-sens", "mouse-invert", "mouse-dz", "mouse-capture"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
 }
 
 // ---- home ---------------------------------------------------------------------

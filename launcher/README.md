@@ -46,7 +46,9 @@ roadmap).
   changes nothing); **Install** runs the rebuild with a progress bar, time
   estimate, step list and log; **Cancel** stops it and the tools it started.
 - **Settings / Configurações**: game language (`PS3_LANG`), light pass and
-  SSAO on the GPU, the occlusion-volume skip, a gamma override, mouse options,
+  SSAO on the GPU, the occlusion-volume skip, a gamma override, the window
+  mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the Dock icon
+  (`PS3_WINDOW_ICON=game`), mouse options (cursor capture: `PS3_MOUSE_CAPTURE`),
   the install folder and extra environment variables; shows the equivalent
   command line. UI in Brazilian Portuguese (default) and English.
 

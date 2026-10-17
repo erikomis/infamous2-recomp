@@ -105,7 +105,25 @@ on top of it:
 | Left / right / middle mouse button | R1 / R2 / L1 |
 
 The mouse is tuned with `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1` and
-`PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` turns it off.
+`PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` turns it off. A click in the game
+captures it (the cursor hides and the camera follows the mouse); Esc or Cmd
+releases it, and so does switching to another app. `PS3_MOUSE_CAPTURE=0`
+goes back to the uncaptured camera.
+
+The window resizes freely and the image keeps its 16:9 shape, with black bars
+when the window has another one.
+
+| Shortcut | What it does |
+| --- | --- |
+| Cmd+F or Option+Return | fullscreen on/off (borderless with `PS3_WINDOW_MODE=borderless`, macOS fullscreen otherwise) |
+| Cmd+Ctrl+F | macOS fullscreen on/off |
+| Esc / Cmd | release the mouse |
+
+| Variable | What it does |
+| --- | --- |
+| `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | how the game opens: a window (default), macOS fullscreen (a Space of its own) or borderless fullscreen (covers the screen in place, menu bar and Dock hidden, instant app switching) |
+| `PS3_WINDOW_SIZE=<w>x<h>` | the window's size in points, e.g. `1920x1080` (default 1280x720, shrunk to fit the screen) |
+| `PS3_WINDOW_ICON=game\|<file>\|none` | the Dock icon: by default the launcher's original placeholder (`infamous2-lle/window_icon.png`, no Sony art); `game` uses your copy's own `PS3_GAME/ICON0.PNG` |
 
 Saves and trophies live in `~/Library/Application Support/infamous2-recomp/gamedata`
 (Linux: `~/.local/share/infamous2-recomp`), whatever directory the game is launched from;
