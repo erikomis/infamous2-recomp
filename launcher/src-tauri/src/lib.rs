@@ -45,6 +45,15 @@ pub struct Settings {
     pub mouse_sens: f32,
     pub mouse_invert_y: bool,
     pub mouse_deadzone: u32,
+    /// PS3_MOUSE_CAPTURE: a click captures the cursor (Esc/Cmd releases it).
+    pub mouse_capture: bool,
+    /// PS3_WINDOW_MODE: "windowed", "fullscreen" (macOS) or "borderless".
+    pub window_mode: String,
+    /// PS3_WINDOW_SIZE: "<w>x<h>" in points; empty = the game's 1280x720.
+    pub window_size: String,
+    /// PS3_WINDOW_ICON=game: the player's own ICON0.PNG in the Dock instead
+    /// of the placeholder.
+    pub game_icon: bool,
     /// Extra KEY=VALUE lines (diagnostics), one per line; '#' starts a comment.
     pub extra_env: String,
     /// Remembered inputs of the install screen.
@@ -67,6 +76,10 @@ impl Default for Settings {
             mouse_sens: 1.0,
             mouse_invert_y: false,
             mouse_deadzone: 30,
+            mouse_capture: true,
+            window_mode: "windowed".into(),
+            window_size: String::new(),
+            game_icon: false,
             extra_env: String::new(),
             game_paths: Vec::new(),
             rap_path: String::new(),
@@ -445,9 +458,28 @@ fn launch_env(s: &Settings, inst: &InstallInfo) -> Vec<(String, String)> {
         if s.mouse_deadzone != 30 {
             set("PS3_MOUSE_DEADZONE", s.mouse_deadzone.min(120).to_string());
         }
+        if !s.mouse_capture {
+            set("PS3_MOUSE_CAPTURE", "0".into());
+        }
+    }
+    if matches!(s.window_mode.as_str(), "fullscreen" | "borderless") {
+        set("PS3_WINDOW_MODE", s.window_mode.clone());
+    }
+    if valid_window_size(&s.window_size) {
+        set("PS3_WINDOW_SIZE", s.window_size.clone());
+    }
+    if s.game_icon {
+        set("PS3_WINDOW_ICON", "game".into());
     }
     env.extend(parse_env_lines(&s.extra_env));
     env
+}
+
+/// "<w>x<h>", as PS3_WINDOW_SIZE takes it (the window shrinks it to the screen).
+fn valid_window_size(v: &str) -> bool {
+    let mut it = v.splitn(2, 'x').map(|n| n.parse::<u32>().ok());
+    matches!((it.next(), it.next()), (Some(Some(w)), Some(Some(h)))
+        if (160..=16384).contains(&w) && (90..=16384).contains(&h))
 }
 
 fn shell_quote(v: &str) -> String {
@@ -792,6 +824,22 @@ mod tests {
         assert_eq!(env.get("PS3RECOMP_ENG_SKIP_FP").map(String::as_str), Some(""));
         assert_eq!(env.get("PS3_DISPLAY_GAMMA").map(String::as_str), Some("1.20"));
         assert_eq!(env.get("PS3_MOUSE").map(String::as_str), Some("0"));
+        assert!(!env.contains_key("PS3_WINDOW_MODE")); // windowed is the default
+        assert!(!env.contains_key("PS3_WINDOW_SIZE"));
+        assert!(!env.contains_key("PS3_MOUSE_CAPTURE")); // no mouse, nothing to capture
+        s.mouse = true;
+        s.mouse_capture = false;
+        s.window_mode = "borderless".into();
+        s.window_size = "1920x1080".into();
+        s.game_icon = true;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst).into_iter().collect();
+        assert_eq!(env.get("PS3_MOUSE_CAPTURE").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_WINDOW_MODE").map(String::as_str), Some("borderless"));
+        assert_eq!(env.get("PS3_WINDOW_SIZE").map(String::as_str), Some("1920x1080"));
+        assert_eq!(env.get("PS3_WINDOW_ICON").map(String::as_str), Some("game"));
+        s.window_size = "big".into();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst).into_iter().collect();
+        assert!(!env.contains_key("PS3_WINDOW_SIZE"));
     }
 
     #[test]
