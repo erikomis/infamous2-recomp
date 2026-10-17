@@ -385,3 +385,36 @@ Feed (b) to `job/build_run.py` (replace the synthetic scene and params with the 
 3. **The f880 parameter meaning** (radius, focal length, norm = ΣZ/2?) is inferred from the formula, not from the PPU math (`ppu6:61735-62040`). The GPU path should just consume the block.
 4. **Location of rt+0x3AB0**, local (EA 0xC0000000+off) or IO-mapped, is assumed from the composite's texture offset. The capture settles it.
 5. **Behaviour for Z[k] < 0** (not physical) differs from the clamp formula. It was ignored.
+
+## 9. Real capture (frame 0xB5F, `scratchpad/ssnap/`) and the GPU port (`scratchpad/ssao/gpu/`)
+
+* obj = **0x00A94600**: pass table there (E,A,D,C,B at +0x000..+0x200), header/state at **0x00A94880**
+  (`0005` passes, table EA 0x00A94600), params E 0x00A94980, A 0x00A94990 (0x100), D/C 0x00A94A90, B 0x00A94AA0.
+  Labels 0x20000880 / 0x20000890, value = 0xB60 (frame).
+* Surfaces: depth copy 0x47884B80 (pitch 0x1400), normals 0x47500B80 (0x1400), half depth 0x47C08B80
+  (0xA00), half AO 0x47CE9B80 (0x280), output **0xCF800000 pitch 0x500** (VRAM 0x0F800000).
+  Tilings: E 1x45 (1280x16), A 8x8 (80x45 half), D 1x45, C 5x8, B 8x12 (80x30 half / 160x60 full).
+* Params: E/B A=-0.099999, B=0.1 (w = 1/(0.1-0.0999999 z): near 10); A: Kx=Ky=5589.4, Kz=15,
+  norm=140.86 (= Kz*sum Z), e0=-1/60, e1=-0.75, dmin=1050.5, dmax=2101, scale 1.2, bias -0.2,
+  M = diag(Kx,Ky,Kz) x world->view rotation (normals are world space); blur k=30, w2=0.1, w1=0.6; B k=40.
+  So a flat surface with n'.z = 0 (sky, normals ~0) gives 0.4 -> byte 102, a camera-facing one 1.0 -> 254.
+* The normals copy was not captured: with normals reconstructed from depth the chain correlates 0.84 with
+  the real b_cf800000 and sky pixels (n'=0) match 92.8% exactly. Exact validation needs a_47500b80.
+* GPU shaders (MSL) reproduce the numpy chain: A 99.99% exact, D/C/B within +-1 (3 far-depth
+  pixels of B off by up to 14 from f32 cancellation), 0.45 ms for all five passes on an M4 Pro.
+
+## 10. End-to-end validation with normals (frame 0xB11, `scratchpad/ssnap2/`)
+
+* Pass A reads the **R,G,B bytes of the normals copy 0x47500B80 at full-res (2x, 2y)** (stream s1, tile
+  160x90 full res, pitch 0x1400); the copy is unchanged between label 134 and label 137 in this run.
+* Lifted job in the host harness on this frame (`gpu/real_job.py`) vs the game's b_cf800000: 98.95% exact
+  (the rest: single-SPU in-place order of pass C).
+* The f64 numpy chain is only 97.2% within +-1 (max 18): every pass floors `num * recip(den)` and the SPU's
+  `fi(frest(x))` reciprocal (no Newton step) sits just below 1/x, so exact quotients come out one lower
+  (flat areas 253, not 254), and the AO pass's 1/dc decides sample texels. With the SPU reciprocal, the
+  1.0 -> 1-2^-24 saturate and truncating final multiplies emulated (`gpu/spufp.py`, `emu_*.py`), the numpy
+  passes become bit-exact against the lifted code (E, D, C 100%, B 100%, A 99.99%).
+* Metal chain with the same emulation (`gpu/ssao_gpu.metal` v2; v1 kept as `ssao_gpu_v1.metal`):
+  **99.97% exact vs the real b_cf800000, max |d| = 1** (321 scattered pixels, round-to-nearest vs the
+  SPU's truncating intermediate ops), 0.64 ms for the five passes. The game's real output matches a
+  clean (ping-pong) vertical blur better than the single-SPU tile order.
