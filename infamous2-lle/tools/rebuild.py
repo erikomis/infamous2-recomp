@@ -1,0 +1,1006 @@
+#!/usr/bin/env python3
+"""rebuild.py -- the whole rebuild, from the player's own copy to a binary.
+
+    python3 infamous2-lle/tools/rebuild.py --game <copy> --rap <file.rap> [--out DIR]
+
+<copy> is the game as RPCS3 installed it (the NPUA80638 folder, or RPCS3's
+data folder that holds dev_hdd0/game/NPUA80638) or one or more PKGs (base
+game first, then updates: pass --game once per file). The .rap is the
+player's licence. Every step of infamous2-lle/README.md "Rebuilding" runs in
+order: toolkit, Python venv, game import, decryption (RPCS3 --decrypt), the
+firmware/PPU/SPU/job lifts and the CMake build.
+
+--out (default: the app data folder, ~/Library/Application Support/
+infamous2-recomp/install on macOS) mirrors this repository's layout, so the
+port's own scripts work there unchanged:
+
+    <out>/ps3recomp-fork/     the toolkit (tools/setup_toolkit.sh)
+    <out>/.venv/              Python for the translators
+    <out>/infamous2/{game,fw,vfs}/   decrypted EBOOT/firmware, game data clone
+    <out>/infamous2-lle/      port sources + lifted code + build/
+    <out>/install.json        what the launcher reads (paths, version)
+
+Nothing here embeds a key, a licence or a game file: they all come from the
+player's machine at run time (PS3_RAP_KEY, only for the optional DLC step,
+comes from the environment and is never printed).
+
+Machine-readable output, one per line, for the launcher (everything else a
+tool prints is passed through as "LOG <line>"):
+
+    PLAN <i>/<n> <step> <state> <title>      state: run | up-to-date | skip
+    CHECK <ok|warn|fail> <name> <message>
+    PROGRESS <step> <i>/<n> <message>
+    SUBPROGRESS <step> <done>/<total>         inside a step (the compile)
+    STEP-DONE <step> <i>/<n> <seconds>
+    STEP-SKIP <step> <i>/<n> <reason>
+    WARN <step> <message>
+    ERROR <step> <message>
+    DONE <path of install.json, or - when it was not written>
+
+Exit status: 0 done, 1 a step failed, 2 a prerequisite is missing.
+Each step remembers what it was built from (<out>/.rebuild/state.json); a
+rerun skips the steps whose inputs did not change. --force reruns all,
+--from STEP reruns from STEP on, --only STEP[,STEP] runs just those.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PORT_SRC = os.path.dirname(HERE)                 # infamous2-lle/
+REPO = os.path.dirname(PORT_SRC)
+SETUP_TOOLKIT = os.path.join(REPO, 'tools', 'setup_toolkit.sh')
+PATCH = os.path.join(PORT_SRC, 'patches', 'ps3recomp-fork-770660a-with-upstream-prs.patch')
+
+TITLE_ID = 'NPUA80638'
+TESTED_APP_VER = '01.03'
+# sha256 of the decrypted EBOOT.elf (NPUA80638, APP_VER 01.03) the port is
+# built and tested against. A hash, not data: a different one only warns.
+TESTED_EBOOT_ELF_SHA256 = '3bfe08df4e2ed1201a83be3d38f13a66e900153dd4071f25a35c3c95a1717298'
+FIRMWARE = ('liblv2', 'libsysmodule', 'libsre')
+
+# Port files copied into <out>/infamous2-lle (the build's sources and tools).
+PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
+              'ssao_gpu.c', 'ssao_gpu.h', 'run.sh', 'config.toml')
+
+# Extra lifted entry points beyond the README recipe, found at run time and
+# present in the build the port is tested with (an interrupted SPU job that
+# resumes at an address with no lifted entry runs on the interpreter there).
+SPU_IMAGE_EXTRA = ('0x9C84', '0x9DB8')                       # spu_0000_at_007FA100
+JOBMOD_EXTRA = (('jobmod_ab654d30fd90_efe70', ('0x15280', '0x155EC')),
+                ('jobmod_cbb4b5c85d75_e59f8', ('0x6C44', '0x6C64')))
+
+GB = 1024 ** 3
+WORK_BYTES = int(1.5 * GB)      # toolkit, venv, lifts, objects, executable
+GAME_HEADROOM = 3 * GB          # below ~3 GB free the game refuses to boot
+
+STEPS = [
+    ('toolkit',  'Toolkit (ps3recomp fork + patches)'),
+    ('venv',     'Python environment for the translators'),
+    ('game',     'Import the game copy'),
+    ('decrypt',  'Decrypt EBOOT and firmware (RPCS3)'),
+    ('port',     'Port sources'),
+    ('firmware', 'Translate the firmware (liblv2, libsysmodule, libsre)'),
+    ('ppu',      'Translate the PPU code'),
+    ('spu',      'Translate the SPU programs'),
+    ('jobs',     'Translate the SPU job modules'),
+    ('dlc',      'DLC licence key (optional)'),
+    ('compile',  'Compile'),
+    ('finish',   'Write install.json'),
+]
+STEP_IDS = [s for s, _ in STEPS]
+
+
+class StepError(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------
+# output
+# --------------------------------------------------------------------------
+def emit(*parts):
+    sys.stdout.write(' '.join(str(p) for p in parts) + '\n')
+    sys.stdout.flush()
+
+
+def log(msg):
+    for line in str(msg).splitlines() or ['']:
+        emit('LOG', line)
+
+
+# --------------------------------------------------------------------------
+# small helpers
+# --------------------------------------------------------------------------
+def sha256_file(path, limit=None):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        left = limit
+        while True:
+            n = 1 << 20 if left is None else min(1 << 20, left)
+            if n == 0:
+                break
+            b = f.read(n)
+            if not b:
+                break
+            h.update(b)
+            if left is not None:
+                left -= len(b)
+    return h.hexdigest()
+
+
+def sha256_text(*parts):
+    h = hashlib.sha256()
+    for p in parts:
+        h.update(str(p).encode('utf-8', 'replace'))
+        h.update(b'\0')
+    return h.hexdigest()
+
+
+def file_sig(path):
+    """Cheap identity of a file we do not want to hash in full."""
+    st = os.stat(path)
+    return '%s:%d:%d' % (os.path.abspath(path), st.st_size, int(st.st_mtime))
+
+
+def read_sfo(path):
+    """PARAM.SFO -> {key: str|int}."""
+    with open(path, 'rb') as f:
+        s = f.read()
+    if s[:4] != b'\0PSF':
+        raise ValueError('%s: not a PARAM.SFO' % path)
+    _, kt, dt, n = struct.unpack_from('<IIII', s, 4)
+    out = {}
+    for k in range(n):
+        ko, fmt, ln, _mx, do = struct.unpack_from('<HHIII', s, 20 + 16 * k)
+        key = s[kt + ko:s.index(b'\0', kt + ko)].decode('ascii', 'replace')
+        val = s[dt + do:dt + do + ln]
+        if fmt == 0x404:
+            out[key] = struct.unpack('<I', val[:4])[0]
+        else:
+            out[key] = val.rstrip(b'\0').decode('utf-8', 'replace')
+    return out
+
+
+def npd_content_id(path):
+    """Content id from the NPD header of an NPDRM SELF (EBOOT.BIN) or EDAT."""
+    with open(path, 'rb') as f:
+        d = f.read(0x2000)
+    i = d.find(b'NPD\0')
+    if i < 0:
+        return None
+    return d[i + 0x10:i + 0x40].split(b'\0', 1)[0].decode('ascii', 'replace') or None
+
+
+def pkg_content_id(path):
+    with open(path, 'rb') as f:
+        h = f.read(0x60)
+    if h[:4] != b'\x7fPKG':
+        return None
+    return h[0x30:0x60].split(b'\0', 1)[0].decode('ascii', 'replace')
+
+
+def existing_ancestor(path):
+    p = os.path.abspath(path)
+    while not os.path.exists(p):
+        q = os.path.dirname(p)
+        if q == p:
+            break
+        p = q
+    return p
+
+
+def free_bytes(path):
+    st = os.statvfs(existing_ancestor(path))
+    return st.f_bavail * st.f_frsize
+
+
+def tree_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def human(n):
+    return '%.1f GB' % (n / GB) if n >= GB / 10 else '%d MB' % (n // (1024 * 1024))
+
+
+def default_out():
+    if sys.platform == 'darwin':
+        base = os.path.expanduser('~/Library/Application Support/infamous2-recomp')
+    elif os.name == 'nt':
+        base = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'infamous2-recomp')
+    else:
+        base = os.path.join(os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share')),
+                            'infamous2-recomp')
+    return os.path.join(base, 'install')
+
+
+def default_rpcs3_dir():
+    if sys.platform == 'darwin':
+        return os.path.expanduser('~/Library/Application Support/rpcs3')
+    if os.name == 'nt':
+        return ''           # portable install: the folder rpcs3.exe sits in (pass --rpcs3-dir)
+    return os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'rpcs3')
+
+
+def find_rpcs3(explicit):
+    cands = [explicit, os.environ.get('RPCS3')]
+    if sys.platform == 'darwin':
+        cands += [os.path.expanduser('~/Applications/RPCS3.app/Contents/MacOS/rpcs3'),
+                  '/Applications/RPCS3.app/Contents/MacOS/rpcs3']
+    cands.append(shutil.which('rpcs3'))
+    for c in cands:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def find_python(explicit):
+    cands = [explicit] if explicit else ['python3.12', 'python3.13', 'python3.11', 'python3.10', 'python3']
+    for c in cands:
+        p = c if os.path.sep in c else shutil.which(c)
+        if not p:
+            continue
+        try:
+            v = subprocess.run([p, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'],
+                               capture_output=True, text=True, timeout=20).stdout.strip()
+            major, minor = (int(x) for x in v.split('.'))
+        except Exception:
+            continue
+        if (major, minor) >= (3, 10):
+            return p, v
+    return None, None
+
+
+def tool_version(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        return (r.stdout or r.stderr).strip().splitlines()[0]
+    except Exception:
+        return None
+
+
+def resolve_game_dir(path):
+    """The NPUA80638 folder from whatever the player pointed at."""
+    for c in (path,
+              os.path.join(path, TITLE_ID),
+              os.path.join(path, 'game', TITLE_ID),
+              os.path.join(path, 'dev_hdd0', 'game', TITLE_ID)):
+        if os.path.isfile(os.path.join(c, 'PARAM.SFO')):
+            return os.path.abspath(c)
+    return None
+
+
+# --------------------------------------------------------------------------
+# the run
+# --------------------------------------------------------------------------
+class Rebuild:
+    def __init__(self, a):
+        self.a = a
+        self.out = os.path.abspath(os.path.expanduser(a.out))
+        self.toolkit = os.path.abspath(a.toolkit) if a.toolkit else os.path.join(self.out, 'ps3recomp-fork')
+        self.venv = os.path.abspath(a.venv) if a.venv else os.path.join(self.out, '.venv')
+        self.py = os.path.join(self.venv, 'Scripts' if os.name == 'nt' else 'bin',
+                               'python.exe' if os.name == 'nt' else 'python')
+        self.legacy = os.path.join(self.out, 'infamous2')         # game/, fw/, vfs/
+        self.game_dir = os.path.join(self.legacy, 'game')
+        self.fw_dir = os.path.join(self.legacy, 'fw')
+        self.vfs = os.path.join(self.legacy, 'vfs')
+        self.vfs_title = os.path.join(self.vfs, 'dev_hdd0', 'game', TITLE_ID)
+        self.port = os.path.join(self.out, 'infamous2-lle')
+        self.state_path = os.path.join(self.out, '.rebuild', 'state.json')
+        self.elf = os.path.join(self.game_dir, 'EBOOT.elf')
+        self.rpcs3_dir = os.path.abspath(os.path.expanduser(a.rpcs3_dir)) if a.rpcs3_dir else default_rpcs3_dir()
+        self.rpcs3 = find_rpcs3(a.rpcs3)
+        self.jobs = a.jobs or os.cpu_count() or 4
+        self.sources = []          # [('dir', path)] or [('pkg', path), ...]
+        self.sfo = {}
+        self.content_id = None
+        self.state = {}
+        self.fails = 0
+        self.keys = {}
+
+    # ---- checks ---------------------------------------------------------
+    def check(self, level, name, msg):
+        emit('CHECK', level, name, msg)
+        if level == 'fail':
+            self.fails += 1
+
+    def check_all(self):
+        a = self.a
+        mach = platform.machine()
+        if sys.platform == 'darwin' and mach == 'arm64':
+            self.check('ok', 'host', 'macOS %s arm64' % platform.mac_ver()[0])
+        else:
+            self.check('warn', 'host', '%s %s: only macOS on Apple Silicon is tested' % (sys.platform, mach))
+
+        # the game copy
+        if not a.game:
+            self.check('fail', 'game', 'no game copy given (--game)')
+        for g in a.game or []:
+            g = os.path.abspath(os.path.expanduser(g))
+            if os.path.isfile(g) and g.lower().endswith('.pkg'):
+                cid = pkg_content_id(g)
+                if not cid:
+                    self.check('fail', 'game', '%s: not a PS3 PKG' % g)
+                elif TITLE_ID not in cid:
+                    self.check('fail', 'game', '%s: PKG for %s, not %s' % (g, cid, TITLE_ID))
+                else:
+                    self.sources.append(('pkg', g))
+                    self.check('ok', 'game', 'PKG %s (%s, %s)' % (os.path.basename(g), cid, human(os.path.getsize(g))))
+            elif os.path.isdir(g):
+                d = resolve_game_dir(g)
+                if not d:
+                    self.check('fail', 'game', '%s: no PARAM.SFO (expected RPCS3\'s dev_hdd0/game/%s)' % (g, TITLE_ID))
+                    continue
+                try:
+                    sfo = read_sfo(os.path.join(d, 'PARAM.SFO'))
+                except Exception as e:
+                    self.check('fail', 'game', str(e)); continue
+                if sfo.get('TITLE_ID') != TITLE_ID:
+                    self.check('fail', 'game', '%s is %s, not %s' % (d, sfo.get('TITLE_ID'), TITLE_ID)); continue
+                if not os.path.isfile(os.path.join(d, 'USRDIR', 'EBOOT.BIN')):
+                    self.check('fail', 'game', '%s: no USRDIR/EBOOT.BIN' % d); continue
+                self.sfo = sfo
+                self.sources.append(('dir', d))
+                ver = sfo.get('APP_VER', '?')
+                lvl = 'ok' if ver == TESTED_APP_VER else 'warn'
+                self.check(lvl, 'game', '%s "%s" APP_VER %s%s at %s' % (
+                    TITLE_ID, sfo.get('TITLE', ''), ver,
+                    '' if lvl == 'ok' else ' (tested: %s)' % TESTED_APP_VER, d))
+                eb = os.path.join(d, 'USRDIR', 'EBOOT.BIN')
+                self.content_id = npd_content_id(eb)
+            else:
+                self.check('fail', 'game', '%s: neither a game folder nor a .pkg' % g)
+        kinds = {k for k, _ in self.sources}
+        if len(kinds) > 1 or (kinds == {'dir'} and len(self.sources) > 1):
+            self.check('fail', 'game', 'give one game folder, or one or more PKGs, not a mix')
+
+        # the licence
+        rap = os.path.abspath(os.path.expanduser(a.rap)) if a.rap else None
+        self.rap = rap
+        if not rap:
+            self.check('fail', 'rap', 'no licence given (--rap file.rap)')
+        elif not os.path.isfile(rap):
+            self.check('fail', 'rap', '%s: not found' % rap)
+        elif os.path.getsize(rap) != 16:
+            self.check('fail', 'rap', '%s: a .rap is 16 bytes, this one is %d' % (rap, os.path.getsize(rap)))
+        else:
+            name = os.path.basename(rap)
+            if TITLE_ID not in name:
+                self.check('warn', 'rap', '%s: the name does not mention %s' % (name, TITLE_ID))
+            else:
+                self.check('ok', 'rap', name)
+            if self.content_id is None and TITLE_ID in name and name.lower().endswith('.rap'):
+                self.content_id = name[:-4]
+
+        # RPCS3: decryption and the firmware
+        if self.rpcs3:
+            self.check('ok', 'rpcs3', self.rpcs3)
+        else:
+            self.check('fail', 'rpcs3', 'RPCS3 not found (it decrypts the EBOOT and the firmware); install it or pass --rpcs3')
+        ext = os.path.join(self.rpcs3_dir, 'dev_flash', 'sys', 'external')
+        missing = [m for m in FIRMWARE if not os.path.isfile(os.path.join(ext, m + '.sprx'))]
+        if not self.rpcs3_dir:
+            self.check('fail', 'firmware', 'pass --rpcs3-dir (the folder holding dev_flash/)')
+        elif missing:
+            self.check('fail', 'firmware', 'PS3 firmware not installed in RPCS3 (%s missing in %s)' % (', '.join(missing), ext))
+        else:
+            self.check('ok', 'firmware', os.path.join(self.rpcs3_dir, 'dev_flash'))
+
+        # build tools
+        py, pv = find_python(a.python)
+        self.base_python = py
+        if self.a.venv and os.path.isfile(self.py):
+            self.check('ok', 'python', 'existing venv %s' % self.venv)
+        elif py:
+            self.check('ok', 'python', '%s (%s)' % (py, pv))
+        else:
+            self.check('fail', 'python', 'Python 3.10+ not found (macOS: brew install python@3.12)')
+        cm = shutil.which('cmake')
+        v = tool_version([cm, '--version']) if cm else None
+        m = re.search(r'(\d+)\.(\d+)', v or '')
+        if not cm:
+            self.check('fail', 'cmake', 'CMake not found (brew install cmake)')
+        elif m and (int(m.group(1)), int(m.group(2))) < (3, 20):
+            self.check('fail', 'cmake', '%s: 3.20 or newer needed' % v)
+        else:
+            self.check('ok', 'cmake', v)
+        nj = shutil.which('ninja')
+        self.check('ok' if nj else 'fail', 'ninja',
+                   tool_version([nj, '--version']) if nj else 'Ninja not found (brew install ninja)')
+        cc = shutil.which('clang') or shutil.which('cc')
+        cxx = shutil.which('clang++') or shutil.which('c++')
+        if cc and cxx:
+            self.check('ok', 'compiler', tool_version([cc, '--version']))
+        else:
+            self.check('fail', 'compiler', 'no C/C++ compiler (macOS: xcode-select --install)')
+        if not a.toolkit or not os.path.isdir(self.toolkit):
+            self.check('ok' if shutil.which('git') else 'fail', 'git',
+                       'git found' if shutil.which('git') else 'git not found (needed to fetch the toolkit)')
+        if sys.platform == 'darwin':
+            prefix = '/opt/homebrew' if os.path.isdir('/opt/homebrew') else '/usr/local'
+            libs = (('SDL2', os.path.join(prefix, 'lib', 'cmake', 'SDL2'), 'fail', 'sdl2'),
+                    ('glslang', os.path.join(prefix, 'lib', 'cmake', 'glslang'), 'fail', 'glslang'),
+                    ('spirv-cross', os.path.join(prefix, 'include', 'spirv_cross', 'spirv_cross_c.h'), 'fail', 'spirv-cross'))
+            for name, p, lvl, pkg in libs:
+                if os.path.exists(p):
+                    self.check('ok', name.lower(), p)
+                else:
+                    # The toolkit's CMake finds these QUIETly: without them it
+                    # still builds, but the game's shaders are never translated.
+                    self.check(lvl, name.lower(), '%s not found (brew install %s)' % (name, pkg))
+
+        # the toolkit patch this checkout of the port expects
+        if not os.path.isfile(PATCH):
+            self.check('fail', 'patch', '%s missing' % PATCH)
+        if a.toolkit:
+            if not os.path.isdir(os.path.join(self.toolkit, 'tools')):
+                self.check('fail', 'toolkit', '%s is not a ps3recomp checkout' % self.toolkit)
+            else:
+                r = subprocess.run(['git', '-C', self.toolkit, 'apply', '--reverse', '--check', PATCH],
+                                   capture_output=True, text=True)
+                self.check('ok' if r.returncode == 0 else 'warn', 'toolkit',
+                           '%s (%s)' % (self.toolkit, 'patched' if r.returncode == 0 else
+                                        'patch not detected: it may be ahead of this port'))
+
+        # the output folder
+        if os.path.abspath(self.out) in (os.path.abspath(PORT_SRC), os.path.abspath(REPO)):
+            self.check('fail', 'out', 'the output folder must not be the repository itself')
+        for k, s in self.sources:
+            if os.path.abspath(self.out).startswith(s + os.sep) or s.startswith(os.path.abspath(self.out) + os.sep):
+                self.check('fail', 'out', 'the output folder and the game copy must not contain each other')
+
+        # disk space
+        need = WORK_BYTES
+        clone = False
+        if self.sources and self.sources[0][0] == 'dir' and not os.path.isdir(self.vfs_title):
+            src = self.sources[0][1]
+            same_dev = os.stat(src).st_dev == os.stat(existing_ancestor(self.out)).st_dev
+            clone = sys.platform == 'darwin' and same_dev
+            if not clone:
+                need += tree_size(src)
+        elif self.sources and self.sources[0][0] == 'pkg' and not os.path.isdir(self.vfs_title):
+            need += sum(os.path.getsize(p) for _, p in self.sources)
+        if self.sources and not a.toolkit and os.path.isdir(self.toolkit):
+            need -= 150 * 1024 * 1024
+        free = free_bytes(self.out)
+        what = 'need ~%s%s, %s free on %s' % (human(need), ' (game data cloned, no copy)' if clone else '',
+                                               human(free), existing_ancestor(self.out))
+        if free < need:
+            self.check('fail', 'disk', what)
+        elif free - need < GAME_HEADROOM:
+            self.check('warn', 'disk', what + '; the game needs ~3 GB free to boot')
+        else:
+            self.check('ok', 'disk', what)
+
+        if os.environ.get('PS3_RAP_KEY'):
+            self.check('ok', 'dlc', 'PS3_RAP_KEY set: the DLC licence key will be derived')
+        else:
+            self.check('warn', 'dlc', 'PS3_RAP_KEY not set: the optional DLC step will be skipped')
+
+    # ---- state ----------------------------------------------------------
+    def load_state(self):
+        try:
+            with open(self.state_path) as f:
+                self.state = json.load(f)
+        except Exception:
+            self.state = {}
+
+    def save_state(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        tmp = self.state_path + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(self.state, f, indent=1, sort_keys=True)
+        os.replace(tmp, self.state_path)
+
+    def compute_keys(self):
+        """What each step is built from; a step reruns when its key changes.
+
+        The lifts are keyed on the content of what they read (the decrypted
+        EBOOT and firmware), so re-importing an identical copy does not
+        re-translate anything. Recomputed before every step, since the
+        inputs of a step only exist once the steps before it ran."""
+        k = self.keys
+        def h(path):
+            return sha256_file(path) if os.path.isfile(path) else 'missing:' + path
+        patch = h(PATCH)
+        k['toolkit'] = sha256_text('toolkit', self.toolkit,
+                                   'external' if self.a.toolkit else patch + h(SETUP_TOOLKIT))
+        k['venv'] = sha256_text('venv', self.venv, self.base_python or '',
+                                h(os.path.join(self.toolkit, 'requirements.txt')))
+        src = []
+        for kind, p in self.sources:
+            if kind == 'pkg':
+                src.append(file_sig(p))
+            else:
+                src.append(p)
+                for f in ('PARAM.SFO', os.path.join('USRDIR', 'EBOOT.BIN')):
+                    q = os.path.join(p, f)
+                    if os.path.exists(q):
+                        src.append(file_sig(q))
+        k['game'] = sha256_text('game', *src)
+        rap = h(self.rap) if self.rap else ''
+        k['decrypt'] = sha256_text('decrypt', k['game'], rap, self.rpcs3_dir)
+        port = [f + h(os.path.join(PORT_SRC, f)) for f in PORT_FILES]
+        for f in sorted(os.listdir(HERE)):
+            if f.endswith(('.py', '.sh')):
+                port.append(f + h(os.path.join(HERE, f)))
+        k['port'] = sha256_text('port', *port)
+        elf = h(self.elf)
+        fw = [h(os.path.join(self.fw_dir, m + '.prx')) for m in FIRMWARE]
+        k['firmware'] = sha256_text('firmware', k['toolkit'], k['venv'], *fw)
+        k['ppu'] = sha256_text('ppu', k['toolkit'], k['venv'], elf)
+        k['spu'] = sha256_text('spu', k['toolkit'], k['venv'], elf)
+        k['jobs'] = sha256_text('jobs', k['spu'], k['port'])
+        k['dlc'] = sha256_text('dlc', k['game'], rap, bool(os.environ.get('PS3_RAP_KEY')))
+        k['compile'] = sha256_text('compile', k['toolkit'], k['port'], k['firmware'], k['ppu'],
+                                   k['spu'], k['jobs'])
+        k['finish'] = 'always'
+
+    def outputs_present(self, step):
+        exe = os.path.join(self.port, 'build', 'Infamous2Recomp' + ('.exe' if os.name == 'nt' else ''))
+        probe = {
+            'toolkit': os.path.join(self.toolkit, 'CMakeLists.txt'),
+            'venv': self.py,
+            'game': os.path.join(self.vfs_title, 'PARAM.SFO'),
+            'decrypt': self.elf,
+            'port': os.path.join(self.port, 'CMakeLists.txt'),
+            'firmware': os.path.join(self.port, 'lle', 'libsre'),
+            'ppu': os.path.join(self.port, 'recompiled', 'ppu_recomp.h'),
+            'spu': os.path.join(self.port, 'spu', 'spu_workloads.c'),
+            'jobs': os.path.join(self.port, 'spu', 'jobmods_register.c'),
+            'compile': exe,
+        }.get(step)
+        return probe is None or os.path.exists(probe)
+
+    def forced(self, sid):
+        a = self.a
+        if a.only:
+            return sid in a.only.split(',')
+        if a.force:
+            return True
+        return bool(a.from_step) and STEP_IDS.index(sid) >= STEP_IDS.index(a.from_step)
+
+    def wanted(self, sid):
+        """Whether a step has to run, judged from what is on disk right now."""
+        if self.a.only and sid not in self.a.only.split(','):
+            return False
+        if self.forced(sid) or sid == 'finish':
+            return True
+        return self.state.get(sid) != self.keys.get(sid) or not self.outputs_present(sid)
+
+    # ---- running tools --------------------------------------------------
+    def run(self, step, cmd, cwd=None, env=None, secret=False, ninja=False, keep=None):
+        shown = ' '.join(('"%s"' % c) if ' ' in str(c) else str(c) for c in cmd)
+        log('$ ' + shown)
+        e = dict(os.environ)
+        e['PS3RECOMP'] = self.toolkit
+        e['PYTHONUNBUFFERED'] = '1'
+        e['PYTHONDONTWRITEBYTECODE'] = '1'   # leave the toolkit checkout as it was
+        if env:
+            e.update(env)
+        if not secret:
+            e.pop('PS3_RAP_KEY', None)      # only the DLC step sees it
+        p = subprocess.Popen([str(c) for c in cmd], cwd=cwd, env=e,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        last = -1
+        buf = b''
+        while True:
+            chunk = p.stdout.read1(65536) if hasattr(p.stdout, 'read1') else p.stdout.read(4096)
+            if not chunk:
+                break
+            buf += chunk
+            parts = re.split(rb'[\r\n]', buf)
+            buf = parts.pop()
+            for raw in parts:
+                line = raw.decode('utf-8', 'replace').rstrip()
+                if not line:
+                    continue
+                if keep is not None and not keep.search(line):
+                    continue
+                if secret:      # never echo key material
+                    line = re.sub(r'\b[0-9a-fA-F]{32}\b', '<hidden>', line)
+                if ninja:
+                    m = re.match(r'\[(\d+)/(\d+)\]', line)
+                    if m:
+                        done, total = int(m.group(1)), int(m.group(2))
+                        pct = done * 200 // max(total, 1)
+                        if pct != last:
+                            last = pct
+                            emit('SUBPROGRESS', step, '%d/%d' % (done, total))
+                emit('LOG', line)
+        if buf.strip():
+            emit('LOG', buf.decode('utf-8', 'replace').rstrip())
+        rc = p.wait()
+        if rc != 0:
+            what = cmd[1] if len(cmd) > 1 and str(cmd[0]) == self.py else cmd[0]
+            raise StepError('%s exited with status %d' % (os.path.basename(str(what)), rc))
+
+    def T(self, name):
+        return os.path.join(self.toolkit, 'tools', name)
+
+    # ---- steps ----------------------------------------------------------
+    def step_toolkit(self):
+        if self.a.toolkit:
+            log('using the toolkit at %s as is' % self.toolkit)
+            return
+        self.run('toolkit', ['sh', SETUP_TOOLKIT, self.toolkit])
+
+    def step_venv(self):
+        if self.a.venv:
+            log('using the venv at %s as is' % self.venv)
+            return
+        if not os.path.isfile(self.py):
+            self.run('venv', [self.base_python, '-m', 'venv', self.venv])
+        self.run('venv', [self.py, '-m', 'pip', 'install', '--disable-pip-version-check', '-q',
+                          '-r', os.path.join(self.toolkit, 'requirements.txt')])
+
+    def step_game(self):
+        parent = os.path.dirname(self.vfs_title)
+        os.makedirs(parent, exist_ok=True)
+        if os.path.lexists(self.vfs_title):
+            log('replacing %s' % self.vfs_title)
+            shutil.rmtree(self.vfs_title)
+        kind = self.sources[0][0]
+        if kind == 'dir':
+            src = self.sources[0][1]
+            emit('PROGRESS', 'game', self.idx('game'), 'cloning %s' % src)
+            ok = False
+            if sys.platform == 'darwin':
+                # APFS clone: no extra space, and the port never writes into RPCS3's copy
+                r = subprocess.run(['cp', '-Rc', src, self.vfs_title], capture_output=True, text=True)
+                ok = r.returncode == 0
+                if not ok:
+                    log('clone failed (%s), copying instead' % r.stderr.strip())
+                    if os.path.exists(self.vfs_title):
+                        shutil.rmtree(self.vfs_title)
+            if not ok:
+                shutil.copytree(src, self.vfs_title, symlinks=True)
+        else:
+            for _, pkg in self.sources:
+                emit('PROGRESS', 'game', self.idx('game'), 'extracting %s' % os.path.basename(pkg))
+                self.run('game', [self.py, self.T('pkg_extract.py'), pkg, self.vfs_title])
+        sfo_path = os.path.join(self.vfs_title, 'PARAM.SFO')
+        if not os.path.isfile(sfo_path):
+            raise StepError('no PARAM.SFO after the import')
+        self.sfo = read_sfo(sfo_path)
+        if self.sfo.get('TITLE_ID') != TITLE_ID:
+            raise StepError('imported copy is %s, not %s' % (self.sfo.get('TITLE_ID'), TITLE_ID))
+        if self.sfo.get('APP_VER') != TESTED_APP_VER:
+            emit('WARN', 'game', 'APP_VER %s; the port is tested with %s (install the game update)'
+                 % (self.sfo.get('APP_VER'), TESTED_APP_VER))
+        for d in (os.path.join(self.vfs, 'dev_hdd0', 'home', '00000001', 'savedata'),
+                  os.path.join(self.vfs, 'dev_hdd1')):
+            os.makedirs(d, exist_ok=True)
+        link = os.path.join(self.vfs, 'PS3_GAME')
+        if not os.path.lexists(link):
+            os.symlink(os.path.join('dev_hdd0', 'game', TITLE_ID), link)
+
+    def rpcs3_decrypt(self, path, want):
+        if os.path.exists(want):
+            os.remove(want)
+        # RPCS3 prints its whole Vulkan/LLVM start-up banner; keep what matters
+        self.run('decrypt', [self.rpcs3, '--decrypt', path],
+                 keep=re.compile(r'decrypt|error|fail|fatal|rap|licen|key', re.I))
+        if not os.path.isfile(want):
+            raise StepError('RPCS3 did not write %s (is the licence installed and the firmware present?)' % want)
+
+    def step_decrypt(self):
+        os.makedirs(self.game_dir, exist_ok=True)
+        os.makedirs(self.fw_dir, exist_ok=True)
+        usr = os.path.join(self.vfs_title, 'USRDIR')
+        bin_src = os.path.join(usr, 'EBOOT.BIN')
+        bin_dst = os.path.join(self.game_dir, 'EBOOT.BIN')
+        if os.path.isfile(bin_src):
+            shutil.copy2(bin_src, bin_dst)
+        if not os.path.isfile(bin_dst):
+            raise StepError('no EBOOT.BIN in the imported copy')
+
+        # RPCS3 looks the licence up as exdata/<content id>.rap
+        cid = npd_content_id(bin_dst) or self.content_id
+        if not cid:
+            raise StepError('EBOOT.BIN has no NPD header (not the PSN release?)')
+        exdata = os.path.join(self.rpcs3_dir, 'dev_hdd0', 'home', '00000001', 'exdata')
+        dst = os.path.join(exdata, cid + '.rap')
+        if os.path.isfile(dst):
+            if sha256_file(dst) != sha256_file(self.rap):
+                emit('WARN', 'decrypt', '%s already in RPCS3 and differs from %s; using RPCS3\'s'
+                     % (os.path.basename(dst), self.rap))
+            else:
+                log('licence already installed in RPCS3: %s' % dst)
+        else:
+            os.makedirs(exdata, exist_ok=True)
+            shutil.copyfile(self.rap, dst)
+            log('licence installed in RPCS3: %s' % dst)
+
+        emit('PROGRESS', 'decrypt', self.idx('decrypt'), 'EBOOT.BIN')
+        self.rpcs3_decrypt(bin_dst, self.elf)
+        with open(self.elf, 'rb') as f:
+            if f.read(4) != b'\x7fELF':
+                raise StepError('EBOOT.elf is not an ELF: decryption failed')
+        if sha256_file(self.elf) != TESTED_EBOOT_ELF_SHA256:
+            emit('WARN', 'decrypt', 'EBOOT.elf differs from the tested 01.03 executable: '
+                 'the lift may not match (expect problems)')
+        ext = os.path.join(self.rpcs3_dir, 'dev_flash', 'sys', 'external')
+        for m in FIRMWARE:
+            emit('PROGRESS', 'decrypt', self.idx('decrypt'), m + '.sprx')
+            s = os.path.join(self.fw_dir, m + '.sprx')
+            shutil.copy2(os.path.join(ext, m + '.sprx'), s)
+            self.rpcs3_decrypt(s, os.path.join(self.fw_dir, m + '.prx'))
+        # the game runs the decrypted executable from its own USRDIR
+        if os.path.isfile(bin_src):
+            os.remove(bin_src)
+        shutil.copy2(self.elf, os.path.join(usr, 'EBOOT.elf'))
+
+    def step_port(self):
+        os.makedirs(os.path.join(self.port, 'tools'), exist_ok=True)
+        pairs = [(os.path.join(PORT_SRC, f), os.path.join(self.port, f)) for f in PORT_FILES]
+        pairs += [(os.path.join(HERE, f), os.path.join(self.port, 'tools', f))
+                  for f in sorted(os.listdir(HERE)) if f.endswith(('.py', '.sh'))]
+        n = 0
+        for s, d in pairs:
+            if not os.path.isfile(s):
+                continue
+            if os.path.isfile(d):
+                with open(s, 'rb') as fs, open(d, 'rb') as fd:
+                    if fs.read() == fd.read():
+                        continue
+            shutil.copy2(s, d)       # unchanged files keep their mtime: no needless recompile
+            n += 1
+        log('%d port file(s) updated in %s' % (n, self.port))
+
+    def fresh(self, *dirs):
+        for d in dirs:
+            p = os.path.join(self.port, d)
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+
+    def step_firmware(self):
+        self.fresh('lle', 'lle_spu')
+        bases = {'liblv2': '0x30000000', 'libsysmodule': '0x30180000', 'libsre': '0x30100000'}
+        for m in FIRMWARE:
+            emit('PROGRESS', 'firmware', self.idx('firmware'), m)
+            self.run('firmware', [self.py, self.T('lift_firmware_module.py'),
+                                  os.path.join(self.fw_dir, m + '.prx'),
+                                  '--base', bases[m], '--out', os.path.join('lle', m)], cwd=self.port)
+        emit('PROGRESS', 'firmware', self.idx('firmware'), 'libsre SPU kernel')
+        self.run('firmware', [self.py, self.T('lift_firmware_spu.py'), '--module-dir', 'lle/libsre',
+                              '--base', '0x30100000', '--name', 'libsre', '--first-image-id', '100',
+                              '--body', '0x21480:0x2200:0xA00:0xA00:0x2110',
+                              '--body', '0x23680:0x1E40:0xA00:0xA00:0x1C80',
+                              '--body', '0x2A180:0x3DA0:0xA00:0xA00:0x3D00',
+                              '--out', 'lle_spu'], cwd=self.port)
+
+    def step_ppu(self):
+        self.fresh('recompiled')
+        os.makedirs(os.path.join(self.port, 'out'), exist_ok=True)
+        emit('PROGRESS', 'ppu', self.idx('ppu'), 'loading EBOOT.elf')
+        self.run('ppu', [self.py, self.T('ppu_loader.py'), self.elf, '-o', 'out/'], cwd=self.port)
+        emit('PROGRESS', 'ppu', self.idx('ppu'), 'translating (a few minutes)')
+        self.run('ppu', [self.py, self.T('ppu_lifter.py'), self.elf,
+                         '--functions', 'out/EBOOT.functions.json', '--hle-stubs', 'out/EBOOT.imports.json',
+                         '--code-end', '0x742e18', '--max-chunk-lines', '150000',
+                         '--jobs', str(self.jobs), '--output', 'recompiled/'], cwd=self.port)
+
+    def step_spu(self):
+        self.fresh('spu')
+        os.makedirs(os.path.join(self.port, 'out'), exist_ok=True)
+        emit('PROGRESS', 'spu', self.idx('spu'), 'SPU images')
+        self.run('spu', [self.py, self.T('extract_spu_images.py'), self.elf, '-o', 'spu/images'], cwd=self.port)
+        # the Wws_Job policy module: a raw blob the title hands to
+        # cellSpursAddWorkload (guest 0x8E5B00, 11904 bytes, file offset 0x8D5B00)
+        with open(self.elf, 'rb') as f:
+            f.seek(0x8D5B00)
+            blob = f.read(11904)
+        pm = os.path.join(self.port, 'out', 'wwsjob_pm.bin')
+        with open(pm, 'wb') as f:
+            f.write(blob)
+        self.run('spu', [self.py, self.T('wrap_spu_elf.py'), 'out/wwsjob_pm.bin', '--base', '0xA00',
+                         '--entry', '0xA00', '--out', 'spu/images/wwsjob_pm_at_008E5B00.elf'], cwd=self.port)
+        emit('PROGRESS', 'spu', self.idx('spu'), 'translating the SPU images')
+        self.run('spu', [self.py, self.T('build_spu_workloads.py'), '--images', 'spu/images', '--lifted', 'spu',
+                         '--out', 'spu/spu_workloads.c', '--register-fn', 'infamous2_spu_register_all',
+                         '--constructor', '--title', 'infamous2', '--eboot', self.elf,
+                         '--extra-funcs', 'wwsjob_pm_at_008E5B00=0xA2C',
+                         '--extra-funcs', 'spu_0000_at_007FA100=' + ','.join(SPU_IMAGE_EXTRA)],
+                 cwd=self.port)
+
+    def step_jobs(self):
+        spu = os.path.join(self.port, 'spu')
+        for n in os.listdir(spu) if os.path.isdir(spu) else []:
+            p = os.path.join(spu, n)
+            if n.startswith(('jobmod_', 'datamod_', 'relocmod_')) or n == 'jobmods':
+                shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+            elif n in ('jobmods_register.c', 'datamods_register.c', 'relocmods_register.c', 'jobmods_manifest.json'):
+                os.remove(p)
+        tools = os.path.join(self.port, 'tools')
+        emit('PROGRESS', 'jobs', self.idx('jobs'), 'job modules (C0DEC0DE)')
+        self.run('jobs', [self.py, os.path.join(tools, 'extract_eboot_jobmods.py'), self.elf,
+                          '--out', 'spu/jobmods'], cwd=self.port)
+        self.run('jobs', [self.py, self.T('lift_jobmods.py'), '--jobmods', 'spu/jobmods', '--out', 'spu',
+                          '--register', 'spu/jobmods_register.c', '--symbol-prefix', 'infamous2'], cwd=self.port)
+        # entries the interpreter was seen resuming at (SPU_REJOIN_DBG /
+        # "branched into unlifted LS"), added by hand to the dev build
+        for mod, extra in JOBMOD_EXTRA:
+            self.run('jobs', [self.py, os.path.join(tools, 'relift_jobmod.py'), mod, '--extra', ','.join(extra),
+                              '--jobmods', 'spu/jobmods', '--out', 'spu'], cwd=self.port)
+        emit('PROGRESS', 'jobs', self.idx('jobs'), 'data modules (DA7ABA5E)')
+        self.run('jobs', [self.py, os.path.join(tools, 'lift_datamods.py'), self.elf,
+                          '--out', 'spu', '--extra', '0x6C44,0x6C64'], cwd=self.port)
+        emit('PROGRESS', 'jobs', self.idx('jobs'), 'relocatable jobs')
+        self.run('jobs', [self.py, os.path.join(tools, 'lift_relocmods.py'), self.elf, '--out', 'spu'],
+                 cwd=self.port)
+
+    def step_dlc(self):
+        if not os.environ.get('PS3_RAP_KEY'):
+            emit('WARN', 'dlc', 'PS3_RAP_KEY not set: DLC licence key not derived (the base game is unaffected)')
+            return
+        exdata = os.path.join(self.rpcs3_dir, 'dev_hdd0', 'home', '00000001', 'exdata')
+        found = 0
+        for root, _d, files in os.walk(os.path.join(self.vfs_title, 'USRDIR', 'dlc')):
+            for f in sorted(files):
+                if not f.lower().endswith('.edat'):
+                    continue
+                found += 1
+                edat = os.path.join(root, f)
+                try:
+                    self.run('dlc', [self.py, os.path.join(self.port, 'tools', 'rap2rifkey.py'), edat,
+                                     '--exdata', exdata], secret=True)
+                except StepError as e:
+                    emit('WARN', 'dlc', '%s: %s' % (f, e))
+        if not found:
+            log('no DLC EDATs in this copy')
+
+    def step_compile(self):
+        build = os.path.join(self.port, 'build')
+        emit('PROGRESS', 'compile', self.idx('compile'), 'configuring')
+        self.run('compile', ['cmake', '-S', self.port, '-B', build, '-G', 'Ninja',
+                             '-DCMAKE_BUILD_TYPE=Release', '-DPS3RECOMP_DIR=' + self.toolkit,
+                             '-DPython3_EXECUTABLE=' + self.py])
+        emit('PROGRESS', 'compile', self.idx('compile'), 'compiling (a few minutes)')
+        self.run('compile', ['cmake', '--build', build, '-j', str(self.jobs)], ninja=True)
+
+    def step_finish(self):
+        exe = os.path.join(self.port, 'build', 'Infamous2Recomp' + ('.exe' if os.name == 'nt' else ''))
+        if not os.path.isfile(exe):
+            raise StepError('no executable at %s' % exe)
+        sfo = self.sfo
+        if not sfo and os.path.isfile(os.path.join(self.vfs_title, 'PARAM.SFO')):
+            sfo = read_sfo(os.path.join(self.vfs_title, 'PARAM.SFO'))
+        tk = subprocess.run(['git', '-C', self.toolkit, 'rev-parse', '--short', 'HEAD'],
+                            capture_output=True, text=True).stdout.strip()
+        port_commit = subprocess.run(['git', '-C', REPO, 'rev-parse', '--short', 'HEAD'],
+                                     capture_output=True, text=True).stdout.strip()
+        title = os.path.join(self.vfs, 'PS3_GAME')
+        info = {
+            'schema': 1,
+            'title_id': TITLE_ID,
+            'title': sfo.get('TITLE', ''),
+            'app_ver': sfo.get('APP_VER', ''),
+            'root': self.out,
+            'port_dir': self.port,
+            'run_sh': os.path.join(self.port, 'run.sh'),
+            'executable': exe,
+            'eboot': os.path.join(title, 'USRDIR', 'EBOOT.elf'),
+            'vfs': self.vfs,
+            'dev_flash': os.path.join(self.rpcs3_dir, 'dev_flash'),
+            'icon': os.path.join(title, 'ICON0.PNG'),
+            'background': os.path.join(title, 'PIC1.PNG'),
+            'toolkit_commit': tk,
+            'port_commit': port_commit,
+            'built_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+        }
+        path = os.path.join(self.out, 'install.json')
+        with open(path + '.tmp', 'w') as f:
+            json.dump(info, f, indent=2)
+        os.replace(path + '.tmp', path)
+        log('wrote %s' % path)
+
+    # ---- driver ---------------------------------------------------------
+    def idx(self, step):
+        return '%d/%d' % (STEP_IDS.index(step) + 1, len(STEPS))
+
+    def main(self):
+        self.check_all()
+        self.load_state()
+        self.compute_keys()
+        # The plan is an estimate: a step after one that runs is listed as
+        # "run", and is skipped at its turn if its inputs came out unchanged.
+        upstream = {'venv': ['toolkit'], 'decrypt': ['game'],
+                    'firmware': ['toolkit', 'venv', 'decrypt'], 'ppu': ['toolkit', 'venv', 'decrypt'],
+                    'spu': ['toolkit', 'venv', 'decrypt'], 'jobs': ['spu', 'port'], 'dlc': ['game'],
+                    'compile': ['toolkit', 'port', 'firmware', 'ppu', 'spu', 'jobs']}
+        planned = {}
+        for i, (sid, title) in enumerate(STEPS):
+            r = self.wanted(sid)
+            if not r and not self.a.only:
+                r = any(planned.get(u) for u in upstream.get(sid, []))
+            planned[sid] = r
+            st = 'run' if r else ('skip' if self.a.only else 'up-to-date')
+            emit('PLAN', '%d/%d' % (i + 1, len(STEPS)), sid, st, title)
+        if self.fails:
+            emit('ERROR', 'checks', '%d prerequisite(s) missing' % self.fails)
+            return 2
+        if self.a.dry_run:
+            emit('PROGRESS', 'checks', '0/%d' % len(STEPS), 'dry run: prerequisites ok, nothing done')
+            return 0
+        if self.a.nice:
+            try:
+                os.nice(self.a.nice)
+            except (AttributeError, OSError):
+                pass
+        os.makedirs(self.out, exist_ok=True)
+        for sid, title in STEPS:
+            i = self.idx(sid)
+            self.compute_keys()
+            if not self.wanted(sid):
+                emit('STEP-SKIP', sid, i, 'not requested' if self.a.only else 'up to date')
+                continue
+            emit('PROGRESS', sid, i, title)
+            t0 = time.time()
+            try:
+                getattr(self, 'step_' + sid)()
+            except StepError as e:
+                emit('ERROR', sid, str(e))
+                return 1
+            except Exception as e:      # an unexpected failure still ends with a parsable line
+                emit('ERROR', sid, '%s: %s' % (type(e).__name__, e))
+                return 1
+            if sid != 'finish':
+                self.compute_keys()     # e.g. the venv key reads the toolkit's requirements
+                self.state[sid] = self.keys[sid]
+                self.save_state()
+            emit('STEP-DONE', sid, i, '%.0f' % (time.time() - t0))
+        info = os.path.join(self.out, 'install.json')
+        emit('DONE', info if os.path.isfile(info) else '-')
+        return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--game', action='append', help='RPCS3 game folder (NPUA80638) or a PKG; repeat for update PKGs')
+    ap.add_argument('--rap', help="the player's licence (.rap)")
+    ap.add_argument('--out', default=default_out(), help='install folder (default: %(default)s)')
+    ap.add_argument('--rpcs3', help='RPCS3 executable (default: found in the usual places)')
+    ap.add_argument('--rpcs3-dir', help="RPCS3's data folder, holding dev_flash/ and dev_hdd0/ "
+                                        '(default: %s)' % (default_rpcs3_dir() or 'none'))
+    ap.add_argument('--toolkit', help='use this patched ps3recomp checkout instead of cloning one (left untouched)')
+    ap.add_argument('--venv', help='use this Python venv instead of creating one')
+    ap.add_argument('--python', help='Python 3.10+ used to create the venv')
+    ap.add_argument('--jobs', '-j', type=int, help='parallel jobs for the lifter and the compiler')
+    ap.add_argument('--nice', type=int, default=0, help='lower the priority of the whole rebuild by N')
+    ap.add_argument('--dry-run', action='store_true', help='check prerequisites and print the plan; change nothing')
+    ap.add_argument('--force', action='store_true', help='rerun every step')
+    ap.add_argument('--from', dest='from_step', choices=STEP_IDS, help='rerun from this step on')
+    ap.add_argument('--only', help='run only these steps (comma-separated)')
+    ap.add_argument('--list-steps', action='store_true', help='print the step ids and exit')
+    a = ap.parse_args(argv)
+    if a.list_steps:
+        for i, (sid, title) in enumerate(STEPS):
+            emit('STEP', '%d/%d' % (i + 1, len(STEPS)), sid, title)
+        return 0
+    if a.only:
+        bad = [s for s in a.only.split(',') if s not in STEP_IDS]
+        if bad:
+            ap.error('unknown step(s): %s' % ', '.join(bad))
+    return Rebuild(a).main()
+
+
+if __name__ == '__main__':
+    sys.exit(main())
