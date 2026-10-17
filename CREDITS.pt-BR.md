@@ -51,7 +51,10 @@ Diffs originais em `infamous2-lle/patches/upstream-prs/`.
 
 - [RPCS3](https://github.com/RPCS3/rpcs3) — descriptografia do EBOOT e do
   firmware do próprio jogador (`rpcs3 --decrypt`), e referência de
-  comportamento do toolkit.
+  comportamento do toolkit. O `Loader/PUP.cpp` e o `Crypto/unself.cpp`
+  (SCEDecrypter) dele foram lidos, não copiados, para o formato do PUP e dos
+  pacotes do firmware em `tools/pup_extract.py`, junto com a
+  [PS3 Developer Wiki](https://www.psdevwiki.com/ps3/).
 - [sp00nznet/twistedmetal](https://github.com/sp00nznet/twistedmetal) —
   `tools/decrypt_self.py` (MIT), a base do `tools/decrypt_self.py` do port
   (descriptografia sem o RPCS3, NPDRM com o `.rap` do jogador).
