@@ -126,8 +126,10 @@ under `out/<name>/`: the quickest way to report a rendering bug.
 
 Known problems:
 
-- Some building facades out of the sun come out almost black on Metal (the
-  Windows build does not show it); being investigated.
+- In some close-up views at dusk the occlusion-volume passes turned whole
+  facades (and Cole) black; `run.sh` skips them for now (only the soft
+  contact darkening near props is lost) while their math is checked.
+  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws them again.
 - Rarely, an SPU running the Edge geometry job faults and the game stops;
   diagnosed down to a register clobbered inside an atomic loop, not fixed yet.
 - With less than about 3 GB free on the disk the game shows a "not enough

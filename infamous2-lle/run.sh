@@ -57,5 +57,12 @@ export GCM_PARK_GRACE_MS="${GCM_PARK_GRACE_MS:-1000}"
 # the job itself reduced to its completion bookkeeping (gpu_light.c). New Marais
 # walk ~12 -> ~15 fps. PS3RECOMP_ENG_GPU_LIGHT= (empty) turns it off.
 export PS3RECOMP_ENG_GPU_LIGHT="${PS3RECOMP_ENG_GPU_LIGHT-07000B80:07384B80}"
+# The occlusion-volume passes (props/buildings FP 5f740845528b0e62 with the
+# 8x8x8 cone LUT, characters FP 7875289ea6b856a6) multiply the ambient term,
+# and in some close-up views at dusk they turn whole facades -- and Cole --
+# black, which the console does not do. Skipped until their math is found to
+# differ; the only loss is the soft contact darkening near props.
+# PS3RECOMP_ENG_SKIP_FP= (empty) draws them again.
+export PS3RECOMP_ENG_SKIP_FP="${PS3RECOMP_ENG_SKIP_FP-5f740845528b0e62,7875289ea6b856a6}"
 
 exec "$here/build/Infamous2Recomp" "$vfs/PS3_GAME/USRDIR/EBOOT.elf" "$@"
