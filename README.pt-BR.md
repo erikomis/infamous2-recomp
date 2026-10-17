@@ -36,7 +36,7 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Prólogo em Empire City (a Besta, o cargueiro) | ✅ |
 | New Marais: primeiras missões, jogadas com janela e DualSense | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), saves, DLC | ✅ |
-| Desempenho | 🚶 26–28 fps andando em New Marais (o jogo foi feito para 30) |
+| Desempenho | ✅ 30 fps andando em New Marais (o limite do próprio jogo): frames de 29,7–30,4 ms headless, ou seja, folga de ~33 fps |
 | Jogo inteiro | ❓ ninguém passou ainda de 1% |
 | Teclado e mouse com janela | 🧪 mapeados, pouco testados |
 | Linux e Windows | ⏳ planejado |

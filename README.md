@@ -35,7 +35,7 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Empire City prologue (the Beast, the freighter) | ✅ |
 | New Marais: first missions, played in a window with a DualSense | ✅ |
 | Brazilian Portuguese dub and subtitles (default), saves, DLC | ✅ |
-| Performance | 🚶 26–28 fps walking in New Marais (the game targets 30) |
+| Performance | ✅ 30 fps walking in New Marais (the game's own cap): frames 29.7–30.4 ms headless, i.e. ~33 fps of headroom |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Keyboard and mouse in a window | 🧪 mapped, barely tested |
 | Linux and Windows | ⏳ planned |
