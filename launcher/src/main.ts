@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { GAME_LANGS, Key, Lang, lang, setLang, t, translateDom } from "./i18n";
 import { RebuildProgress } from "./progress";
 
@@ -50,6 +50,35 @@ interface Status {
   rebuildScript: string | null;
   dataRoot: string;
   defaultInstallDir: string;
+  hostSupported: boolean;
+  os: string;
+}
+interface CheckItem {
+  level: "ok" | "warn" | "fail";
+  name: string;
+  message: string;
+}
+interface Prereqs {
+  os: string;
+  arch: string;
+  supported: boolean;
+  clt: boolean;
+  homebrew: string | null;
+  script: string | null;
+  checks: CheckItem[];
+  brewMissing: string[];
+  rpcs3Missing: boolean;
+  firmwareMissing: boolean;
+  ok: boolean;
+  error: string | null;
+}
+interface LicenceSearch {
+  gameDir: string | null;
+  title: string | null;
+  appVer: string | null;
+  contentId: string | null;
+  raps: string[];
+  searched: string[];
 }
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -106,6 +135,8 @@ function applyLang(l: Lang) {
   sel.value = settings.gameLang;
   renderHome();
   renderProgress();
+  renderPrereqs();
+  renderGame(lastSearch);
 }
 
 function bindSettings() {
@@ -229,8 +260,9 @@ function renderHome() {
   const play = $<HTMLButtonElement>("play");
   play.textContent = t(gameRunning ? "home.stop" : "home.play");
   play.classList.toggle("danger", gameRunning);
-  play.disabled = rebuildRunning;
+  play.disabled = rebuildRunning || !status.hostSupported;
   show($("run-state"), gameRunning);
+  show($("home-unsupported"), !status.hostSupported);
 
   const s = status.lastSave;
   const box = $("save-info");
@@ -274,7 +306,148 @@ $("open-log").addEventListener("click", async () => {
   invoke("reveal", { path: p.game });
 });
 
-// ---- install ------------------------------------------------------------------
+// ---- install: 1. prerequisites ---------------------------------------------------
+const URL_RPCS3 = "https://rpcs3.net/download";
+const URL_FIRMWARE = "https://rpcs3.net/quickstart";
+let prereqs: Prereqs | null = null;
+let setupRunning = false;
+let cltPoll = 0;
+
+/** Human name of a rebuild.py check. */
+function checkLabel(name: string): string {
+  const k = `prereq.name.${name}` as Key;
+  const v = t(k);
+  return v === k ? name : v;
+}
+
+async function refreshPrereqs() {
+  $("prereq-msg").textContent = t("prereq.checking");
+  prereqs = await invoke<Prereqs>("check_prereqs");
+  $("prereq-msg").textContent = prereqs.error && prereqs.supported ? t("prereq.error", { e: prereqs.error }) : "";
+  renderPrereqs();
+  // the Command Line Tools install in Apple's own window; stop polling once they are in
+  if (cltPoll && prereqs.clt) {
+    window.clearInterval(cltPoll);
+    cltPoll = 0;
+  }
+}
+
+function prereqAction(c: CheckItem): HTMLButtonElement | null {
+  if (c.level !== "fail" || !prereqs) return null;
+  const b = document.createElement("button");
+  if (c.name === "xcode-clt") {
+    b.textContent = t("prereq.installClt");
+    b.addEventListener("click", installClt);
+  } else if (c.name === "rpcs3") {
+    b.textContent = t("prereq.getRpcs3");
+    b.addEventListener("click", () => invoke("open_url", { url: URL_RPCS3 }));
+  } else if (c.name === "firmware") {
+    b.textContent = t("prereq.howFirmware");
+    b.addEventListener("click", () => invoke("open_url", { url: URL_FIRMWARE }));
+  } else {
+    return null;
+  }
+  return b;
+}
+
+function renderPrereqs() {
+  const p = prereqs;
+  const card = $("card-prereqs");
+  const list = $("prereqs");
+  list.innerHTML = "";
+  const supported = status?.hostSupported ?? p?.supported ?? true;
+  show($("install-unsupported"), !supported);
+  for (const id of ["card-prereqs", "card-game", "card-run"]) $(id).classList.toggle("disabled", !supported);
+  if (!p || !p.supported) {
+    $("prereq-summary").textContent = "";
+    show($("prereq-fix"), false);
+    show($("prereq-brew-missing"), false);
+    return;
+  }
+  const fails = p.checks.filter((c) => c.level === "fail");
+  const hints: Record<string, Key> = {
+    rpcs3: "prereq.hint.rpcs3",
+    firmware: "prereq.hint.firmware",
+    "xcode-clt": "prereq.hint.clt",
+    disk: "prereq.hint.disk",
+  };
+  // the failed ones first, then the rest
+  for (const c of [...fails, ...p.checks.filter((c) => c.level !== "fail")]) {
+    const li = document.createElement("li");
+    li.className = `check-${c.level}`;
+    li.innerHTML = `<span class="ico"></span><span class="what"><b></b><span class="msg"></span></span>`;
+    li.querySelector(".ico")!.textContent = ICON[c.level] ?? "·";
+    li.querySelector("b")!.textContent = checkLabel(c.name);
+    const hint = c.level === "fail" && hints[c.name] ? ` ${t(hints[c.name])}` : "";
+    li.querySelector(".msg")!.textContent = c.message + hint;
+    const act = prereqAction(c);
+    if (act) li.appendChild(act);
+    list.appendChild(li);
+  }
+  const sum = $("prereq-summary");
+  sum.className = "pill " + (p.ok ? "" : "bad");
+  sum.textContent = p.ok ? t("prereq.allOk") : t("prereq.missingN", { n: fails.length || 1 });
+  card.classList.toggle("done", p.ok);
+  const brewable = p.brewMissing.length > 0;
+  show($("prereq-fix"), !p.clt || (brewable && !!p.homebrew));
+  $<HTMLButtonElement>("prereq-fix").disabled = setupRunning;
+  $("prereq-fix").textContent = p.homebrew
+    ? t("prereq.fixBrew", { pkgs: p.brewMissing.join(" ") })
+    : t("prereq.installClt");
+  show($("prereq-brew-missing"), brewable && !p.homebrew);
+  show($("setup-cancel"), setupRunning);
+}
+
+async function installClt() {
+  const yes = await ask(t("prereq.askClt"), { title: t("prereq.installClt"), kind: "info" });
+  if (!yes) return;
+  try {
+    await invoke("install_clt");
+    $("prereq-msg").textContent = t("prereq.cltStarted");
+    if (!cltPoll) cltPoll = window.setInterval(refreshPrereqs, 15000);
+  } catch (e) {
+    $("prereq-msg").textContent = String(e);
+  }
+}
+
+$("prereq-fix").addEventListener("click", async () => {
+  if (!prereqs) return;
+  if (!prereqs.clt) return installClt();
+  if (!prereqs.homebrew || !prereqs.brewMissing.length) return;
+  const pkgs = prereqs.brewMissing;
+  const yes = await ask(t("prereq.askBrew", { pkgs: pkgs.join(" ") }), { title: t("prereq.fix"), kind: "info" });
+  if (!yes) return;
+  const pre = $("setup-log");
+  pre.textContent = "";
+  show(pre, true);
+  try {
+    await invoke("install_brew", { packages: pkgs });
+    setupRunning = true;
+    $("prereq-msg").textContent = t("prereq.brewRunning");
+  } catch (e) {
+    $("prereq-msg").textContent = String(e);
+  }
+  renderPrereqs();
+});
+$("prereq-recheck").addEventListener("click", refreshPrereqs);
+$("setup-cancel").addEventListener("click", () => invoke("cancel_setup"));
+$("copy-brew").addEventListener("click", () =>
+  navigator.clipboard.writeText(document.querySelector("#prereq-brew-missing code")!.textContent ?? ""));
+document.querySelectorAll<HTMLElement>("[data-url]").forEach((b) =>
+  b.addEventListener("click", () => invoke("open_url", { url: b.dataset.url })));
+
+listen<string>("setup-line", (ev) => {
+  const pre = $("setup-log");
+  pre.textContent += ev.payload + "\n";
+  pre.scrollTop = pre.scrollHeight;
+});
+listen<number>("setup-exit", (ev) => {
+  setupRunning = false;
+  $("prereq-msg").textContent = ev.payload === 0 ? t("prereq.brewDone") : t("prereq.brewFailed", { code: ev.payload });
+  refreshPrereqs();
+});
+
+// ---- install: 2. the game copy and the licence ------------------------------------
 const gamePaths = $<HTMLTextAreaElement>("game-paths");
 const rapPath = $<HTMLInputElement>("rap-path");
 const outDir = $<HTMLInputElement>("out-dir");
@@ -287,13 +460,57 @@ function readInstallForm() {
   $<HTMLInputElement>("install-dir").value = settings.installDir;
   persist();
 }
-[gamePaths, rapPath, outDir].forEach((el) => el.addEventListener("change", readInstallForm));
+[gamePaths, rapPath, outDir].forEach((el) => el.addEventListener("change", () => {
+  readInstallForm();
+  if (el === gamePaths) lookForLicence(false);
+  else renderGame(lastSearch);
+}));
+
+let lastSearch: LicenceSearch | null = null;
+
+function renderGame(r: LicenceSearch | null) {
+  const box = $("game-summary");
+  const have = settings.gamePaths.length > 0;
+  show(box, have);
+  if (!have) return;
+  const isPkg = settings.gamePaths.every((p) => p.toLowerCase().endsWith(".pkg"));
+  const gameOk = isPkg || !!r?.gameDir;
+  $("game-ico").textContent = gameOk ? "✓" : "✕";
+  $("game-ico").className = `ico ${gameOk ? "ok-ico" : "bad-ico"}`;
+  $("game-name").textContent = gameOk
+    ? isPkg
+      ? t("game.pkgs", { n: settings.gamePaths.length })
+      : `${r?.title || "inFAMOUS 2"}${r?.appVer ? ` · ${t("home.version")} ${r.appVer}` : ""}`
+    : t("game.notGame");
+  $("game-where").textContent = r?.gameDir ?? settings.gamePaths.join(", ");
+  const rapOk = !!settings.rapPath;
+  $("rap-ico").textContent = rapOk ? "✓" : "✕";
+  $("rap-ico").className = `ico ${rapOk ? "ok-ico" : "bad-ico"}`;
+  $("rap-state").textContent = rapOk ? t("game.rapFound", { rap: settings.rapPath }) : t("game.rapMissing", { cid: r?.contentId ?? "NPUA80638" });
+  if (!rapOk) ($("more-options") as HTMLDetailsElement).open = true;
+}
+
+/** Look for the .rap that goes with the picked copy; fill it in when found.
+ * `replace`: a new copy was picked, so a licence chosen for the old one goes. */
+async function lookForLicence(replace: boolean) {
+  if (!settings.gamePaths.length) return renderGame(null);
+  const r = await invoke<LicenceSearch>("find_licence", { paths: settings.gamePaths });
+  lastSearch = r;
+  if (r.raps.length && (replace || !settings.rapPath)) {
+    rapPath.value = r.raps[0];
+  } else if (replace && !r.raps.length) {
+    rapPath.value = "";
+  }
+  readInstallForm();
+  renderGame(r);
+}
 
 $("pick-game-dir").addEventListener("click", async () => {
-  const p = await open({ directory: true });
+  const p = await open({ directory: true, title: t("game.pick") });
   if (typeof p === "string") {
     gamePaths.value = p;
     readInstallForm();
+    await lookForLicence(true);
   }
 });
 $("pick-game-pkg").addEventListener("click", async () => {
@@ -301,6 +518,7 @@ $("pick-game-pkg").addEventListener("click", async () => {
   if (Array.isArray(p) && p.length) {
     gamePaths.value = p.join("\n");
     readInstallForm();
+    await lookForLicence(true);
   }
 });
 $("pick-rap").addEventListener("click", async () => {
@@ -308,6 +526,7 @@ $("pick-rap").addEventListener("click", async () => {
   if (typeof p === "string") {
     rapPath.value = p;
     readInstallForm();
+    renderGame(lastSearch);
   }
 });
 $("pick-out").addEventListener("click", async () => {
@@ -317,16 +536,28 @@ $("pick-out").addEventListener("click", async () => {
     readInstallForm();
   }
 });
-$("detect").addEventListener("click", async () => {
-  const d = await invoke<{ gameDir: string | null; raps: string[] }>("detect_rpcs3");
-  if (d.gameDir) gamePaths.value = d.gameDir;
-  if (d.raps.length) rapPath.value = d.raps[0];
-  $("install-msg").textContent = t(d.gameDir ? "install.detected" : "install.notDetected");
-  readInstallForm();
-});
 
+/** RPCS3's own install, when the player installed the game there. */
+async function detectRpcs3(quiet: boolean) {
+  const d = await invoke<LicenceSearch>("detect_rpcs3");
+  if (d.gameDir) {
+    gamePaths.value = d.gameDir;
+    if (d.raps.length) rapPath.value = d.raps[0];
+    readInstallForm();
+    lastSearch = d;
+    renderGame(d);
+  }
+  if (!quiet || d.gameDir) $("install-msg-top").textContent = t(d.gameDir ? "install.detected" : "install.notDetected");
+}
+$("detect").addEventListener("click", () => detectRpcs3(false));
+
+// ---- install: 3. the rebuild ------------------------------------------------------
 async function startRebuild(dryRun: boolean) {
   readInstallForm();
+  if (status && !status.hostSupported) {
+    $("install-msg").textContent = t("unsupported.title");
+    return;
+  }
   if (!status?.rebuildScript) {
     $("install-msg").textContent = t("install.noScript");
     return;
@@ -334,6 +565,10 @@ async function startRebuild(dryRun: boolean) {
   if (!settings.gamePaths.length || !settings.rapPath) {
     $("install-msg").textContent = t("install.needInputs");
     return;
+  }
+  if (!dryRun && prereqs && !prereqs.ok) {
+    const go = await ask(t("install.askMissing"), { title: t("install.start"), kind: "warning" });
+    if (!go) return;
   }
   progress.reset();
   lastDry = dryRun;
@@ -448,6 +683,13 @@ async function main() {
   outDir.value = settings.installDir;
   applyLang(settings.uiLang as Lang);
   await refreshStatus();
+  renderPrereqs();
   if (!status?.install) showView("install");
+  if (status?.hostSupported) {
+    // "only pick the game folder": RPCS3's copy and licence are found on their own
+    if (!settings.gamePaths.length) await detectRpcs3(true);
+    else await lookForLicence(false);
+    await refreshPrereqs();
+  }
 }
 main();

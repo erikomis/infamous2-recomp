@@ -40,6 +40,10 @@
                 <p class="muted" data-i18n="home.notInstalledHint"></p>
                 <button id="go-install" class="primary" data-i18n="home.goInstall">Instalar</button>
               </div>
+              <div id="home-unsupported" class="banner hidden">
+                <strong data-i18n="unsupported.title"></strong>
+                <p data-i18n="unsupported.body"></p>
+              </div>
               <p id="home-msg" class="muted small"></p>
             </div>
           </div>
@@ -58,70 +62,125 @@
 
       <!-- Install --------------------------------------------------------->
       <section id="view-install" class="view">
-        <h1 data-i18n="install.title">Instalar / recompilar</h1>
+        <h1 data-i18n="install.title">Instalar</h1>
         <p class="muted" data-i18n="install.lead"></p>
 
-        <div class="form">
-          <label data-i18n="install.game">Cópia do jogo</label>
-          <div class="field">
-            <textarea id="game-paths" rows="2" spellcheck="false"></textarea>
-            <div class="buttons">
-              <button id="pick-game-dir" data-i18n="install.pickFolder">Pasta…</button>
-              <button id="pick-game-pkg" data-i18n="install.pickPkg">PKG…</button>
-              <button id="detect" data-i18n="install.detect">Procurar no RPCS3</button>
+        <div id="install-unsupported" class="banner hidden">
+          <strong data-i18n="unsupported.title"></strong>
+          <p data-i18n="unsupported.body"></p>
+          <button class="link" data-url="https://github.com/erikomis/infamous2-recomp" data-i18n="unsupported.follow"></button>
+        </div>
+
+        <!-- 1. what this computer still needs -->
+        <div id="card-prereqs" class="card step">
+          <div class="row step-head">
+            <span class="step-no">1</span>
+            <h2 data-i18n="prereq.title">Requisitos deste computador</h2>
+            <span id="prereq-summary" class="pill"></span>
+          </div>
+          <p class="hint" data-i18n="prereq.lead"></p>
+          <ul id="prereqs" class="list prereqs"></ul>
+          <div id="prereq-brew-missing" class="notice hidden">
+            <p data-i18n="prereq.noBrew"></p>
+            <code class="preview">/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</code>
+            <div class="row">
+              <button class="link" data-url="https://brew.sh/" data-i18n="prereq.openBrew"></button>
+              <button id="copy-brew" class="link" data-i18n="prereq.copyCmd"></button>
             </div>
           </div>
-          <p class="hint" data-i18n="install.gameHint"></p>
-
-          <label data-i18n="install.rap">Licença (.rap)</label>
-          <div class="field">
-            <input id="rap-path" type="text" spellcheck="false" />
-            <div class="buttons"><button id="pick-rap" data-i18n="install.pick">Escolher…</button></div>
+          <div class="row">
+            <button id="prereq-fix" class="primary hidden" data-i18n="prereq.fix">Instalar o que falta</button>
+            <button id="prereq-recheck" data-i18n="prereq.recheck">Verificar de novo</button>
+            <button id="setup-cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
           </div>
+          <p id="prereq-msg" class="small"></p>
+          <pre id="setup-log" class="log short hidden"></pre>
+        </div>
 
-          <label data-i18n="install.out">Pasta de instalação</label>
-          <div class="field">
-            <input id="out-dir" type="text" spellcheck="false" />
-            <div class="buttons"><button id="pick-out" data-i18n="install.pick">Escolher…</button></div>
+        <!-- 2. the player's copy -->
+        <div id="card-game" class="card step">
+          <div class="row step-head">
+            <span class="step-no">2</span>
+            <h2 data-i18n="game.title">Sua cópia do jogo</h2>
           </div>
+          <p class="hint" data-i18n="game.lead"></p>
+          <div class="row">
+            <button id="pick-game-dir" class="primary" data-i18n="game.pick">Escolher a pasta do jogo…</button>
+            <button id="detect" data-i18n="install.detect">Procurar no RPCS3</button>
+          </div>
+          <div id="game-summary" class="summary hidden">
+            <div><span class="ico" id="game-ico"></span> <b id="game-name"></b> <span id="game-where" class="muted small"></span></div>
+            <div><span class="ico" id="rap-ico"></span> <span id="rap-state"></span></div>
+          </div>
+          <p id="install-msg-top" class="small"></p>
 
-          <details>
-            <summary data-i18n="settings.advanced">Avançado</summary>
+          <details id="more-options">
+            <summary data-i18n="game.more">Mais opções</summary>
+            <label data-i18n="install.game">Cópia do jogo</label>
+            <div class="field">
+              <textarea id="game-paths" rows="2" spellcheck="false"></textarea>
+              <div class="buttons">
+                <button id="pick-game-pkg" data-i18n="install.pickPkg">PKG…</button>
+              </div>
+            </div>
+            <p class="hint" data-i18n="install.gameHint"></p>
+
+            <label data-i18n="install.rap">Licença (.rap)</label>
+            <div class="field">
+              <input id="rap-path" type="text" spellcheck="false" />
+              <div class="buttons"><button id="pick-rap" data-i18n="install.pick">Escolher…</button></div>
+            </div>
+            <p class="hint" data-i18n="install.rapHint"></p>
+
+            <label data-i18n="install.out">Pasta de instalação</label>
+            <div class="field">
+              <input id="out-dir" type="text" spellcheck="false" />
+              <div class="buttons"><button id="pick-out" data-i18n="install.pick">Escolher…</button></div>
+            </div>
+
             <label data-i18n="install.rapKey">Chave RAP</label>
             <input id="rap-key" type="password" autocomplete="off" spellcheck="false" />
             <p class="hint" data-i18n="install.rapKeyHint"></p>
             <label class="check"><input id="force" type="checkbox" /> <span data-i18n="install.force">Refazer</span></label>
           </details>
+        </div>
 
+        <!-- 3. the rebuild -->
+        <div id="card-run" class="card step">
+          <div class="row step-head">
+            <span class="step-no">3</span>
+            <h2 data-i18n="run.title">Instalar</h2>
+          </div>
+          <p class="hint" data-i18n="run.lead"></p>
           <div class="row actions">
+            <button id="start" class="primary big" data-i18n="install.start">Instalar</button>
             <button id="dry-run" data-i18n="install.check">Verificar</button>
-            <button id="start" class="primary" data-i18n="install.start">Instalar</button>
             <button id="cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
           </div>
-        </div>
 
-        <div class="progress-wrap">
-          <div class="progress"><div id="bar"></div></div>
-          <div id="progress-text" class="small muted"></div>
-          <div id="install-msg"></div>
-        </div>
-
-        <div class="columns">
-          <div>
-            <h3 data-i18n="install.checks">Requisitos</h3>
-            <ul id="checks" class="list"></ul>
+          <div class="progress-wrap">
+            <div class="progress"><div id="bar"></div></div>
+            <div id="progress-text" class="small muted"></div>
+            <div id="install-msg"></div>
           </div>
-          <div>
-            <h3 data-i18n="install.steps">Etapas</h3>
-            <ol id="steps" class="list"></ol>
-          </div>
-        </div>
 
-        <div class="row log-head">
-          <h3 data-i18n="install.log">Log</h3>
-          <button id="copy-log" class="link" data-i18n="install.copyLog">Copiar log</button>
+          <div class="columns">
+            <div>
+              <h3 data-i18n="install.checks">Requisitos</h3>
+              <ul id="checks" class="list"></ul>
+            </div>
+            <div>
+              <h3 data-i18n="install.steps">Etapas</h3>
+              <ol id="steps" class="list"></ol>
+            </div>
+          </div>
+
+          <div class="row log-head">
+            <h3 data-i18n="install.log">Log</h3>
+            <button id="copy-log" class="link" data-i18n="install.copyLog">Copiar log</button>
+          </div>
+          <pre id="log" class="log"></pre>
         </div>
-        <pre id="log" class="log"></pre>
       </section>
 
       <!-- Settings -------------------------------------------------------->
