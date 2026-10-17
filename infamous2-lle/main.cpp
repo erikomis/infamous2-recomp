@@ -346,6 +346,7 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
 }
 
 extern "C" void infamous2_gpu_light_install(void);   /* gpu_light.c */
+extern "C" void infamous2_gpu_ssao_install(void);    /* gpu_ssao.c */
 
 int main(int argc, char** argv)
 {
@@ -355,6 +356,7 @@ int main(int argc, char** argv)
     }
     /* PS3RECOMP_ENG_GPU_LIGHT: the SPU light job's pixel work moves to the GPU. */
     infamous2_gpu_light_install();
+    infamous2_gpu_ssao_install();
 
 #ifdef _WIN32
 #pragma comment(lib, "winmm.lib")

@@ -199,6 +199,8 @@ add_executable(${PROJECT_NAME}
     main.cpp
     stubs.cpp
     gpu_light.c
+    gpu_ssao.c
+    ssao_gpu.c
     ${LLE_SOURCES}
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
