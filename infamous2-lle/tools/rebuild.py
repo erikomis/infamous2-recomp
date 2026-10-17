@@ -16,7 +16,10 @@ exdata) or, with --keys KEYFILE (or $PS3_KEYS), through tools/decrypt_self.py
 with no RPCS3 at all; --decrypt-with picks one (default: python when a key
 file is given, else rpcs3). Both write the same bytes. The firmware .sprx are
 read from --firmware (a dev_flash folder, its sys/external, or any folder
-holding liblv2/libsysmodule/libsre.sprx; default: RPCS3's dev_flash).
+holding liblv2/libsysmodule/libsre.sprx; default: RPCS3's dev_flash). With
+--firmware PS3UPDAT.PUP (Sony's system software update) and a key file
+holding the PKG key set, an extra step ("pup") takes the three modules out
+of it with tools/pup_extract.py into <out>/infamous2/dev_flash/sys/external.
 
 --out (default: the app data folder, ~/Library/Application Support/
 infamous2-recomp/install on macOS) mirrors this repository's layout, so the
@@ -25,6 +28,7 @@ port's own scripts work there unchanged:
     <out>/ps3recomp-fork/     the toolkit (tools/setup_toolkit.sh)
     <out>/.venv/              Python for the translators
     <out>/infamous2/{game,fw,vfs}/   decrypted EBOOT/firmware, game data clone
+    <out>/infamous2/dev_flash/       the modules taken from a PUP (--firmware X.PUP)
     <out>/infamous2-lle/      port sources + lifted code + build/
     <out>/install.json        what the launcher reads (paths, version)
 
@@ -89,6 +93,7 @@ TESTED_FW_PRX_SHA256 = {
     'libsre': '9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6',
 }
 DECRYPT_SELF = os.path.join(HERE, 'decrypt_self.py')
+PUP_EXTRACT = os.path.join(HERE, 'pup_extract.py')
 
 # Port files copied into <out>/infamous2-lle (the build's sources and tools).
 PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
@@ -110,6 +115,7 @@ STEPS = [
     ('toolkit',  'Toolkit (ps3recomp fork + patches)'),
     ('venv',     'Python environment for the translators'),
     ('game',     'Import the game copy'),
+    ('pup',      'Extract the firmware from PS3UPDAT.PUP'),    # only with --firmware X.PUP
     ('decrypt',  'Decrypt EBOOT and firmware'),
     ('port',     'Port sources'),
     ('firmware', 'Translate the firmware (liblv2, libsysmodule, libsre)'),
@@ -350,16 +356,21 @@ def self_header(path):
     return {4: 'APP', 8: 'NPDRM'}.get(ptype, str(ptype)), rev
 
 
-def load_keys(path):
-    """The key file through decrypt_self.Keys (parsing needs no pycryptodome; decrypting
-    runs later in the venv, which has it)."""
+def load_tool(name):
+    """One of the tools next to this script, imported (decrypt_self, pup_extract: parsing
+    needs no pycryptodome; decrypting runs later in the venv, which has it)."""
     sys.path.insert(0, HERE)
     sys.dont_write_bytecode = True      # leave no __pycache__ in the checkout
     try:
-        import decrypt_self
+        return __import__(name)
     finally:
         sys.path.pop(0)
-    return decrypt_self, decrypt_self.Keys.load(path)
+
+
+def load_keys(path):
+    """The key file through decrypt_self.Keys."""
+    ds = load_tool('decrypt_self')
+    return ds, ds.Keys.load(path)
 
 
 def resolve_game_dir(path):
@@ -400,7 +411,13 @@ class Rebuild:
             self.decrypt_with = 'python' if self.keys_file else 'rpcs3'
         fw = a.firmware or (os.path.join(self.rpcs3_dir, 'dev_flash') if self.rpcs3_dir else None)
         self.fw_given = os.path.abspath(os.path.expanduser(fw)) if fw else None
-        self.fw_src = resolve_fw_dir(self.fw_given)
+        # --firmware PS3UPDAT.PUP: the "pup" step extracts the modules into
+        # <out>/infamous2/dev_flash, and the rest reads them from there
+        self.fw_pup = self.fw_given if self.fw_given and os.path.isfile(self.fw_given) else None
+        self.pup_root = os.path.join(self.legacy, 'dev_flash')
+        self.pup_version = None
+        self.fw_src = resolve_fw_dir(self.pup_root if self.fw_pup else self.fw_given)
+        self.steps = [s for s in STEPS if s[0] != 'pup' or self.fw_pup]
         self.jobs = a.jobs or os.cpu_count() or 4
         self.sources = []          # [('dir', path)] or [('pkg', path), ...]
         self.sfo = {}
@@ -513,10 +530,14 @@ class Rebuild:
             else:
                 self.check('fail', 'rpcs3', 'RPCS3 not found (it decrypts the EBOOT and the firmware); '
                            'install it or pass --rpcs3, or decrypt without it: --keys KEYFILE')
+            if self.fw_pup:
+                self.check_keys(pkg_only=True)      # the PUP's packages still need the key file
         else:
             self.check_keys()
         if not self.fw_given:
-            self.check('fail', 'firmware', 'pass --firmware (a dev_flash folder) or --rpcs3-dir')
+            self.check('fail', 'firmware', 'pass --firmware (a dev_flash folder or PS3UPDAT.PUP) or --rpcs3-dir')
+        elif self.fw_pup:
+            self.check_pup()
         elif not self.fw_src:
             self.check('fail', 'firmware', 'PS3 firmware not found: no %s in %s (or its sys/external)'
                        % ('/'.join(m + '.sprx' for m in FIRMWARE), self.fw_given))
@@ -646,10 +667,31 @@ class Rebuild:
         sys.stdout.write(json.dumps(out, indent=1) + '\n')
         return 0 if self.fails == 0 else 2
 
-    def check_keys(self):
-        """The key file holds what this copy's EBOOT and firmware need (read from their clear headers)."""
+    def check_pup(self):
+        """--firmware PS3UPDAT.PUP: a PUP with dev_flash packages, of the tested version."""
+        try:
+            pe = load_tool('pup_extract')
+            with pe.Pup(self.fw_pup) as pup:
+                self.pup_version = pup.version()
+                n = len(pup.packages())
+        except Exception as e:
+            msg = str(e)
+            self.check('fail', 'firmware', msg if self.fw_pup in msg else '%s: %s' % (self.fw_pup, msg))
+            return
+        if not n:
+            self.check('fail', 'firmware', '%s: no dev_flash packages in it' % self.fw_pup)
+        elif self.pup_version != pe.TESTED_FIRMWARE:
+            self.check('warn', 'firmware', '%s: firmware %s (tested: %s; the modules will differ)'
+                       % (self.fw_pup, self.pup_version or '?', pe.TESTED_FIRMWARE))
+        else:
+            self.check('ok', 'firmware', '%s: firmware %s, extracted in the "pup" step' % (self.fw_pup, self.pup_version))
+
+    def check_keys(self, pkg_only=False):
+        """The key file holds what this copy's EBOOT and firmware need (read from their
+        clear headers; with a PUP, also the PKG key set its firmware packages need)."""
         if not self.keys_file:
-            self.check('fail', 'keys', '--decrypt-with python needs a key file (--keys or PS3_KEYS)')
+            self.check('fail', 'keys', ('a PS3UPDAT.PUP' if pkg_only else '--decrypt-with python') +
+                       ' needs a key file (--keys or PS3_KEYS)')
             return
         if not os.path.isfile(self.keys_file):
             self.check('fail', 'keys', '%s: not found' % self.keys_file)
@@ -659,6 +701,24 @@ class Rebuild:
         except Exception as e:
             self.check('fail', 'keys', '%s: %s' % (self.keys_file, e))
             return
+        missing = []
+        if self.fw_pup:
+            try:
+                pe = load_tool('pup_extract')
+                with pe.Pup(self.fw_pup) as pup:
+                    # the modules' own SELF key: read from them once extracted
+                    lack, notes = pe.missing_keys(pup, keys, need_self=not pkg_only and not self.fw_src)
+                missing += lack
+                for n in notes:
+                    self.check('warn', 'keys', n)
+            except Exception as e:
+                missing.append('(the PUP does not read: %s)' % e)
+            if pkg_only:
+                if missing:
+                    self.check('fail', 'keys', '%s lacks: %s' % (self.keys_file, '; '.join(missing)))
+                else:
+                    self.check('ok', 'keys', '%s (the PUP\'s PKG key set)' % self.keys_file)
+                return
         need = []
         for kind, p in self.sources:
             if kind == 'dir':
@@ -670,7 +730,6 @@ class Rebuild:
                 h = self_header(os.path.join(self.fw_src, m + '.sprx'))
                 if h:
                     need.append((m + '.sprx',) + h)
-        missing = []
         for what, ptype, rev in need:
             try:
                 keys.self_key(ptype, rev)
@@ -731,7 +790,11 @@ class Rebuild:
                         src.append(file_sig(q))
         k['game'] = sha256_text('game', *src)
         rap = h(self.rap) if self.rap else ''
-        fw = [file_sig(os.path.join(self.fw_src, m + '.sprx')) for m in FIRMWARE] if self.fw_src else []
+        k['pup'] = sha256_text('pup', file_sig(self.fw_pup), self.pup_root) if self.fw_pup else 'n/a'
+        if self.fw_pup:
+            fw = [k['pup']]     # re-extracting rewrites the .sprx: key on the PUP, not on them
+        else:
+            fw = [file_sig(os.path.join(self.fw_src, m + '.sprx')) for m in FIRMWARE] if self.fw_src else []
         k['decrypt'] = sha256_text('decrypt', k['game'], rap, self.decrypt_with, *fw)
         port = [f + h(os.path.join(PORT_SRC, f)) for f in PORT_FILES]
         for f in sorted(os.listdir(HERE)):
@@ -755,6 +818,7 @@ class Rebuild:
             'toolkit': os.path.join(self.toolkit, 'CMakeLists.txt'),
             'venv': self.py,
             'game': os.path.join(self.vfs_title, 'PARAM.SFO'),
+            'pup': os.path.join(self.pup_root, 'sys', 'external', FIRMWARE[-1] + '.sprx'),
             'decrypt': self.elf,
             'port': os.path.join(self.port, 'CMakeLists.txt'),
             'firmware': os.path.join(self.port, 'lle', 'libsre'),
@@ -887,6 +951,16 @@ class Rebuild:
         link = os.path.join(self.vfs, 'PS3_GAME')
         if not os.path.lexists(link):
             os.symlink(os.path.join('dev_hdd0', 'game', TITLE_ID), link)
+
+    def step_pup(self):
+        if os.path.isdir(self.pup_root):
+            shutil.rmtree(self.pup_root)
+        # -I -B: isolated, and no __pycache__ next to the tools; [i/n] lines are SUBPROGRESS
+        self.run('pup', [self.py, '-I', '-B', PUP_EXTRACT, self.fw_pup, '-o', self.legacy,
+                         '--keys', self.keys_file], secret=True, ninja=True)
+        self.fw_src = resolve_fw_dir(self.pup_root)
+        if not self.fw_src:
+            raise StepError('pup_extract.py did not write %s' % os.path.join(self.pup_root, 'sys', 'external'))
 
     def python_decrypt(self, path, want, rap=False):
         if os.path.exists(want):
@@ -1141,7 +1215,8 @@ class Rebuild:
 
     # ---- driver ---------------------------------------------------------
     def idx(self, step):
-        return '%d/%d' % (STEP_IDS.index(step) + 1, len(STEPS))
+        ids = [s for s, _ in self.steps]
+        return '%d/%d' % (ids.index(step) + 1, len(ids))
 
     def main(self):
         self.check_all()
@@ -1149,23 +1224,23 @@ class Rebuild:
         self.compute_keys()
         # The plan is an estimate: a step after one that runs is listed as
         # "run", and is skipped at its turn if its inputs came out unchanged.
-        upstream = {'venv': ['toolkit'], 'decrypt': ['game'],
+        upstream = {'venv': ['toolkit'], 'pup': ['venv'], 'decrypt': ['game', 'pup'],
                     'firmware': ['toolkit', 'venv', 'decrypt'], 'ppu': ['toolkit', 'venv', 'decrypt'],
                     'spu': ['toolkit', 'venv', 'decrypt'], 'jobs': ['spu', 'port'], 'dlc': ['game'],
                     'compile': ['toolkit', 'port', 'firmware', 'ppu', 'spu', 'jobs']}
         planned = {}
-        for i, (sid, title) in enumerate(STEPS):
+        for i, (sid, title) in enumerate(self.steps):
             r = self.wanted(sid)
             if not r and not self.a.only:
                 r = any(planned.get(u) for u in upstream.get(sid, []))
             planned[sid] = r
             st = 'run' if r else ('skip' if self.a.only else 'up-to-date')
-            emit('PLAN', '%d/%d' % (i + 1, len(STEPS)), sid, st, title)
+            emit('PLAN', '%d/%d' % (i + 1, len(self.steps)), sid, st, title)
         if self.fails:
             emit('ERROR', 'checks', '%d prerequisite(s) missing' % self.fails)
             return 2
         if self.a.dry_run:
-            emit('PROGRESS', 'checks', '0/%d' % len(STEPS), 'dry run: prerequisites ok, nothing done')
+            emit('PROGRESS', 'checks', '0/%d' % len(self.steps), 'dry run: prerequisites ok, nothing done')
             return 0
         if self.a.nice:
             try:
@@ -1173,7 +1248,7 @@ class Rebuild:
             except (AttributeError, OSError):
                 pass
         os.makedirs(self.out, exist_ok=True)
-        for sid, title in STEPS:
+        for sid, title in self.steps:
             i = self.idx(sid)
             self.compute_keys()
             if not self.wanted(sid):
@@ -1212,8 +1287,9 @@ def main(argv=None):
                          '(default auto: python when a key file is given)')
     ap.add_argument('--keys', default=os.environ.get('PS3_KEYS'),
                     help='key file for --decrypt-with python, scetool format (default: $PS3_KEYS)')
-    ap.add_argument('--firmware', help='PS3 firmware: a dev_flash folder, its sys/external, or a folder '
-                                       'with liblv2/libsysmodule/libsre.sprx (default: RPCS3\'s dev_flash)')
+    ap.add_argument('--firmware', help='PS3 firmware: a dev_flash folder, its sys/external, a folder '
+                                       'with liblv2/libsysmodule/libsre.sprx, or PS3UPDAT.PUP (needs '
+                                       '--keys with the PKG key set) (default: RPCS3\'s dev_flash)')
     ap.add_argument('--toolkit', help='use this patched ps3recomp checkout instead of cloning one (left untouched)')
     ap.add_argument('--venv', help='use this Python venv instead of creating one')
     ap.add_argument('--python', help='Python 3.10+ used to create the venv')
