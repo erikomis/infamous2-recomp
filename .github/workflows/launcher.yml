@@ -1,0 +1,293 @@
+# Builds the launcher (launcher/, Tauri 2) for macOS, Windows and Linux, with
+# the port's own sources bundled as resources (launcher/scripts/stage_port.py)
+# and a check that nothing from the game ends up in a bundle
+# (launcher/scripts/check_bundle.py). Every run uploads the bundles as
+# artifacts; a v* tag also creates a DRAFT release with them attached.
+#
+# Signing is optional and driven by repository secrets (none are required;
+# without them macOS gets an ad-hoc signature and Windows stays unsigned):
+#   macOS:   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
+#            APPLE_SIGNING_IDENTITY ("Developer ID Application: ... (TEAMID)"),
+#            and for notarization APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
+#   Windows: WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD
+# See launcher/README.md "Releases".
+name: launcher
+
+on:
+  push:
+    branches: [main, feat/launcher-ci]
+    tags: ['v*']
+    paths:
+      - 'launcher/**'
+      - 'infamous2-lle/*'
+      - 'infamous2-lle/tools/**'
+      - 'infamous2-lle/patches/**'
+      - 'tools/setup_toolkit.sh'
+      - 'LICENSE'
+      - 'CREDITS.md'
+      - '.github/workflows/launcher.yml'
+  pull_request:
+    paths:
+      - 'launcher/**'
+      - 'infamous2-lle/*'
+      - 'infamous2-lle/tools/**'
+      - 'infamous2-lle/patches/**'
+      - 'tools/setup_toolkit.sh'
+      - 'LICENSE'
+      - 'CREDITS.md'
+      - '.github/workflows/launcher.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: launcher-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+            game_supported: 'true'
+            test: true
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+            game_supported: 'false'
+            test: false
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            game_supported: 'false'
+            test: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      STAGE: launcher/stage/port
+      OUT: dist-bundles
+    steps:
+      - name: Keep line endings as committed (the bundled .sh files)
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+
+      - name: Stage the port sources
+        run: python launcher/scripts/stage_port.py --out "$STAGE"
+
+      - name: The staged rebuild.py runs here
+        run: |
+          set +e
+          python "$STAGE/infamous2-lle/tools/rebuild.py" --check-json > check.json
+          echo "--check-json exit $?"
+          python "$STAGE/infamous2-lle/tools/rebuild.py" --dry-run > dry.txt
+          echo "--dry-run exit $? (2 expected: no game here)"
+          set -e
+          cat check.json
+          python - <<'EOF'
+          import json, sys
+          d = json.load(open('check.json'))
+          want = '${{ matrix.game_supported }}' == 'true'
+          assert d['supported'] is want, ('supported', d['supported'], want)
+          names = {c['name']: c for c in d['checks']}
+          if not want:
+              assert names['host']['level'] == 'fail', names['host']
+          dry = open('dry.txt').read()
+          assert 'PLAN 12/12 finish' in dry and 'ERROR checks' in dry, dry
+          assert 'patch' not in [c['name'] for c in d['checks'] if c['level'] == 'fail'], 'toolkit patch not staged'
+          print('ok: staged rebuild.py, supported=%s' % d['supported'])
+          EOF
+
+      - name: Frontend
+        working-directory: launcher
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run build
+
+      - name: Unit tests
+        if: matrix.test
+        working-directory: launcher/src-tauri
+        run: cargo test --locked
+
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          if [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf '{"version": "%s"}\n' "$v" > launcher/stage/version.conf.json
+            echo "TAURI_EXTRA_CONFIG=--config $GITHUB_WORKSPACE/launcher/stage/version.conf.json" >> "$GITHUB_ENV"
+          else
+            echo "::warning::tag $GITHUB_REF_NAME is not vX.Y.Z; keeping the version in tauri.conf.json"
+          fi
+
+      - name: Signing (macOS)
+        if: runner.os == 'macOS'
+        env:
+          S_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          S_CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          S_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          S_APPLE_ID: ${{ secrets.APPLE_ID }}
+          S_APPLE_PW: ${{ secrets.APPLE_PASSWORD }}
+          S_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Only variables that have a value reach the build: Tauri treats a
+          # set-but-empty APPLE_ID as a request to notarize.
+          put() { { echo "$1<<__EOF__"; printf '%s\n' "$2"; echo "__EOF__"; } >> "$GITHUB_ENV"; }
+          if [ -n "$S_CERT" ] && [ -n "$S_IDENTITY" ]; then
+            put APPLE_CERTIFICATE "$S_CERT"
+            put APPLE_CERTIFICATE_PASSWORD "$S_CERT_PW"
+            put APPLE_SIGNING_IDENTITY "$S_IDENTITY"
+            if [ -n "$S_APPLE_ID" ] && [ -n "$S_APPLE_PW" ] && [ -n "$S_TEAM" ]; then
+              put APPLE_ID "$S_APPLE_ID"; put APPLE_PASSWORD "$S_APPLE_PW"; put APPLE_TEAM_ID "$S_TEAM"
+              echo "Developer ID signing + notarization"
+            else
+              echo "Developer ID signing, no notarization (APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID not set)"
+            fi
+          else
+            put APPLE_SIGNING_IDENTITY "-"
+            echo "::notice::no Apple certificate secrets: ad-hoc signature (players right-click > Open the first time)"
+          fi
+
+      - name: Signing (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          S_CERT: ${{ secrets.WINDOWS_CERTIFICATE }}
+          S_CERT_PW: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:S_CERT) {
+            Write-Output "::notice::no WINDOWS_CERTIFICATE secret: the installers are unsigned (SmartScreen will warn)"
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:S_CERT))
+          $pw = ConvertTo-SecureString -String $env:S_CERT_PW -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Remove-Item $pfx
+          $cfg = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256";
+                    timestampUrl = "http://timestamp.digicert.com" } } } | ConvertTo-Json -Depth 5
+          $file = Join-Path $env:GITHUB_WORKSPACE "launcher/stage/sign.conf.json"
+          Set-Content -Path $file -Value $cfg
+          Add-Content -Path $env:GITHUB_ENV -Value ("TAURI_SIGN_CONFIG=--config " + ($file -replace '\\', '/'))
+          Write-Output "signing with certificate $($cert.Thumbprint)"
+
+      - name: Build the bundles
+        working-directory: launcher
+        run: |
+          # TAURI_EXTRA_CONFIG / TAURI_SIGN_CONFIG are "--config <file>" or empty
+          # shellcheck disable=SC2086
+          npx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
+            --config "$GITHUB_WORKSPACE/launcher/src-tauri/tauri.bundle.conf.json" $TAURI_EXTRA_CONFIG $TAURI_SIGN_CONFIG
+
+      - name: Collect
+        run: |
+          b=launcher/src-tauri/target/${{ matrix.target }}/release/bundle
+          mkdir -p "$OUT"
+          shopt -s nullglob
+          for f in "$b"/dmg/*.dmg "$b"/nsis/*.exe "$b"/msi/*.msi "$b"/appimage/*.AppImage "$b"/deb/*.deb; do
+            cp "$f" "$OUT/"
+          done
+          for app in "$b"/macos/*.app; do
+            n=$(basename "$app" .app)
+            ditto -c -k --sequesterRsrc --keepParent "$app" "$OUT/${n}_${{ matrix.target }}.app.zip"
+          done
+          ls -la "$OUT"
+          test -n "$(ls -A "$OUT")"
+
+      - name: No game files in the bundles
+        run: |
+          extra=()
+          for app in launcher/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app; do extra+=("$app"); done
+          python launcher/scripts/check_bundle.py "$STAGE" "${extra[@]}" "$OUT"/*
+
+      - name: Checksums
+        working-directory: ${{ env.OUT }}
+        run: |
+          if command -v sha256sum >/dev/null; then sha256sum -- * > SHA256SUMS-${{ matrix.name }}.txt
+          else shasum -a 256 -- * > SHA256SUMS-${{ matrix.name }}.txt; fi
+          cat SHA256SUMS-${{ matrix.name }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infamous2-launcher-${{ matrix.name }}
+          path: ${{ env.OUT }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: infamous2-launcher-*
+          merge-multiple: true
+
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -la release
+          cat > notes.md <<EOF
+          Launcher $TAG. It ships no game files: it rebuilds the game from your own
+          copy of inFAMOUS 2 (NPUA80638) on your computer.
+
+          - **macOS (Apple Silicon)**: the \`.dmg\` (or the \`.app.zip\`). Building
+            and playing work on macOS only for now.
+          - **Windows / Linux**: the installers open the app, but building and
+            playing the game are not supported there yet.
+
+          Checksums: \`SHA256SUMS-*.txt\`.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" --draft --verify-tag --title "inFAMOUS 2 recomp launcher $TAG" \
+              --notes-file notes.md release/*
+          fi

@@ -445,7 +445,8 @@ fn kill_tree(pid: u32) {
 }
 
 /// rebuild.py: next to the sources in a development checkout (the launcher
-/// lives in <repo>/launcher), or in the app's bundled resources later on.
+/// lives in <repo>/launcher), or in the app's bundled resources (port/, staged by
+/// launcher/scripts/stage_port.py).
 fn rebuild_script(app: &AppHandle) -> Option<PathBuf> {
     let mut cands = Vec::new();
     if let Some(r) = std::env::var_os("INFAMOUS2_REPO") {
