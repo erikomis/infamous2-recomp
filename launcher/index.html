@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>inFAMOUS 2 recomp</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <nav class="sidebar">
+      <div class="brand">inFAMOUS 2<span>recomp</span></div>
+      <button class="nav active" data-view="home" data-i18n="nav.home">Início</button>
+      <button class="nav" data-view="install" data-i18n="nav.install">Instalar</button>
+      <button class="nav" data-view="settings" data-i18n="nav.settings">Configurações</button>
+      <div class="spacer"></div>
+      <label class="small" for="ui-lang" data-i18n="app.lang">Idioma do app</label>
+      <select id="ui-lang">
+        <option value="pt-BR">Português (Brasil)</option>
+        <option value="en">English</option>
+      </select>
+    </nav>
+
+    <main>
+      <!-- Home ------------------------------------------------------------>
+      <section id="view-home" class="view active">
+        <div class="hero" id="hero">
+          <div class="hero-shade"></div>
+          <div class="hero-body">
+            <img id="cover" class="cover hidden" alt="" />
+            <div class="hero-text">
+              <h1 id="game-title">inFAMOUS 2</h1>
+              <p id="game-meta" class="muted"></p>
+              <div id="installed-actions" class="row hidden">
+                <button id="play" class="primary big" data-i18n="home.play">Jogar</button>
+                <span id="run-state" class="pill hidden" data-i18n="home.running">Em execução</span>
+              </div>
+              <div id="not-installed" class="hidden">
+                <h2 data-i18n="home.notInstalled">O jogo ainda não está instalado</h2>
+                <p class="muted" data-i18n="home.notInstalledHint"></p>
+                <button id="go-install" class="primary" data-i18n="home.goInstall">Instalar</button>
+              </div>
+              <p id="home-msg" class="muted small"></p>
+            </div>
+          </div>
+        </div>
+        <div class="cards">
+          <div class="card">
+            <h3 data-i18n="home.lastSave">Último save</h3>
+            <div id="save-info" class="muted"></div>
+            <div class="row">
+              <button id="open-saves" class="link" data-i18n="home.openSaves">Abrir pasta de saves</button>
+              <button id="open-log" class="link" data-i18n="home.openLog">Abrir log do jogo</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Install --------------------------------------------------------->
+      <section id="view-install" class="view">
+        <h1 data-i18n="install.title">Instalar / recompilar</h1>
+        <p class="muted" data-i18n="install.lead"></p>
+
+        <div class="form">
+          <label data-i18n="install.game">Cópia do jogo</label>
+          <div class="field">
+            <textarea id="game-paths" rows="2" spellcheck="false"></textarea>
+            <div class="buttons">
+              <button id="pick-game-dir" data-i18n="install.pickFolder">Pasta…</button>
+              <button id="pick-game-pkg" data-i18n="install.pickPkg">PKG…</button>
+              <button id="detect" data-i18n="install.detect">Procurar no RPCS3</button>
+            </div>
+          </div>
+          <p class="hint" data-i18n="install.gameHint"></p>
+
+          <label data-i18n="install.rap">Licença (.rap)</label>
+          <div class="field">
+            <input id="rap-path" type="text" spellcheck="false" />
+            <div class="buttons"><button id="pick-rap" data-i18n="install.pick">Escolher…</button></div>
+          </div>
+
+          <label data-i18n="install.out">Pasta de instalação</label>
+          <div class="field">
+            <input id="out-dir" type="text" spellcheck="false" />
+            <div class="buttons"><button id="pick-out" data-i18n="install.pick">Escolher…</button></div>
+          </div>
+
+          <details>
+            <summary data-i18n="settings.advanced">Avançado</summary>
+            <label data-i18n="install.rapKey">Chave RAP</label>
+            <input id="rap-key" type="password" autocomplete="off" spellcheck="false" />
+            <p class="hint" data-i18n="install.rapKeyHint"></p>
+            <label class="check"><input id="force" type="checkbox" /> <span data-i18n="install.force">Refazer</span></label>
+          </details>
+
+          <div class="row actions">
+            <button id="dry-run" data-i18n="install.check">Verificar</button>
+            <button id="start" class="primary" data-i18n="install.start">Instalar</button>
+            <button id="cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
+          </div>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="progress"><div id="bar"></div></div>
+          <div id="progress-text" class="small muted"></div>
+          <div id="install-msg"></div>
+        </div>
+
+        <div class="columns">
+          <div>
+            <h3 data-i18n="install.checks">Requisitos</h3>
+            <ul id="checks" class="list"></ul>
+          </div>
+          <div>
+            <h3 data-i18n="install.steps">Etapas</h3>
+            <ol id="steps" class="list"></ol>
+          </div>
+        </div>
+
+        <div class="row log-head">
+          <h3 data-i18n="install.log">Log</h3>
+          <button id="copy-log" class="link" data-i18n="install.copyLog">Copiar log</button>
+        </div>
+        <pre id="log" class="log"></pre>
+      </section>
+
+      <!-- Settings -------------------------------------------------------->
+      <section id="view-settings" class="view">
+        <div class="row"><h1 data-i18n="settings.title">Configurações</h1><span id="saved" class="pill hidden" data-i18n="settings.saved">Salvo</span></div>
+        <p class="muted" data-i18n="settings.lead"></p>
+
+        <fieldset>
+          <legend data-i18n="settings.game">Jogo</legend>
+          <label for="game-lang" data-i18n="settings.gameLang">Idioma</label>
+          <select id="game-lang"></select>
+          <p class="hint" data-i18n="settings.gameLangHint"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="settings.graphics">Gráficos</legend>
+          <label class="check"><input id="gpu-light" type="checkbox" /> <span data-i18n="settings.gpuLight"></span></label>
+          <p class="hint" data-i18n="settings.gpuLightHint"></p>
+          <label class="check"><input id="gpu-ssao" type="checkbox" /> <span data-i18n="settings.gpuSsao"></span></label>
+          <p class="hint" data-i18n="settings.gpuSsaoHint"></p>
+          <label class="check"><input id="skip-occ" type="checkbox" /> <span data-i18n="settings.skipOcc"></span></label>
+          <p class="hint" data-i18n="settings.skipOccHint"></p>
+          <label class="check"><input id="gamma-on" type="checkbox" /> <span data-i18n="settings.gamma"></span></label>
+          <div class="slider"><input id="gamma" type="range" min="0.8" max="1.2" step="0.01" /><output id="gamma-out"></output></div>
+          <p class="hint" data-i18n="settings.gammaHint"></p>
+          <label for="display" data-i18n="settings.display">Modo de exibição</label>
+          <select id="display" disabled><option data-i18n="settings.windowed">Janela</option></select>
+          <p class="hint" data-i18n="settings.displayHint"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="settings.mouse">Mouse</legend>
+          <label class="check"><input id="mouse-on" type="checkbox" /> <span data-i18n="settings.mouseOn"></span></label>
+          <label data-i18n="settings.mouseSens">Sensibilidade</label>
+          <div class="slider"><input id="mouse-sens" type="range" min="0.25" max="4" step="0.05" /><output id="mouse-sens-out"></output></div>
+          <label class="check"><input id="mouse-invert" type="checkbox" /> <span data-i18n="settings.mouseInvert"></span></label>
+          <label data-i18n="settings.mouseDeadzone">Zona morta</label>
+          <div class="slider"><input id="mouse-dz" type="range" min="0" max="120" step="1" /><output id="mouse-dz-out"></output></div>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="settings.advanced">Avançado</legend>
+          <label data-i18n="settings.installDir">Pasta de instalação</label>
+          <div class="field">
+            <input id="install-dir" type="text" spellcheck="false" />
+            <div class="buttons"><button id="pick-install-dir" data-i18n="install.pick">Escolher…</button></div>
+          </div>
+          <p class="hint" data-i18n="settings.installDirHint"></p>
+          <label data-i18n="settings.extraEnv">Variáveis extras</label>
+          <textarea id="extra-env" rows="3" spellcheck="false"></textarea>
+          <p class="hint" data-i18n="settings.extraEnvHint"></p>
+          <label data-i18n="settings.preview">Comando equivalente</label>
+          <code id="preview" class="preview"></code>
+          <div class="row"><button id="reset" data-i18n="settings.reset">Restaurar padrões</button></div>
+        </fieldset>
+      </section>
+    </main>
+  </body>
+</html>
