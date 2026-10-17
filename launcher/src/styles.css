@@ -144,3 +144,19 @@ legend { padding: 0 6px; color: var(--accent); font-weight: 600; }
 .prereqs .check-fail .msg { color: color-mix(in srgb, var(--bad) 80%, var(--muted)); }
 .pill:empty { display: none; }
 .sidebar select { min-width: 0; width: 100%; }
+
+/* controls */
+table.bindings { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.bindings th, .bindings td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.bindings thead th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.bindings tbody th { width: 150px; font-weight: 600; white-space: nowrap; }
+.bindings td { white-space: nowrap; }
+.bindings tr { transition: background .08s; }
+.bindings tr.held { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.bindings tr.held th { color: var(--accent); }
+button.bind { min-width: 120px; max-width: 240px; white-space: normal; padding: 4px 10px; text-align: left; background: var(--bg); }
+button.bind.capturing { border-color: var(--accent); color: var(--accent); }
+button.unbind { padding: 2px 7px; margin-left: 4px; background: none; border-color: transparent; color: var(--muted); visibility: hidden; }
+.bindings td:hover button.unbind { visibility: visible; }
+select.pad-pick { min-width: 0; width: auto; margin-left: 6px; padding: 3px 6px; }
+#controls-path { margin-top: 8px; }
