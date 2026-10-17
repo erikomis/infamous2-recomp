@@ -138,3 +138,9 @@ legend { padding: 0 6px; color: var(--accent); font-weight: 600; }
 .summary .ok-ico { color: var(--ok); }
 .summary .bad-ico { color: var(--bad); }
 .log.short { height: 160px; margin-top: 10px; }
+.prereqs .tip { display: block; color: var(--text); margin: 2px 0; }
+.prereqs .tip:empty { display: none; }
+.prereqs .msg { display: block; word-break: normal; overflow-wrap: anywhere; font-size: 12px; }
+.prereqs .check-fail .msg { color: color-mix(in srgb, var(--bad) 80%, var(--muted)); }
+.pill:empty { display: none; }
+.sidebar select { min-width: 0; width: 100%; }

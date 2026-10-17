@@ -15,7 +15,7 @@ name: launcher
 
 on:
   push:
-    branches: [main, feat/launcher-ci]
+    branches: [main]
     tags: ['v*']
     paths:
       - 'launcher/**'
@@ -82,13 +82,13 @@ jobs:
       - name: Keep line endings as committed (the bundled .sh files)
         run: git config --global core.autocrlf false
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -226,15 +226,17 @@ jobs:
           for f in "$b"/dmg/*.dmg "$b"/nsis/*.exe "$b"/msi/*.msi "$b"/appimage/*.AppImage "$b"/deb/*.deb; do
             cp "$f" "$OUT/"
           done
+          v=$(python -c "import json,os; f='launcher/stage/version.conf.json'; print(json.load(open(f if os.path.exists(f) else 'launcher/src-tauri/tauri.conf.json'))['version'])")
           for app in "$b"/macos/*.app; do
             n=$(basename "$app" .app)
-            ditto -c -k --sequesterRsrc --keepParent "$app" "$OUT/${n}_${{ matrix.target }}.app.zip"
+            ditto -c -k --sequesterRsrc --keepParent "$app" "$OUT/${n}_${v}_aarch64.app.zip"
           done
           ls -la "$OUT"
           test -n "$(ls -A "$OUT")"
 
       - name: No game files in the bundles
         run: |
+          shopt -s nullglob
           extra=()
           for app in launcher/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app; do extra+=("$app"); done
           python launcher/scripts/check_bundle.py "$STAGE" "${extra[@]}" "$OUT"/*
