@@ -115,6 +115,7 @@ reference.
 | `tools/capture.sh` | Headless run that keeps a PNG of the presented frame every 10 s |
 | `tools/lldb_barrier.py` | Prints the WWS job barrier lanes (attach did not work here; kept for a debug launch) |
 | `tools/decrypt_self.py` | Decrypts a retail SELF (the NPDRM `EBOOT.BIN` with the player's `.rap`, the firmware `.sprx`) to the same ELF bytes `rpcs3 --decrypt` writes, without RPCS3; keys come from the player's key file (`--keys`/`PS3_KEYS`, scetool format), none are in this repository. `--selftest` round-trips a synthetic SELF with made-up keys |
+| `tools/pup_extract.py` | Takes `liblv2.sprx`, `libsysmodule.sprx` and `libsre.sprx` (`--all`: the whole `dev_flash`) out of Sony's `PS3UPDAT.PUP` with the PKG key set from the player's key file, into `DIR/dev_flash/sys/external/`; `--info` lists the PUP and, with `--keys`, which key sets are missing. `--selftest` round-trips a synthetic PUP, firmware package and SELF with made-up keys |
 | `tools/rap2rifkey.py` | Derives an EDAT's RIF key from the player's own `.rap` and writes the `<edat>.rifkey` sidecar (the RAP key itself comes from `PS3_RAP_KEY`; it is not in this repository) |
 | `tools/relift_jobmod.py` | Re-lifts one WWS job module with extra entry addresses |
 | `tools/lift_datamods.py` | Extracts, lifts and registers the five `DA7ABA5E` modules the job manager streams to LS 0x6C00 |
@@ -146,7 +147,24 @@ revision 0x10, the APP key set for 0x1C, `NP_klic_key` and `RAP_KEY`, or
 RPCS3 is not needed at all; `--firmware DIR` points at the `.sprx` (a
 `dev_flash`, its `sys/external`, or any folder holding the three). Either way
 the decrypted EBOOT and modules are checked against the hashes of the tested
-build. At run time the game opens nothing under `/dev_flash` (no such open in
+build.
+
+`--firmware` also takes Sony's `PS3UPDAT.PUP` itself (system software 4.93,
+the one the hashes are for; another version only warns). An extra `pup` step
+then runs `tools/pup_extract.py`: the PUP's `update_files.tar` holds the
+`dev_flash_*.tar.aa.*` packages, each an SCE container of type PKG that the
+key file's PKG key set (a `[section]` with `type=PKG`, or `category=PKG` in
+newer key files, with `erk=`/`riv=`; or `SCEPKG_ERK=`/`SCEPKG_RIV=` lines)
+decrypts into a tar of `dev_flash/...`; the three `.sprx` land in
+`<out>/infamous2/dev_flash/sys/external/` and are decrypted like any other
+(the 4.93 modules use the APP key set for key revision 0x1C). The CHECK
+lines name each key set the file lacks. By hand:
+
+```sh
+python3 -I tools/pup_extract.py PS3UPDAT.PUP --info --keys KEYFILE     # what is in it, what is missing
+python3 -I tools/pup_extract.py PS3UPDAT.PUP -o fw --keys KEYFILE      # fw/dev_flash/sys/external/*.sprx
+python3 tools/rebuild.py --game <copy> --rap <file.rap> --keys KEYFILE --firmware PS3UPDAT.PUP
+``` At run time the game opens nothing under `/dev_flash` (no such open in
 any logged run), so `PS3_DEV_FLASH` does not need RPCS3 either.
 
 By hand, from `../infamous2/README.md`, steps 1, 4 (job modules) and 6 (vfs) are

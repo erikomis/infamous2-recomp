@@ -23,7 +23,10 @@ roadmap).
      of exactly those formulae, output shown in the window. Without
      Homebrew the app shows the official install command and brew.sh.
    - RPCS3 (decrypts the copy once) and the PS3 firmware inside it: not
-     bundled; the app explains and links to rpcs3.net.
+     bundled; the app explains and links to rpcs3.net. (`rebuild.py` can
+     also do without RPCS3, given the player's key file and `--firmware
+     PS3UPDAT.PUP`; the launcher does not offer that yet: no key-file or
+     PUP picker.)
 3. **Game folder**: pick RPCS3's `NPUA80638` folder (or RPCS3's data
    folder). If the game is installed in RPCS3 it is already filled in. The
    licence is found on its own: the app reads the content id from
