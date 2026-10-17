@@ -200,6 +200,7 @@ add_executable(${PROJECT_NAME}
     stubs.cpp
     gpu_light.c
     gpu_ssao.c
+    edge_watch.c
     ssao_gpu.c
     ${LLE_SOURCES}
     ${PS3RECOMP_SCAFFOLD}
