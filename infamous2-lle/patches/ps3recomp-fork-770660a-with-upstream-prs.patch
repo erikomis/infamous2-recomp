@@ -667,7 +667,7 @@ index d403baf..76c5505 100644
 +
  #endif /* PS3RECOMP_CELL_GEM_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 621d53e..9b33bdc 100644
+index 621d53e..e58c2aa 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -10,6 +10,7 @@
@@ -728,7 +728,7 @@ index 621d53e..9b33bdc 100644
          if (SDL_IsGameController(i)) {
              s_sdl_controllers[i] = SDL_GameControllerOpen(i);
          }
-@@ -497,7 +518,68 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
+@@ -497,7 +518,72 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
   *   L1 U  R1 O  L2 Y  R2 P  L3 G  R3 H              START Return/Enter  SELECT Tab */
  volatile uint32_t g_pad_host_keys[4];
  static int pad_key(unsigned vk) { return (g_pad_host_keys[(vk >> 5) & 3] >> (vk & 31)) & 1; }
@@ -744,6 +744,10 @@ index 621d53e..9b33bdc 100644
 + *   PS3_MOUSE_SENS=<f>       speed multiplier (default 1.0)
 + *   PS3_MOUSE_INVERT_Y=1     moving the mouse up looks down
 + *   PS3_MOUSE_DEADZONE=<n>   first stick step past centre, 0-120 (default 30)
++ *   PS3_MOUSE_CAPTURE=0      no cursor capture: motion counts whenever the
++ *                            window is key (by default a click in the game
++ *                            captures the mouse and Esc/Cmd releases it,
++ *                            see rsx_metal_backend.h)
 + * Left button = R1 (bolt), right = R2 (grenade), middle = L1 (aim). */
 +volatile int32_t  g_pad_mouse_dx, g_pad_mouse_dy;
 +volatile uint32_t g_pad_mouse_buttons;
@@ -798,7 +802,7 @@ index 621d53e..9b33bdc 100644
  {
      static const struct { unsigned vk; u16 btn; } map[] = {
          {0x7E, CELL_PAD_CTRL_UP}, {0x7D, CELL_PAD_CTRL_DOWN},
-@@ -518,6 +600,7 @@ static void pad_poll_keys(void)
+@@ -518,6 +604,7 @@ static void pad_poll_keys(void)
      int ly = 128 + (pad_key(0x01) ? 127 : 0) - (pad_key(0x0D) ? 128 : 0);   /* S, W */
      int rx = 128 + (pad_key(0x25) ? 127 : 0) - (pad_key(0x26) ? 128 : 0);   /* L, J */
      int ry = 128 + (pad_key(0x28) ? 127 : 0) - (pad_key(0x22) ? 128 : 0);   /* K, I */
@@ -806,7 +810,7 @@ index 621d53e..9b33bdc 100644
      /* PS3_PAD_FILE: its buttons are held in addition to the keys; an
       * off-centre file axis wins over the keyboard's. */
      { u16 fb; int flx, fly, frx, fry;
-@@ -528,6 +611,22 @@ static void pad_poll_keys(void)
+@@ -528,6 +615,22 @@ static void pad_poll_keys(void)
        if (frx != 128) rx = frx;
        if (fry != 128) ry = fry; }
      PadHostState* hs = &s_host_state[0];
@@ -829,7 +833,7 @@ index 621d53e..9b33bdc 100644
      if (btns != hs->buttons) { printf("[cellPad] keyboard: buttons 0x%04X\n", btns); fflush(stdout); }
      pad_apply(hs, btns, lx, ly, rx, ry);
  }
-@@ -553,9 +652,9 @@ static void pad_poll_backend(void)
+@@ -553,9 +656,9 @@ static void pad_poll_backend(void)
  #ifdef _WIN32
      if (!s_host_state[0].connected) pad_poll_keyboard();
  #endif
@@ -842,7 +846,7 @@ index 621d53e..9b33bdc 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -730,21 +829,40 @@ skip_inject: ;
+@@ -730,21 +833,40 @@ skip_inject: ;
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
       * (DIGITAL2 << 8) | DIGITAL1: START 0x0008, UP 0x0010, DOWN 0x0040,
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
@@ -886,7 +890,7 @@ index 621d53e..9b33bdc 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
-@@ -752,24 +870,47 @@ skip_inject: ;
+@@ -752,24 +874,47 @@ skip_inject: ;
        }
        if (s_sc && port_no == 0) {
            double now = (double)(GetTickCount64() - t0) / 1000.0;
@@ -939,7 +943,7 @@ index 621d53e..9b33bdc 100644
        } }
  
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
-@@ -817,20 +958,32 @@ skip_inject: ;
+@@ -817,20 +962,32 @@ skip_inject: ;
       * started -- which can leave the subject of the demo off-screen or too far
       * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
      { static int s_st = -1;
@@ -2056,7 +2060,7 @@ index 7718d14..4e3c69c 100644
              state->vertex_constants[slot][lane] = f;
              { static int _sq=0, _e=-1; if (_e < 0) _e = getenv("SEQ_DBG") ? 1 : 0; if (_e && slot==256 && lane==0 && __atomic_fetch_add(&_sq, 1, __ATOMIC_RELAXED) < 500)
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..e44c6cb 100644
+index 9a76e67..2c5de47 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -23,6 +23,8 @@
@@ -2097,7 +2101,16 @@ index 9a76e67..e44c6cb 100644
  } eng_texture;
  
  typedef struct { u64 key; u32 handle; u8 fixed; } eng_pipeline;
-@@ -270,6 +278,8 @@ void rsx_draw_engine_decode_render_state(const rsx_dispatch* rsx,
+@@ -195,6 +203,8 @@ static struct {
+     u8* verts;
+     u64 verts_cap;
+     u32 n_verts;
++    u32 vbuf;          /* a cached persistent vertex buffer this draw uses, else 0 */
++    int vbuf_hit;      /* dc.verts was NOT filled: the cache supplied the vertices */
+ 
+     rsx_vertex_layout_plan layout;
+     rsx_vertex_fetch_plan fetch_plan;
+@@ -270,6 +280,8 @@ void rsx_draw_engine_decode_render_state(const rsx_dispatch* rsx,
       * (a depth-prime pass), and rsx_dispatch_init seeds the nv40 reset value
       * so never-written reads as all-on. */
      rs->color_mask  = rsx_dsp_reg(rsx, M_COLOR_MASK);
@@ -2106,7 +2119,7 @@ index 9a76e67..e44c6cb 100644
      rs->stencil_enable    = rsx_dsp_reg(rsx, M_STENCIL_TEST_ENABLE) & 1;
      rs->stencil_two_sided = rsx_dsp_reg(rsx, M_TWO_SIDED_STENCIL) & 1;
      rs->s_func       = rsx_dsp_reg(rsx, M_STENCIL_FUNC);
-@@ -308,6 +318,8 @@ u64 rsx_draw_engine_hash_render_state(const rsx_be_render_state* rs, u64 hash)
+@@ -308,6 +320,8 @@ u64 rsx_draw_engine_hash_render_state(const rsx_be_render_state* rs, u64 hash)
      ENG_HASH_FIELD(cull_face);
      ENG_HASH_FIELD(front_face);
      ENG_HASH_FIELD(color_mask);
@@ -2115,7 +2128,7 @@ index 9a76e67..e44c6cb 100644
      ENG_HASH_FIELD(rt_fp16);
      ENG_HASH_FIELD(stencil_enable);
      ENG_HASH_FIELD(stencil_two_sided);
-@@ -585,10 +597,12 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+@@ -585,10 +599,12 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
      s->handle = handle;
      s->stamp = ++s_surf_clock;
      if (slot == g.n_surfaces) g.n_surfaces++;
@@ -2131,7 +2144,7 @@ index 9a76e67..e44c6cb 100644
      return slot;
  }
  
-@@ -683,10 +697,47 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -683,10 +699,47 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
      z->had_write = 0;
      z->snapshot_valid = 0;
      z->snapshot_rgba_valid = 0;
@@ -2179,7 +2192,7 @@ index 9a76e67..e44c6cb 100644
  /* A depth target read back as a texture, but only once the pass has executed
   * a depth-WRITING draw: a write-enable bit alone does not prove the pass
   * produced a usable depth map, and a clear-only zeta falls through to guest
-@@ -697,6 +748,7 @@ static u32 eng_zdepth_snapshot(u32 slot)
+@@ -697,6 +750,7 @@ static u32 eng_zdepth_snapshot(u32 slot)
      if (!z->handle || !z->had_write) return 0;
      if (z->snapshot_valid && z->snapshot) return z->snapshot;
      if (!g.be->depth_snapshot) return 0;
@@ -2187,7 +2200,7 @@ index 9a76e67..e44c6cb 100644
      const u32 tex = g.be->depth_snapshot(g.be->user, z->handle, z->w, z->h);
      if (!tex) return 0;
      z->snapshot = tex;
-@@ -710,6 +762,7 @@ static u32 eng_zdepth_snapshot_rgba8(u32 slot)
+@@ -710,6 +764,7 @@ static u32 eng_zdepth_snapshot_rgba8(u32 slot)
      if (!z->handle || !z->had_write) return 0;
      if (z->snapshot_rgba_valid && z->snapshot_rgba) return z->snapshot_rgba;
      if (!g.be->depth_snapshot_rgba8) return 0;
@@ -2195,7 +2208,7 @@ index 9a76e67..e44c6cb 100644
      const u32 tex = g.be->depth_snapshot_rgba8(g.be->user, z->handle, z->w, z->h);
      if (!tex) return 0;
      z->snapshot_rgba = tex;
-@@ -750,6 +803,33 @@ static u32 eng_texture_span(u32 fmt, u32 w, u32 h, u32 levels, u32 pitch, int cu
+@@ -750,6 +805,33 @@ static u32 eng_texture_span(u32 fmt, u32 w, u32 h, u32 levels, u32 pitch, int cu
      return lv[n - 1].offset + lv[n - 1].tl.face_bytes;
  }
  
@@ -2229,7 +2242,7 @@ index 9a76e67..e44c6cb 100644
  /* One hash per cached texture per presented frame. Word-at-a-time FNV over
   * the whole span is deliberately cheap: this is a mutation detector, not a
   * content id (rsx_live_draw.c:2002-2026). */
-@@ -779,6 +859,25 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
+@@ -779,6 +861,25 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
      return hash;
  }
  
@@ -2255,7 +2268,7 @@ index 9a76e67..e44c6cb 100644
  static int eng_staging_reserve(u32 bytes)
  {
      if (g.tex_staging_cap >= bytes) return 1;
-@@ -792,11 +891,51 @@ static int eng_staging_reserve(u32 bytes)
+@@ -792,11 +893,51 @@ static int eng_staging_reserve(u32 bytes)
  /* Decode a guest texture out of guest memory and hand every face and level to
   * the backend. Returns the backend handle, or 0. */
  static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
@@ -2308,7 +2321,7 @@ index 9a76e67..e44c6cb 100644
      const u32 faces = cube ? 6u : 1u;
      const u32 face_stride = cube
          ? rsx_texture_cube_face_stride(fmt, w, h, levels, pitch) : 0u;
-@@ -839,10 +978,11 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -839,10 +980,11 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
  #define ENG_TIDX_SIZE (ENG_MAX_TEXTURES * 4u)
  static u32 s_tidx[ENG_TIDX_SIZE];
  static inline u32 eng_tkey(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
@@ -2322,7 +2335,7 @@ index 9a76e67..e44c6cb 100644
      k ^= k >> 33; k *= 0xFF51AFD7ED558CCDull; k ^= k >> 33;
      return (u32)k & (ENG_TIDX_SIZE - 1u);
  }
-@@ -852,41 +992,86 @@ static void eng_tidx_rebuild(void)
+@@ -852,41 +994,90 @@ static void eng_tidx_rebuild(void)
      for (u32 i = 0; i < g.n_textures; i++) {
          const eng_texture* e = &g.textures[i];
          u32 p = eng_tkey(e->location, e->offset, e->format, e->width, e->height,
@@ -2358,6 +2371,10 @@ index 9a76e67..e44c6cb 100644
 +
 +/* Drawstats: the once-a-frame content re-hash of cached textures. */
 +static u64 ds_th_ns, ds_th_bytes, ds_th_count, ds_th_changed;
++/* Drawstats and state of the vertex cache (defined with it, below dc_reset). */
++static u64 ds_vc_hit, ds_vc_miss, ds_vc_skip, ds_vc_new, ds_vc_hashed, ds_vc_ns;
++static u32 s_vc_used;
++static u64 s_vc_bytes;
 +static int eng_ds_enabled(void);
 +static u64 eng_ds_now(void);
 +
@@ -2417,7 +2434,7 @@ index 9a76e67..e44c6cb 100644
                  if (fresh) {
                      g.be->texture_release(g.be->user, e->handle);
                      e->handle = fresh;
-@@ -898,7 +1083,8 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -898,7 +1089,8 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
          return e->handle;
      }
  
@@ -2427,7 +2444,7 @@ index 9a76e67..e44c6cb 100644
      if (!span) return 0;
  
      u32 index;
-@@ -917,14 +1103,21 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -917,14 +1109,21 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
      memset(&e, 0, sizeof(e));
      e.location = location; e.offset = offset; e.format = fmt;
      e.width = w; e.height = h; e.pitch = pitch;
@@ -2452,7 +2469,7 @@ index 9a76e67..e44c6cb 100644
      if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
      if (e.handle || !evicted) { g.textures[index] = e; eng_tidx_rebuild(); }
      return e.handle;
-@@ -967,17 +1160,32 @@ static u32 eng_vtex_mask(void)
+@@ -967,17 +1166,32 @@ static u32 eng_vtex_mask(void)
      return mask;
  }
  
@@ -2489,7 +2506,7 @@ index 9a76e67..e44c6cb 100644
              mask |= 1u << u;
      }
      return mask;
-@@ -1011,6 +1219,12 @@ typedef struct {
+@@ -1011,6 +1225,12 @@ typedef struct {
      u64 structural;             /* rsx_fp_structural_hash; 0 = will not hash */
      int constants_ok;
      u32 tex_mask;               /* rsx_fp_texture_mask */
@@ -2502,7 +2519,7 @@ index 9a76e67..e44c6cb 100644
      u32 used;
      u8* bytes;
      rsx_fp_constant_block constants;
-@@ -1113,6 +1327,10 @@ static const eng_fp_memo* eng_fp_current(void)
+@@ -1113,6 +1333,10 @@ static const eng_fp_memo* eng_fp_current(void)
      m->constants.count = 0;
      m->constants_ok = rsx_fp_collect_constants(uc, size, &m->constants) >= 0;
      m->tex_mask = rsx_fp_texture_mask(uc, size);
@@ -2513,7 +2530,7 @@ index 9a76e67..e44c6cb 100644
      return m;
  }
  
-@@ -1120,15 +1338,35 @@ static const eng_fp_memo* eng_fp_current(void)
+@@ -1120,15 +1344,35 @@ static const eng_fp_memo* eng_fp_current(void)
   * layout and by the pipeline, because they must not disagree: the built-in
   * program declares all sixteen inputs, so narrowing the layout for it would
   * leave the pipeline's vertex descriptor short of what the shader reads. */
@@ -2551,7 +2568,7 @@ index 9a76e67..e44c6cb 100644
  /* The layout the active vertex program actually reads. An uncertain analysis
   * falls back to all sixteen registers (rsx_live_draw.c:3625-3643). */
  static void eng_vertex_layout(rsx_vertex_layout_plan* layout)
-@@ -1172,6 +1410,7 @@ static const char* const kEngFixedVS =
+@@ -1172,6 +1416,7 @@ static const char* const kEngFixedVS =
  "    float4 fog:FOG;\n"
  "    float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
  "    float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7;\n"
@@ -2559,7 +2576,7 @@ index 9a76e67..e44c6cb 100644
  "};\n"
  "cbuffer VPConst : register(b0) {\n"
  "    float4 vp_c[512];\n"
-@@ -1189,6 +1428,7 @@ static const char* const kEngFixedVS =
+@@ -1189,6 +1434,7 @@ static const char* const kEngFixedVS =
  "    Out.col0 = input.a3; Out.col1 = float4(0,0,0,1); Out.fog = (float4)0;\n"
  "    Out.t0 = input.a8; Out.t1 = (float4)0; Out.t2 = (float4)0; Out.t3 = (float4)0;\n"
  "    Out.t4 = (float4)0; Out.t5 = (float4)0; Out.t6 = (float4)0; Out.t7 = (float4)0;\n"
@@ -2567,7 +2584,7 @@ index 9a76e67..e44c6cb 100644
  "    return Out;\n"
  "}\n";
  
-@@ -1225,8 +1465,68 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1225,8 +1471,68 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vp_instrs = fixed ? 0 : vp->instrs, fp_size = fixed ? 0 : fp->size;
  
      const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
@@ -2637,7 +2654,7 @@ index 9a76e67..e44c6cb 100644
  
      static const rsx_fp_constant_block no_constants;
      g.fp_constants = fixed ? &no_constants : &fp->constants;
-@@ -1246,7 +1546,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1246,7 +1552,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      static struct {
          int valid, fixed;
          u64 vp_hash, fp_struct;
@@ -2650,7 +2667,7 @@ index 9a76e67..e44c6cb 100644
          rsx_be_format rt_fmt;
          rsx_be_render_state rs;
          u64 key;
-@@ -1256,10 +1560,16 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1256,10 +1566,16 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      if (!fixed && !in_fp) return 0;
      u64 key;
      if (kmemo.valid && kmemo.fixed == fixed && kmemo.vp_hash == in_vp && kmemo.fp_struct == in_fp &&
@@ -2669,7 +2686,7 @@ index 9a76e67..e44c6cb 100644
          key = kmemo.key;
          goto key_done;
      }
-@@ -1271,7 +1581,15 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1271,7 +1587,15 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          key = eng_fnv1a(&vp->hash, sizeof vp->hash, key);
          key = eng_fnv1a(&fp->structural, sizeof fp->structural, key);
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
@@ -2685,7 +2702,7 @@ index 9a76e67..e44c6cb 100644
          key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
-@@ -1282,9 +1600,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1282,9 +1606,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      key = eng_fnv1a(&rt_count, sizeof rt_count, key);
      key = rsx_draw_engine_hash_render_state(rs, key);
      kmemo.valid = 1; kmemo.fixed = fixed; kmemo.vp_hash = in_vp; kmemo.fp_struct = in_fp;
@@ -2700,7 +2717,7 @@ index 9a76e67..e44c6cb 100644
      kmemo.key = key;
  key_done:;
  
-@@ -1317,14 +1639,41 @@ key_done:;
+@@ -1317,14 +1645,41 @@ key_done:;
          vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
                                           layout->mask, s_vs_hlsl,
                                           sizeof s_vs_hlsl);
@@ -2744,7 +2761,7 @@ index 9a76e67..e44c6cb 100644
      if (vi > 0 && fi > 0)
          handle = g.be->pipeline_create(g.be->user, s_vs_hlsl, s_ps_hlsl, rs,
                                         layout, layout->stride, rt_fmt, rt_count);
-@@ -1336,7 +1685,14 @@ key_done:;
+@@ -1336,7 +1691,14 @@ key_done:;
              snprintf(path, sizeof path, "%s/p%u_vs.hlsl", dir, handle);
              FILE* f = fopen(path, "w"); if (f) { fputs(s_vs_hlsl, f); fclose(f); }
              snprintf(path, sizeof path, "%s/p%u_ps.hlsl", dir, handle);
@@ -2760,35 +2777,201 @@ index 9a76e67..e44c6cb 100644
      { static u32 logs = 0; if (__atomic_fetch_add(&logs, 1, __ATOMIC_RELAXED) < 32)
          fprintf(stderr, "[rsx engine] pipeline %016llx: %s vp %d, fp %d,"
                          " %u constants -> %s\n",
-@@ -1483,7 +1839,7 @@ static void eng_ds_frame_end(u32 frame_draws)
+@@ -1399,6 +1761,8 @@ static void dc_reset(void)
+     dc.n_arr = dc.n_idx = dc.n_packets = 0;
+     dc.n_refs = dc.n_source_refs = dc.n_verts = dc.n_cuts = 0;
+     dc.refs_remapped = 0;
++    dc.vbuf = 0;
++    dc.vbuf_hit = 0;
+     dc.fetch_ok = 1;
+     dc.inl = NULL;
+     dc.inl_bytes = 0;
+@@ -1483,7 +1847,7 @@ static void eng_ds_frame_end(u32 frame_draws)
  {
      static u32 wf;
      if (!eng_ds_enabled()) return;
 -    if (frame_draws <= 1000) { memset(&ds, 0, sizeof ds); memset(ds_pk_ns, 0, sizeof ds_pk_ns); ds_pk_scanned = 0; memset(ds_memo_hit, 0, sizeof ds_memo_hit); memset(ds_memo_miss, 0, sizeof ds_memo_miss); return; }
-+    if (frame_draws <= 1000) { memset(&ds, 0, sizeof ds); memset(ds_pk_ns, 0, sizeof ds_pk_ns); ds_pk_scanned = 0; memset(ds_memo_hit, 0, sizeof ds_memo_hit); memset(ds_memo_miss, 0, sizeof ds_memo_miss); ds_th_ns = ds_th_bytes = ds_th_count = ds_th_changed = 0; return; }
++    if (frame_draws <= 1000) { memset(&ds, 0, sizeof ds); memset(ds_pk_ns, 0, sizeof ds_pk_ns); ds_pk_scanned = 0; memset(ds_memo_hit, 0, sizeof ds_memo_hit); memset(ds_memo_miss, 0, sizeof ds_memo_miss); ds_th_ns = ds_th_bytes = ds_th_count = ds_th_changed = 0; ds_vc_hit = ds_vc_miss = ds_vc_skip = ds_vc_new = ds_vc_hashed = ds_vc_ns = 0; return; }
      if (wf++ % 30 == 0 && ds.draws) {
          const double us = 1e-3;
          fprintf(stderr,
-@@ -1511,6 +1867,9 @@ static void eng_ds_frame_end(u32 frame_draws)
+@@ -1511,6 +1875,12 @@ static void eng_ds_frame_end(u32 frame_draws)
                  ds.draws ? (double)ds_pk_scanned / ds.draws : 0.0, g.n_pipelines,
                  (unsigned long long)ds_memo_hit[0], (unsigned long long)(ds_memo_hit[0] + ds_memo_miss[0]),
                  (unsigned long long)ds_memo_hit[1], (unsigned long long)(ds_memo_hit[1] + ds_memo_miss[1]));
 +        fprintf(stderr, "[drawstats] texture re-hash: %llu textures, %.1f MB, %.0f us, %llu changed\n",
 +                (unsigned long long)ds_th_count, ds_th_bytes / 1e6, ds_th_ns * us,
 +                (unsigned long long)ds_th_changed);
++        fprintf(stderr, "[drawstats] vertex cache: %llu hits, %llu misses, %llu resting, %llu new; hashed %.1f MB in %.0f us; %u keys, %.0f MB resident\n",
++                (unsigned long long)ds_vc_hit, (unsigned long long)ds_vc_miss, (unsigned long long)ds_vc_skip,
++                (unsigned long long)ds_vc_new, ds_vc_hashed / 1e6, ds_vc_ns * us, s_vc_used, s_vc_bytes / 1e6);
                  if (ds.span_draws)
              fprintf(stderr, "[drawstats] index ranges: %llu draws, span %.0f vs unique %.0f vertices"
                      " (%.2fx), refs %.0f; %llu draws (%.0f%%) dense (span <= 1.25 x unique)\n",
-@@ -1524,7 +1883,7 @@ static void eng_ds_frame_end(u32 frame_draws)
+@@ -1524,13 +1894,161 @@ static void eng_ds_frame_end(u32 frame_draws)
                                              (unsigned long long)ds.fmt[t][z]);
          fprintf(stderr, "%s\n", line);
      }
 -    memset(&ds, 0, sizeof ds); memset(ds_pk_ns, 0, sizeof ds_pk_ns); ds_pk_scanned = 0; memset(ds_memo_hit, 0, sizeof ds_memo_hit); memset(ds_memo_miss, 0, sizeof ds_memo_miss);
-+    memset(&ds, 0, sizeof ds); memset(ds_pk_ns, 0, sizeof ds_pk_ns); ds_pk_scanned = 0; memset(ds_memo_hit, 0, sizeof ds_memo_hit); memset(ds_memo_miss, 0, sizeof ds_memo_miss); ds_th_ns = ds_th_bytes = ds_th_count = ds_th_changed = 0;
++    memset(&ds, 0, sizeof ds); memset(ds_pk_ns, 0, sizeof ds_pk_ns); ds_pk_scanned = 0; memset(ds_memo_hit, 0, sizeof ds_memo_hit); memset(ds_memo_miss, 0, sizeof ds_memo_miss); ds_th_ns = ds_th_bytes = ds_th_count = ds_th_changed = 0; ds_vc_hit = ds_vc_miss = ds_vc_skip = ds_vc_new = ds_vc_hashed = ds_vc_ns = 0;
  }
  
  /* Turn this group's batches into a reference list, recording a CUT rather
-@@ -1592,6 +1951,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+  * than fetching a phantom vertex wherever the restart sentinel appears, then
+  * collapse repeated references and fetch each unique vertex once.
+  * rsx_live_draw.c's fetch_batches_hoisted (4165-4292). */
++/* ---- vertex cache ---------------------------------------------------------
++ * Most of a New Marais frame's ~1 M fetched vertices are static geometry whose
++ * source bytes do not change from one frame to the next, yet every draw
++ * fetched, decoded and staged them again (fetch+decode ~5.4 ms of the RSX
++ * thread a frame, plus the staging copy). A draw over one consecutive range
++ * whose every attribute maps a stable guest span is keyed on its layout and
++ * spans and checked by a hash of those source bytes; when the same bytes are
++ * seen in two different frames the decoded vertices go into a persistent
++ * backend buffer, and later draws with the same key and bytes draw from it.
++ * A key whose bytes change three times running (skinned or streamed
++ * geometry) is not hashed again for a while. PS3RECOMP_ENG_VCACHE=0 = off. */
++typedef struct {
++    u64 key, content;
++    u32 vbuf, bytes, n, stride;
++    u32 last_frame, seen_frame, skip_until;
++    u8 seen, changes;
++} eng_vc_entry;
++#define ENG_VC_SIZE   65536u
++#define ENG_VC_BUDGET (512ull << 20)
++static eng_vc_entry s_vc[ENG_VC_SIZE];
++static u32 s_vc_cursor;
++
++static int eng_vc_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_VCACHE"); on = e ? atoi(e) != 0 : 1; }
++    return on && g.be->vbuf_create && g.be->draw_vbuf && g.be->vbuf_release;
++}
++
++static u64 eng_hash_span(const u8* src, u64 n, u64 seed)
++{
++    u64 h[8];
++    for (int k = 0; k < 8; k++) h[k] = seed ^ (0x9E3779B97F4A7C15ull * (u64)(k + 1));
++    u64 i = 0;
++    for (; i + 64 <= n; i += 64) {
++        u64 w[8]; memcpy(w, src + i, sizeof w);
++        for (int k = 0; k < 8; k++) h[k] = (h[k] ^ w[k]) * 1099511628211ull;
++    }
++    u64 r = n;
++    for (int k = 0; k < 8; k++) r ^= h[k] * (u64)(2 * k + 1);
++    for (; i < n; i++) { r ^= src[i]; r *= 1099511628211ull; }
++    return r;
++}
++
++/* Word-at-a-time mix for the cache key (the byte-wise FNV of ~200 bytes of
++ * attribute description per draw was most of the probe's cost). */
++static inline u64 eng_vc_mix(u64 h, u64 v)
++{
++    h ^= v * 0x9E3779B97F4A7C15ull;
++    h = (h << 27) | (h >> 37);
++    return h * 0xBF58476D1CE4E5B9ull + 0x94D049BB133111EBull;
++}
++
++static void eng_vc_drop(eng_vc_entry* e)
++{
++    if (e->vbuf) { g.be->vbuf_release(g.be->user, e->vbuf); s_vc_bytes -= e->bytes; }
++    e->vbuf = 0; e->bytes = 0;
++}
++
++/* Key, then (unless the key is resting) the content hash of the spans. NULL:
++ * this draw is not cached. */
++static eng_vc_entry* eng_vc_probe(const rsx_vertex_layout_plan* layout, u64* content)
++{
++    const rsx_vertex_fetch_plan* pl = &dc.fetch_plan;
++    if (pl->inline_data || !dc.n_refs) return NULL;
++    u64 key = eng_vc_mix(0x243F6A8885A308D3ull, ((u64)layout->count << 32) | layout->stride);
++    key = eng_vc_mix(key, dc.n_refs);
++    const u8* lo[RSX_DSP_NUM_VERTEX_ATTR]; const u8* hi[RSX_DSP_NUM_VERTEX_ATTR];
++    u32 nr = 0;
++    for (u32 slot = 0; slot < layout->count; slot++) {
++        const u32 a = layout->attrs[slot];
++        const rsx_vertex_fetch_attr* f = &pl->attr[a];
++        key = eng_vc_mix(key, ((u64)a << 56) ^ ((u64)f->desc.type << 48) ^ ((u64)f->desc.size << 40) ^
++                              ((u64)((pl->divider_mask >> a) & 1u) << 39) ^ ((u64)f->desc.frequency << 16) ^
++                              ((u64)f->stride << 8) ^ f->elem_size);
++        if (f->desc.type && f->desc.size && f->elem_size) {
++            if (!f->stable_base) return NULL;          /* resolver path: not a plain span */
++            key = eng_vc_mix(key, (u64)(uintptr_t)f->stable_base);
++            key = eng_vc_mix(key, ((u64)f->stable_first << 32) | f->stable_last);
++            lo[nr] = f->stable_base;
++            hi[nr] = f->stable_base + (u64)(f->stable_last - f->stable_first) * f->stride + f->elem_size;
++            nr++;
++        } else {
++            u64 dv[2]; memcpy(dv, f->default_value, sizeof dv);
++            key = eng_vc_mix(eng_vc_mix(key, dv[0]), dv[1]);
++        }
++    }
++    if (!key) key = 1;
++    u32 p = (u32)(key ^ (key >> 32)) & (ENG_VC_SIZE - 1u);
++    eng_vc_entry* e = NULL;
++    for (u32 probe = 0; probe < 32; probe++, p = (p + 1) & (ENG_VC_SIZE - 1u)) {
++        if (s_vc[p].key == key) { e = &s_vc[p]; break; }
++        if (!s_vc[p].key) {
++            if (s_vc_used >= ENG_VC_SIZE / 4u * 3u) {   /* full: start over */
++                for (u32 i = 0; i < ENG_VC_SIZE; i++) eng_vc_drop(&s_vc[i]);
++                memset(s_vc, 0, sizeof s_vc); s_vc_used = 0;
++                return NULL;
++            }
++            e = &s_vc[p]; memset(e, 0, sizeof *e); e->key = key; s_vc_used++;
++            break;
++        }
++    }
++    if (!e) return NULL;
++    if (e->skip_until > g.frames) { ds_vc_skip++; return NULL; }
++    /* Hash the union of the attribute spans: interleaved attributes share one. */
++    for (u32 i = 1; i < nr; i++)            /* insertion sort by start */
++        for (u32 j = i; j > 0 && lo[j] < lo[j - 1]; j--) {
++            const u8* t = lo[j]; lo[j] = lo[j - 1]; lo[j - 1] = t;
++            t = hi[j]; hi[j] = hi[j - 1]; hi[j - 1] = t;
++        }
++    u64 c = 0x51ED270B27A3F5E1ull;
++    for (u32 i = 0; i < nr; ) {
++        const u8* a0 = lo[i]; const u8* a1 = hi[i];
++        for (i++; i < nr && lo[i] <= a1 + 64; i++) if (hi[i] > a1) a1 = hi[i];
++        c = eng_hash_span(a0, (u64)(a1 - a0), c);
++        ds_vc_hashed += (u64)(a1 - a0);
++    }
++    *content = c;
++    return e;
++}
++
++/* After a fetch: a second sighting of the same bytes in a later frame makes
++ * the decoded vertices persistent; changed bytes drop them. */
++static void eng_vc_after_fetch(eng_vc_entry* e, u64 content, u32 stride)
++{
++    const u32 bytes = dc.n_refs * stride;
++    if (e->seen && e->content == content && e->seen_frame != g.frames) {
++        if (!e->vbuf) {
++            while (s_vc_bytes + bytes > ENG_VC_BUDGET) {      /* evict the stale */
++                u32 tries = 0;
++                for (; tries < ENG_VC_SIZE; tries++, s_vc_cursor = (s_vc_cursor + 1) & (ENG_VC_SIZE - 1u))
++                    if (s_vc[s_vc_cursor].vbuf && s_vc[s_vc_cursor].last_frame + 2 < g.frames) break;
++                if (tries == ENG_VC_SIZE) break;
++                eng_vc_drop(&s_vc[s_vc_cursor]);
++            }
++            if (s_vc_bytes + bytes <= ENG_VC_BUDGET) {
++                e->vbuf = g.be->vbuf_create(g.be->user, dc.verts, bytes);
++                if (e->vbuf) { e->bytes = bytes; e->n = dc.n_refs; e->stride = stride; s_vc_bytes += bytes; ds_vc_new++; }
++            }
++        }
++        e->changes = 0;
++    } else if (e->seen && e->content != content) {
++        eng_vc_drop(e);
++        if (++e->changes >= 3) { e->skip_until = g.frames + 240u; e->changes = 0; }
++    }
++    e->content = content; e->seen = 1; e->seen_frame = g.frames; e->last_frame = g.frames;
++}
++
+ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+ {
+     const int dso = eng_ds_enabled();
+@@ -1592,6 +2110,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
      /* Only a topology this engine rebuilds through an index buffer may share
       * repeated references. A line strip or a point list is drawn in the order
       * it arrived, so collapsing duplicates would reorder it. */
@@ -2796,7 +2979,7 @@ index 9a76e67..e44c6cb 100644
      if (allow_remap && dc.n_refs > 1) {
          u32 unique = dc.n_refs;
          /* Drawstats: how dense each draw's index range is -- the span from its
-@@ -1616,6 +1976,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -1616,6 +2135,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
          if (!dedup && rsx_vertex_remap_build_range(&dc.ref_remap, dc.refs, dc.n_refs, &ranged)) {
              dc.refs_remapped = 1;
              dc.n_refs = ranged;
@@ -2804,16 +2987,45 @@ index 9a76e67..e44c6cb 100644
          } else if (rsx_vertex_remap_build(&dc.ref_remap, dc.refs, dc.n_refs, &unique)) {
              if (dso && span_same_base) {
                  const u64 span = (u64)span_hi - span_lo + 1u;
-@@ -1632,7 +1993,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -1632,8 +2152,28 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
      dc.layout = *layout;
      rsx_vertex_fetch_plan_init(&dc.fetch_plan, &g.rsx, layout, eng_guest_ptr, NULL);
      rsx_vertex_fetch_plan_set_inline(&dc.fetch_plan, &g.rsx, dc.inl, dc.inl_bytes);
 -    rsx_vertex_fetch_plan_prepare(&dc.fetch_plan, dc.refs, dc.n_refs);
 +    rsx_vertex_fetch_plan_prepare_ex(&dc.fetch_plan, dc.refs, dc.n_refs, consecutive);
      if (dso) { t1 = eng_ds_now(); ds.ns_plan += t1 - t0; t0 = t1; }
++    eng_vc_entry* ve = NULL;
++    u64 vc_content = 0;
++    if (consecutive && layout->stride && eng_vc_on()) {
++        const u64 v0 = dso ? eng_ds_now() : 0;
++        ve = eng_vc_probe(layout, &vc_content);
++        if (dso) ds_vc_ns += eng_ds_now() - v0;
++        if (ve && ve->vbuf && ve->content == vc_content &&
++            ve->n == dc.n_refs && ve->stride == layout->stride) {
++            ve->last_frame = g.frames;
++            dc.layout = *layout;
++            dc.vbuf = ve->vbuf;
++            dc.vbuf_hit = 1;
++            dc.n_verts = dc.n_refs;
++            ds_vc_hit++;
++            if (dso) { t1 = eng_ds_now(); ds.ns_fetch += t1 - t0;
++                       ds.refs += dc.n_source_refs; ds.uniq += dc.n_refs; }
++            return;
++        }
++        if (ve) ds_vc_miss++;
++    }
      if (!dc_reserve_verts((u64)dc.n_refs * layout->stride)) {
          dc.fetch_ok = 0;
-@@ -1742,6 +2103,219 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
+         return;
+@@ -1646,6 +2186,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+         return;
+     }
+     dc.n_verts = dc.n_refs;
++    if (ve) eng_vc_after_fetch(ve, vc_content, layout->stride);
+     if (dso) {
+         ds.ns_fetch += eng_ds_now() - t0;
+         ds.refs += dc.n_source_refs;
+@@ -1742,6 +2283,219 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
  /* Texture units the current guest fragment program samples: a unit can stay
   * enabled with a stale binding (a shadow pass keeps its own map bound), and a
   * snapshot is only worth taking for one the program reads. */
@@ -3033,7 +3245,7 @@ index 9a76e67..e44c6cb 100644
  static u32 eng_fp_tex_mask(void)
  {
      const eng_fp_memo* fp = NULL;
-@@ -1755,12 +2329,32 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1755,12 +2509,32 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                rsx_be_sampler_desc samplers[RSX_BE_MAX_TEXTURES])
  {
      u32 mask = 0;
@@ -3067,7 +3279,7 @@ index 9a76e67..e44c6cb 100644
  
          /* Several targets can share an address (one per size/format). Take
           * the one whose size matches the texture, else the newest; never one
-@@ -1805,6 +2399,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1805,6 +2579,17 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                       t.remap & 0xFFFFu, t.format)
                  : 0;
              textures[u] = view ? view : g.surfaces[sampled].handle;
@@ -3085,7 +3297,7 @@ index 9a76e67..e44c6cb 100644
              continue;
          }
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
-@@ -1845,9 +2450,15 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1845,9 +2630,15 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                  }
              if (textures[u]) continue;
          }
@@ -3102,7 +3314,7 @@ index 9a76e67..e44c6cb 100644
          /* PS3RECOMP_ENG_TEXLOG_RT=<hex>: guest-memory bindings of draws into
           * colour target A at that offset (first 40). */
          { static long trt = -2; static int n;
-@@ -1879,7 +2490,7 @@ static u32 sink_bind_vertex_textures(
+@@ -1879,7 +2670,7 @@ static u32 sink_bind_vertex_textures(
          /* A vertex unit has no crossbar, so its remap is the identity. */
          textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
                                         vt.width, vt.height, vt.mipmaps,
@@ -3111,7 +3323,7 @@ index 9a76e67..e44c6cb 100644
          if (textures[u]) bound |= 1u << u;
      }
      return bound;
-@@ -1909,6 +2520,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1909,6 +2700,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
  {
      (void)user; (void)r;
      if (!g.ready) return;
@@ -3119,7 +3331,22 @@ index 9a76e67..e44c6cb 100644
      const u32 prim = g.rsx.current_primitive;
      if (!dc.n_packets) { eng_drop("no_packets", prim); return; }
  
-@@ -1978,6 +2590,37 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1949,6 +2741,14 @@ static void sink_end(void* user, const rsx_dispatch* r)
+             : dc.n_source_refs - dc.n_source_refs % 3u;
+     }
+     if (!n_draw) { eng_drop("n_draw0", prim); return; }
++    /* The cache hands over a buffer of unique vertices for an indexed draw;
++     * one that ended up non-indexed needs dc.verts after all. */
++    if (dc.vbuf_hit && !indexed) {
++        if (!dc_reserve_verts((u64)dc.n_refs * dc.layout.stride) ||
++            !rsx_vertex_fetch_all(&dc.fetch_plan, dc.refs, dc.n_refs, dc.verts)) {
++            eng_drop("fetch", prim); return; }
++        dc.vbuf = 0; dc.vbuf_hit = 0;
++    }
+ 
+     rsx_be_render_state rs;
+     rsx_draw_engine_decode_render_state(&g.rsx, &rs);
+@@ -1978,6 +2778,37 @@ static void sink_end(void* user, const rsx_dispatch* r)
      DS_MARK(ns_bind);   /* render state, targets, zeta: counted with binds */
      const u32 tex_mask = sink_bind_textures(targets, n_targets, zslot,
                                              textures, samplers);
@@ -3157,7 +3384,7 @@ index 9a76e67..e44c6cb 100644
      const u32 vtex_mask = sink_bind_vertex_textures(eng_vtex_mask(), vtextures,
                                                      vsamplers);
  
-@@ -1992,6 +2635,127 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1992,6 +2823,127 @@ static void sink_end(void* user, const rsx_dispatch* r)
                                            n_targets, &pipeline_is_fixed);
      if (!pipeline) { eng_drop("pipeline", prim); return; }
      DS_MARK(ns_pipe);
@@ -3285,7 +3512,7 @@ index 9a76e67..e44c6cb 100644
  
      if (indexed) {
          if (!dc_reserve_indices(n_draw)) { eng_drop("reserve_indices", prim); return; }
-@@ -2045,6 +2809,57 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2045,6 +2997,57 @@ static void sink_end(void* user, const rsx_dispatch* r)
      memset(g.fp_cb, 0, fp_bytes);
      if (g.fp_constants->count)
          memcpy(g.fp_cb, g.fp_constants->values, g.fp_constants->count * 16u);
@@ -3343,7 +3570,22 @@ index 9a76e67..e44c6cb 100644
      { float* alpha = (float*)(g.fp_cb + nslots * 16u);
        alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
        /* WPOS y = pos.y * alpha[1] + alpha[2]: SHADER_WINDOW (0x1D88) bits
-@@ -2126,8 +2941,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2109,8 +3112,12 @@ static void sink_end(void* user, const rsx_dispatch* r)
+ 
+     const u32 uploaded = indexed ? dc.n_verts : n_draw;
+     DS_MARK(ns_bind);
+-    g.be->draw(g.be->user, topology, dc.verts, uploaded, layout.stride,
+-               indexed ? g.indices : NULL, indexed ? n_draw : 0);
++    if (dc.vbuf && indexed)
++        g.be->draw_vbuf(g.be->user, topology, dc.vbuf, uploaded, layout.stride,
++                        g.indices, n_draw);
++    else
++        g.be->draw(g.be->user, topology, dc.verts, uploaded, layout.stride,
++                   indexed ? g.indices : NULL, indexed ? n_draw : 0);
+     DS_MARK(ns_draw);
+ #undef DS_MARK
+     /* Counted only when the draw ran the guest's OWN programs, which is what
+@@ -2126,8 +3133,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
          ds.ns_rest += eng_ds_now() - ds_t0;
      }
  
@@ -3365,7 +3607,7 @@ index 9a76e67..e44c6cb 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2138,6 +2965,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2138,6 +3157,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
      const u32 n_targets = eng_current_target_set(targets);
      if (!n_targets) return;
  
@@ -3387,7 +3629,7 @@ index 9a76e67..e44c6cb 100644
      if (mask & (RSX_CLEAR_COLOR_R | RSX_CLEAR_COLOR_G |
                  RSX_CLEAR_COLOR_B | RSX_CLEAR_COLOR_A)) {
          const u32 c = rsx_dsp_clear_color(&g.rsx);
-@@ -2347,13 +3189,23 @@ presented:;
+@@ -2347,13 +3381,23 @@ presented:;
                pf = b0 = b1 = bw = 0; t0 = now; } } }
      /* PS3RECOMP_ENG_MEMDUMP=<hexEA>:<hexLen>:<worldframe>[:file]: at that world
       * frame, write the guest range as hex words, 16 bytes per line -- the same
@@ -3415,7 +3657,7 @@ index 9a76e67..e44c6cb 100644
            extern uint8_t* vm_base;
            FILE* f = fopen(dpath, "w");
            if (f && vm_base) {
-@@ -2408,6 +3260,20 @@ presented:;
+@@ -2408,6 +3452,20 @@ presented:;
                }
            } } }
      eng_constlog_frame_end();
@@ -3436,7 +3678,7 @@ index 9a76e67..e44c6cb 100644
      g.frames++;
      eng_ds_frame_end(g.guest_draws);
      g.last_guest_draws = g.guest_draws;
-@@ -2531,6 +3397,102 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +3589,102 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
@@ -3540,7 +3782,7 @@ index 9a76e67..e44c6cb 100644
  {
      if (g.ready && g.be->submit_and_wait)
 diff --git a/libs/video/rsx_draw_engine.h b/libs/video/rsx_draw_engine.h
-index e54d615..3369311 100644
+index e54d615..0682a7a 100644
 --- a/libs/video/rsx_draw_engine.h
 +++ b/libs/video/rsx_draw_engine.h
 @@ -79,6 +79,10 @@ typedef struct rsx_be_render_state {
@@ -3554,7 +3796,7 @@ index e54d615..3369311 100644
      u32 rt_fp16;                    /* the target is an FP16 HDR surface */
      u32 stencil_enable, stencil_two_sided;
      u32 s_func, s_func_mask, s_write_mask, s_fail, s_zfail, s_zpass;
-@@ -223,8 +227,47 @@ typedef struct rsx_draw_backend {
+@@ -223,8 +227,58 @@ typedef struct rsx_draw_backend {
      void (*bind_vs_constants_range)(void* user, const void* rows, u32 first,
                                      u32 count, const void* tail,
                                      u32 tail_bytes, u32 total_bytes);
@@ -3582,6 +3824,17 @@ index e54d615..3369311 100644
 +     * byte (so any crossbar reads it). Returns it, or 0. */
 +    u32  (*ssao_pass)(void* user, u32 depth, u32 normals, const void* consts, u32 const_bytes,
 +                      u32 full_w, u32 full_h, u32 half_w, u32 half_h);
++    /* Optional. Persistent vertex buffers: the engine keeps the decoded
++     * vertices of geometry that did not change since the last frame and draws
++     * from them instead of fetching and staging it again. vbuf_create copies
++     * `bytes` and returns a handle (0 when it cannot); a released handle stays
++     * valid for draws already recorded. draw_vbuf is draw() with the vertices
++     * taken from such a buffer. */
++    u32  (*vbuf_create)(void* user, const void* data, u32 bytes);
++    void (*vbuf_release)(void* user, u32 vbuf);
++    void (*draw_vbuf)(void* user, rsx_topology topology, u32 vbuf,
++                      u32 vertex_count, u32 stride, const u32* indices,
++                      u32 index_count);
  } rsx_draw_backend;
  
 +/* The light pass's constants, as the backend's shader reads them. */
@@ -3602,7 +3855,7 @@ index e54d615..3369311 100644
  /* ---- the engine --------------------------------------------------------- */
  
  /* Register the backend the engine drives. Passing NULL unregisters it. */
-@@ -261,6 +304,30 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -261,6 +315,30 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
   * on its fence sees the GPU catch up. */
  void rsx_draw_engine_flush(void);
  
@@ -4530,10 +4783,10 @@ index 7161c4e..830f0a7 100644
   * Useful for disassembly/logging. */
  const char* rsx_fp_opcode_name(u32 opcode);
 diff --git a/libs/video/rsx_metal_backend.h b/libs/video/rsx_metal_backend.h
-index aee795c..baba40f 100644
+index aee795c..1dc35f8 100644
 --- a/libs/video/rsx_metal_backend.h
 +++ b/libs/video/rsx_metal_backend.h
-@@ -36,6 +36,13 @@ int  rsx_metal_backend_pump_messages(void);
+@@ -36,6 +36,30 @@ int  rsx_metal_backend_pump_messages(void);
   * RSX clear method, then hand it to the compositor. */
  void rsx_metal_backend_present(void);
  
@@ -4544,11 +4797,28 @@ index aee795c..baba40f 100644
 + * does not claim any display presentations and leaves the tracker disabled. */
 +void rsx_metal_backend_note_guest_frame(void);
 +
++/* The window (windowed runs only), set up from the environment at init:
++ *   PS3_WINDOW_MODE=windowed|fullscreen|borderless   start mode (windowed);
++ *       fullscreen is macOS's own (a Space of its own), borderless covers the
++ *       screen in place with the menu bar and Dock hidden.
++ *   PS3_WINDOW_SIZE=<w>x<h>   windowed content size in points (the guest's
++ *       resolution by default), shrunk to fit the screen.
++ *   PS3_WINDOW_ICON=<file>|game|none   the Dock / app switcher icon: an image
++ *       file, or "game" for $PS3_VFS_ROOT/PS3_GAME/ICON0.PNG (none by default).
++ *   PS3_MOUSE_CAPTURE=0       the mouse camera works without capturing the
++ *       cursor (the old behaviour); there is no capture with PS3_MOUSE=0.
++ * The window is resizable and the game's image keeps its aspect ratio,
++ * letterboxed in black. Shortcuts: Cmd+F or Option+Return toggles fullscreen
++ * (borderless when PS3_WINDOW_MODE=borderless, macOS fullscreen otherwise),
++ * Cmd+Ctrl+F toggles macOS fullscreen. A click in the game captures the
++ * mouse (hidden cursor, motion drives the camera); Esc, Cmd or leaving the
++ * window releases it. */
++
  /* --- test hooks ---------------------------------------------------------- */
  
  /* The clear colour most recently set via NV4097_SET_COLOR_CLEAR_VALUE, in the
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..53e68b7 100644
+index 98db285..6f6490b 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -48,11 +48,18 @@
@@ -4570,15 +4840,16 @@ index 98db285..53e68b7 100644
  #include "rsx_commands.h"
  #include "rsx_metal_backend.h"
  #include "rsx_vertex_fetch.h"
-@@ -61,6 +68,7 @@
+@@ -61,6 +68,8 @@
  #include "rsx_fp_decompiler.h"
  #include "rsx_shader_msl.h"
  #include "rsx_texture_layout.h"
 +#include "../../include/ps3emu/ps3_ftrace.h"   /* PS3_FTRACE: encode / GPU wait / readback spans */
++#include <math.h>
  #include <stdio.h>
  #include <stdlib.h>
  #include <string.h>
-@@ -79,6 +87,96 @@
+@@ -79,6 +88,96 @@
  static u32                 s_width  = 1280;
  static u32                 s_height = 720;
  
@@ -4675,24 +4946,270 @@ index 98db285..53e68b7 100644
  /* ---- vertex layout ----------------------------------------------------------
   * Every draw carries all 16 RSX vertex attributes as float4, fetched on the
   * CPU by rsx_fetch_attrib: 256 bytes per vertex, attribute i at offset i*16.
-@@ -475,6 +573,8 @@ static int create_window_impl(const char* title)
+@@ -460,13 +559,216 @@ static int create_offscreen(void)
+ }
+ 
+ #if !TARGET_OS_IPHONE
++/* ---- the window: modes, letterbox, icon, cursor capture ---------------------
++ * Everything here runs on the main thread: at creation, from the event pump
++ * and from the window's delegate.
++ *
++ * Letterbox: the drawable keeps the guest's resolution whatever the window's
++ * size, and the layer scales it to fit with its aspect ratio kept (black
++ * bars), which is what the compositor already did to it on a Retina screen.
++ *
++ * Fullscreen comes in two kinds: macOS's own (the window moves to a Space of
++ * its own, with the system's animation) and borderless (the window drops its
++ * frame and covers its screen in place, menu bar and Dock hidden; switching
++ * apps is instant). One toggle leaves whichever is on, or enters the kind the
++ * shortcut asks for. */
++enum { WM_WINDOWED, WM_FULLSCREEN, WM_BORDERLESS };
++static int               s_wm_fs_style = WM_FULLSCREEN;  /* what Cmd+F / Option+Return enter */
++static int               s_wm_borderless;
++static NSRect            s_wm_saved_frame;
++static NSWindowStyleMask s_wm_saved_style;
++static int               s_cap_on;        /* capture wanted (mouse camera on, PS3_MOUSE_CAPTURE != 0) */
++static int               s_captured;
++static NSTimeInterval    s_cap_since;     /* motion before this is the warp, not the player */
++static id                s_win_delegate;  /* NSWindow.delegate is weak */
++
++/* A window without a title bar cannot become key unless it says it can, and
++ * then no key ever reaches the game in borderless fullscreen. */
++@interface PS3RecompWindow : NSWindow
++@end
++@implementation PS3RecompWindow
++- (BOOL)canBecomeKeyWindow  { return YES; }
++- (BOOL)canBecomeMainWindow { return YES; }
++@end
++
++static void mouse_release(void)
++{
++    if (!s_captured) return;
++    s_captured = 0;
++    CGAssociateMouseAndMouseCursorPosition(true);
++    [NSCursor unhide];
++    extern volatile uint32_t g_pad_mouse_buttons;
++    g_pad_mouse_buttons = 0;
++}
++
++static void mouse_capture(void)
++{
++    if (s_captured || !s_cap_on || !s_window) return;
++    /* Park the cursor in the middle of the game, so it comes back there and
++     * not wherever the motion would have carried it. CG's global space has
++     * its origin at the top left of the primary screen, AppKit's at the
++     * bottom left. */
++    const NSRect r = [s_window convertRectToScreen:[[s_window contentView] frame]];
++    NSArray<NSScreen*>* screens = [NSScreen screens];
++    if (screens.count) {
++        const CGFloat top = NSMaxY(screens[0].frame);
++        CGWarpMouseCursorPosition(CGPointMake(NSMidX(r), top - NSMidY(r)));
++    }
++    CGAssociateMouseAndMouseCursorPosition(false);
++    [NSCursor hide];
++    s_captured  = 1;
++    s_cap_since = [[NSProcessInfo processInfo] systemUptime] + 0.05;
++    extern volatile int32_t g_pad_mouse_dx, g_pad_mouse_dy;
++    __atomic_store_n(&g_pad_mouse_dx, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&g_pad_mouse_dy, 0, __ATOMIC_RELAXED);
++}
++
++/* The drawable must stay at the guest's size for the layer to letterbox it;
++ * re-assert it in case AppKit resized it along with the view. */
++static void wm_keep_drawable(void)
++{
++    if (!s_layer) return;
++    const CGSize want = CGSizeMake((CGFloat)s_width, (CGFloat)s_height);
++    if (!CGSizeEqualToSize(s_layer.drawableSize, want)) s_layer.drawableSize = want;
++}
++
++static int wm_native_fullscreen(void)
++{
++    return s_window && ([s_window styleMask] & NSWindowStyleMaskFullScreen) != 0;
++}
++
++static void wm_enter_borderless(void)
++{
++    if (!s_window || s_wm_borderless || wm_native_fullscreen()) return;
++    NSScreen* scr = [s_window screen] ? [s_window screen] : [NSScreen mainScreen];
++    if (!scr) return;
++    s_wm_saved_frame = [s_window frame];
++    s_wm_saved_style = [s_window styleMask];
++    s_wm_borderless  = 1;
++    [NSApp setPresentationOptions:(NSApplicationPresentationHideDock |
++                                   NSApplicationPresentationHideMenuBar)];
++    [s_window setStyleMask:NSWindowStyleMaskBorderless];
++    [s_window setFrame:[scr frame] display:YES];
++    [s_window makeKeyAndOrderFront:nil];
++    wm_keep_drawable();
++}
++
++static void wm_leave_borderless(void)
++{
++    if (!s_window || !s_wm_borderless) return;
++    s_wm_borderless = 0;
++    [s_window setStyleMask:s_wm_saved_style];
++    [s_window setFrame:s_wm_saved_frame display:YES];
++    [NSApp setPresentationOptions:NSApplicationPresentationDefault];
++    [s_window makeKeyAndOrderFront:nil];
++    wm_keep_drawable();
++}
++
++/* Leave fullscreen if any is on, else enter the kind asked for. */
++static void wm_toggle(int style)
++{
++    if (!s_window) return;
++    if (s_wm_borderless)              { wm_leave_borderless(); return; }
++    if (wm_native_fullscreen())       { [s_window toggleFullScreen:nil]; return; }
++    if (style == WM_BORDERLESS) wm_enter_borderless();
++    else                        [s_window toggleFullScreen:nil];
++}
++
++@interface PS3RecompWindowDelegate : NSObject <NSWindowDelegate>
++@end
++@implementation PS3RecompWindowDelegate
++- (void)windowDidResignKey:(NSNotification*)n  { (void)n; mouse_release(); }
++- (void)windowDidResize:(NSNotification*)n     { (void)n; wm_keep_drawable(); }
++- (void)windowDidEnterFullScreen:(NSNotification*)n { (void)n; wm_keep_drawable(); }
++- (void)windowDidExitFullScreen:(NSNotification*)n  { (void)n; wm_keep_drawable(); }
++- (void)windowWillClose:(NSNotification*)n
++{
++    (void)n;
++    mouse_release();
++    if (s_wm_borderless) [NSApp setPresentationOptions:NSApplicationPresentationDefault];
++    s_wm_borderless = 0;
++    s_closed = 1;
++}
++@end
++
++/* PS3_WINDOW_ICON: the Dock / app switcher icon. A plain executable has none
++ * of its own, so without this the Dock shows a generic one. */
++static void apply_icon(void)
++{
++    const char* e = getenv("PS3_WINDOW_ICON");
++    if (!e || !*e || !strcmp(e, "none") || !strcmp(e, "0")) return;
++    char path[2048];
++    if (!strcmp(e, "game")) {             /* the player's own copy: PS3_GAME/ICON0.PNG */
++        const char* root = getenv("PS3_VFS_ROOT");
++        snprintf(path, sizeof path, "%s/PS3_GAME/ICON0.PNG", root && *root ? root : ".");
++    } else {
++        snprintf(path, sizeof path, "%s", e);
++    }
++    NSImage* img = [[NSImage alloc] initWithContentsOfFile:[NSString stringWithUTF8String:path]];
++    if (!img) {
++        fprintf(stderr, "[RSX metal] PS3_WINDOW_ICON: %s is not an image AppKit reads\n", path);
++        return;
++    }
++    /* The Dock draws the icon square; a wide one (a PS3 ICON0 is 320x176) is
++     * centred on a transparent square rather than stretched. */
++    const NSSize sz = [img size];
++    if (sz.width > 0 && sz.height > 0 && sz.width != sz.height) {
++        const CGFloat d = sz.width > sz.height ? sz.width : sz.height;
++        NSImage* src = img;
++        img = [NSImage imageWithSize:NSMakeSize(d, d) flipped:NO
++                      drawingHandler:^BOOL(NSRect dst) {
++            (void)dst;
++            [src drawInRect:NSMakeRect((d - sz.width) / 2, (d - sz.height) / 2, sz.width, sz.height)];
++            return YES;
++        }];
++    }
++    [NSApp setApplicationIconImage:img];
++}
++
+ static int create_window_impl(const char* title)
+ {
+     [NSApplication sharedApplication];
+     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
++    /* The host turns a plain run loop, not [NSApp run]: finish launching by
++     * hand (SDL and GLFW do the same), or the app never fully becomes a
++     * regular one -- macOS fullscreen and the Dock icon need that. */
++    { static int launched;
++      if (!launched) { launched = 1; [NSApp finishLaunching]; } }
++    apply_icon();
++
++    int mode = WM_WINDOWED;
++    { const char* e = getenv("PS3_WINDOW_MODE");
++      if (e && (!strcmp(e, "fullscreen") || !strcmp(e, "native"))) mode = WM_FULLSCREEN;
++      else if (e && !strcmp(e, "borderless"))                      mode = WM_BORDERLESS;
++      else if (e && *e && strcmp(e, "windowed") && strcmp(e, "window"))
++          fprintf(stderr, "[RSX metal] PS3_WINDOW_MODE=%s: expected windowed, fullscreen or borderless\n", e);
++      s_wm_fs_style = mode == WM_BORDERLESS ? WM_BORDERLESS : WM_FULLSCREEN; }
++    { const char* m = getenv("PS3_MOUSE");
++      const char* c = getenv("PS3_MOUSE_CAPTURE");
++      s_cap_on = !(m && atoi(m) == 0) && !(c && atoi(c) == 0); }
++
++    /* Content size: PS3_WINDOW_SIZE, else the guest's; shrunk, keeping its
++     * shape, to what the screen has room for. */
++    CGFloat cw = (CGFloat)s_width, ch = (CGFloat)s_height;
++    { const char* e = getenv("PS3_WINDOW_SIZE");
++      unsigned w = 0, h = 0;
++      if (e && *e) {
++          if (sscanf(e, "%ux%u", &w, &h) == 2 && w >= 160 && h >= 90 && w <= 16384 && h <= 16384) {
++              cw = (CGFloat)w; ch = (CGFloat)h;
++          } else {
++              fprintf(stderr, "[RSX metal] PS3_WINDOW_SIZE=%s: expected <width>x<height>\n", e);
++          }
++      } }
++    NSScreen* scr = [NSScreen mainScreen];
++    if (scr) {
++        const NSRect vis = [NSWindow contentRectForFrameRect:[scr visibleFrame]
++                                                   styleMask:NSWindowStyleMaskTitled];
++        const CGFloat k = fmin(1.0, fmin(vis.size.width / cw, vis.size.height / ch));
++        if (k < 1.0) { cw = floor(cw * k); ch = floor(ch * k); }
++    }
+ 
+-    NSRect frame = NSMakeRect(0, 0, (CGFloat)s_width, (CGFloat)s_height);
+-    s_window = [[NSWindow alloc]
++    NSRect frame = NSMakeRect(0, 0, cw, ch);
++    s_window = [[PS3RecompWindow alloc]
+         initWithContentRect:frame
+                   styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                              NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
+@@ -475,20 +777,43 @@ static int create_window_impl(const char* title)
      if (!s_window) return -1;
  
      [s_window setTitle:[NSString stringWithUTF8String:(title ? title : "ps3recomp")]];
 +    /* Mouse-moved events are off by default; the mouse camera (cellPad.c) needs them. */
 +    [s_window setAcceptsMouseMovedEvents:YES];
++    [s_window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
++    [s_window setContentMinSize:NSMakeSize(320, 180)];
++    [s_window setBackgroundColor:[NSColor blackColor]];
      [s_window center];
++    s_win_delegate = [PS3RecompWindowDelegate new];
++    [s_window setDelegate:s_win_delegate];
  
      s_layer = [CAMetalLayer layer];
-@@ -489,6 +589,7 @@ static int create_window_impl(const char* title)
+     s_layer.device          = s_dev;
+     s_layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+     s_layer.framebufferOnly = YES;
+     s_layer.drawableSize    = CGSizeMake((CGFloat)s_width, (CGFloat)s_height);
++    s_layer.contentsGravity = kCAGravityResizeAspect;
++    s_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+ 
+     NSView* view = [s_window contentView];
+     [view setWantsLayer:YES];
+     [view setLayer:s_layer];
++    /* A layer-backed view sets its layer's gravity from this; keep the two
++     * saying the same thing. */
++    [view setLayerContentsPlacement:NSViewLayerContentsPlacementScaleProportionallyToFit];
  
      [s_window makeKeyAndOrderFront:nil];
      [NSApp activateIgnoringOtherApps:YES];
++    if (mode == WM_BORDERLESS) wm_enter_borderless();
++    /* macOS fullscreen animates and wants the window on screen first. */
++    if (mode == WM_FULLSCREEN)
++        dispatch_async(dispatch_get_main_queue(), ^{
++            if (s_window && !wm_native_fullscreen()) [s_window toggleFullScreen:nil];
++        });
++    fprintf(stderr, "[RSX metal] window %.0fx%.0f, %s; Cmd+F / Option+Return: fullscreen, "
++                    "Cmd+Ctrl+F: macOS fullscreen%s\n", cw, ch,
++            mode == WM_FULLSCREEN ? "fullscreen" : mode == WM_BORDERLESS ? "borderless" : "windowed",
++            s_cap_on ? "; click captures the mouse, Esc or Cmd releases it" : "");
 +    fps_start();
      return 0;
  }
  
-@@ -742,6 +843,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
+@@ -742,6 +1067,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
   * and sampled with a direction rather than a 2D coordinate, so it changes the
   * compiled program and belongs in the key -- the D3D12 backend's PSO key
   * carries cube_mask for the same reason. */
@@ -4716,7 +5233,7 @@ index 98db285..53e68b7 100644
  static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
  {
      if (!vm_base || st->shader_program == 0) return -1;
-@@ -752,6 +870,8 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -752,6 +1094,8 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
  
      u64 key = rsx_fp_structural_hash(*uc, MTL_FP_MAX_BYTES, 1469598103934665603ull);
      if (!key) return -1;                    /* malformed or unterminated */
@@ -4725,7 +5242,7 @@ index 98db285..53e68b7 100644
      const u32 ctrl      = st->shader_control;
      const u32 ctrl_key  = ctrl & CELL_GCM_SHADER_CONTROL_32_BITS_EXPORTS;
      const u32 alpha_en  = (st->alpha_test_enable && st->alpha_func != 0x0207u) ? 1u : 0u;
-@@ -761,15 +881,20 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -761,15 +1105,20 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
      key = fnv1a64(&alpha_fn, sizeof alpha_fn, key);
      key = fnv1a64(&cube_mask, sizeof cube_mask, key);
  
@@ -4750,7 +5267,7 @@ index 98db285..53e68b7 100644
      if (ni > 0 && alpha_en &&
          rsx_fp_apply_alpha_test_buffered(s_hlsl, sizeof s_hlsl, st->alpha_func) < 0)
          ni = -1;
-@@ -793,13 +918,14 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -793,13 +1142,14 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
      { static int n = 0; if (n++ < 32)
          fprintf(stderr, "[RSX metal] fragment program %016llX: %d instrs, %u constants -> %s\n",
                  (unsigned long long)key, ni, nconst,
@@ -4767,7 +5284,7 @@ index 98db285..53e68b7 100644
  }
  
  /* Reserve `bytes` of constant staging at a 256-byte boundary. */
-@@ -828,24 +954,27 @@ static int cb_alloc(u32 bytes, u32* off)
+@@ -828,24 +1178,27 @@ static int cb_alloc(u32 bytes, u32* off)
   * outputs do not link with the built-in fragment shader's inputs. */
  static int guest_programs_for(const rsx_state* st, MtlDraw* d)
  {
@@ -4800,7 +5317,7 @@ index 98db285..53e68b7 100644
  
      /* VPConst: the 512 transform constants, then the viewport epilogue
       * (see the D3D12 backend's vp_record_cb): x/y identity, and the z lane
-@@ -1581,7 +1710,8 @@ static void record_draw(const rsx_state* st, u32 prim, u32 base, u32 count,
+@@ -1581,7 +1934,8 @@ static void record_draw(const rsx_state* st, u32 prim, u32 base, u32 count,
       * drops to the built-in shader must still fetch its vertices the same
       * way. Constant staging reserved here for a draw that then fails on
       * vertices is simply left unused until the frame resets it. */
@@ -4810,7 +5327,21 @@ index 98db285..53e68b7 100644
      if (guest) textures_for(st, d);
  
      u32 first_vert = s_vert_count;
-@@ -2089,7 +2219,7 @@ static void release_surfaces(void)
+@@ -2061,6 +2415,13 @@ static void release_surfaces(void)
+ static u32 s_eng_obj_free[ENG_MAX_OBJECTS];
+ static u32 s_eng_obj_free_count;
+ static u8 s_eng_obj_retired[ENG_MAX_OBJECTS];
++/* Persistent vertex buffers (rsx_draw_backend.vbuf_*), a table of their own:
++ * the object table above is shared with every texture and view. Released
++ * buffers are retired like objects, freed once no recorded draw can name them. */
++#define ENG_MAX_VBUFS 32768
++static id<MTLBuffer> s_vbuf[ENG_MAX_VBUFS];
++static u32 s_vbuf_count, s_vbuf_free[ENG_MAX_VBUFS], s_vbuf_free_count;
++static u8 s_vbuf_retired[ENG_MAX_VBUFS];
+ 
+ typedef struct {
+     id<MTLRenderPipelineState> pso;
+@@ -2089,7 +2450,7 @@ static void release_surfaces(void)
  
  typedef enum {
      ENG_REC_DRAW, ENG_REC_CLEAR_COLOR, ENG_REC_CLEAR_DS, ENG_REC_DEPTH_RESOLVE,
@@ -4819,7 +5350,15 @@ index 98db285..53e68b7 100644
  } EngRecKind;
  
  typedef struct {
-@@ -2174,6 +2304,14 @@ static void release_surfaces(void)
+@@ -2102,6 +2463,7 @@ static void release_surfaces(void)
+     u32 pipeline;
+     MTLPrimitiveType topology;
+     u32 vb_off, stride, vertex_count;
++    u32 vb_buf;                 /* a persistent vertex buffer (eng_vbuf_*), else 0: the arena */
+     u32 ib_off, index_count;
+     u32 vs_cb_off, vs_cb_bytes;
+     float vs_xf[8];             /* VPXform (buffer 2): vp_posscale, vp_posoffset */
+@@ -2174,6 +2536,14 @@ static void release_surfaces(void)
  "                            sampler s [[sampler(0)]]) {\n"
  "    return src.sample(s, i.uv);\n"
  "}\n"
@@ -4834,7 +5373,7 @@ index 98db285..53e68b7 100644
  "fragment float eng_depth_fs(BOut i [[stage_in]],\n"
  "                            depth2d<float> src [[texture(0)]],\n"
  "                            sampler s [[sampler(0)]]) {\n"
-@@ -2181,10 +2319,228 @@ static void release_surfaces(void)
+@@ -2181,10 +2551,228 @@ static void release_surfaces(void)
  "}\n"
  "fragment float4 eng_depth_rgba8_fs(BOut i [[stage_in]],\n"
  "                                   depth2d<float> src [[texture(0)]],\n"
@@ -5065,7 +5604,16 @@ index 98db285..53e68b7 100644
  
  static u32 eng_obj_add(id<MTLTexture> t)
  {
-@@ -2360,9 +2716,11 @@ static void eng_shutdown(void* user)
+@@ -2211,6 +2799,8 @@ static u32 eng_obj_add(id<MTLTexture> t)
+ static void eng_collect_retired_objects(void)
+ {
+     if (s_eng_rec_count) return;
++    for (u32 i = 0; i < s_vbuf_count; ++i)
++        if (s_vbuf_retired[i]) { s_vbuf_retired[i] = 0; s_vbuf[i] = nil; s_vbuf_free[s_vbuf_free_count++] = i; }
+     for (u32 i = 0; i < s_eng_obj_count; ++i) {
+         if (!s_eng_obj_retired[i]) continue;
+         s_eng_obj_retired[i] = 0;
+@@ -2360,9 +2950,11 @@ static void eng_shutdown(void* user)
      s_eng_active = 0;
  }
  
@@ -5078,7 +5626,7 @@ index 98db285..53e68b7 100644
      eng_encode_and_commit(nil);
  }
  
-@@ -2405,6 +2763,43 @@ static void eng_texture_upload(void* user, u32 handle, u32 face, u32 mip,
+@@ -2405,6 +2997,43 @@ static void eng_texture_upload(void* user, u32 handle, u32 face, u32 mip,
         bytesPerImage:0];
  }
  
@@ -5122,7 +5670,7 @@ index 98db285..53e68b7 100644
  static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
                                     const void* seed, u32 seed_row_bytes)
  {
-@@ -2465,8 +2860,10 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
+@@ -2465,8 +3094,10 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
                                                             width:w height:h
                                                         mipmapped:NO];
      /* ShaderRead as well as RenderTarget: depth-as-texture resolves through a
@@ -5135,7 +5683,7 @@ index 98db285..53e68b7 100644
      td.storageMode = MTLStorageModePrivate;
      return eng_obj_add([s_dev newTextureWithDescriptor:td]);
  }
-@@ -2556,6 +2953,125 @@ static u32 eng_color_snapshot(void* user, u32 surface)
+@@ -2556,6 +3187,125 @@ static u32 eng_color_snapshot(void* user, u32 surface)
      return dst;
  }
  
@@ -5261,7 +5809,7 @@ index 98db285..53e68b7 100644
  static u32 eng_depth_snapshot_rgba8(void* user, u32 depth, u32 w, u32 h)
  {
      (void)user;
-@@ -2727,17 +3243,42 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -2727,17 +3477,42 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      if ((rs->color_mask >>  8) & 0xFF) wm |= MTLColorWriteMaskGreen;
      if ((rs->color_mask >> 16) & 0xFF) wm |= MTLColorWriteMaskRed;
      if ((rs->color_mask >> 24) & 0xFF) wm |= MTLColorWriteMaskAlpha;
@@ -5312,7 +5860,59 @@ index 98db285..53e68b7 100644
              ca.blendingEnabled             = YES;
              ca.sourceRGBBlendFactor        = blend_factor_to_metal(rs->sf_rgb);
              ca.destinationRGBBlendFactor   = blend_factor_to_metal(rs->df_rgb);
-@@ -3068,10 +3609,130 @@ static void eng_bound_reset(void)
+@@ -2999,6 +3774,51 @@ static void eng_draw(void* user, rsx_topology topology, const void* vertices,
+     r->kind         = ENG_REC_DRAW;
+     r->topology     = topo_to_metal(topology);
+     r->vb_off       = vb_off;
++    r->vb_buf       = 0;
++    r->stride       = stride;
++    r->vertex_count = vertex_count;
++    r->ib_off       = ib_off;
++    r->index_count  = indices ? index_count : 0;
++}
++
++static u32 eng_vbuf_create(void* user, const void* data, u32 bytes)
++{
++    (void)user;
++    if (!s_dev || !data || !bytes) return 0;
++    u32 slot;
++    if (s_vbuf_free_count) slot = s_vbuf_free[--s_vbuf_free_count];
++    else { if (s_vbuf_count >= ENG_MAX_VBUFS) return 0; slot = s_vbuf_count++; }
++    id<MTLBuffer> b = [s_dev newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared];
++    if (!b) { s_vbuf_free[s_vbuf_free_count++] = slot; return 0; }
++    s_vbuf[slot] = b;
++    return slot + 1;
++}
++
++static void eng_vbuf_release(void* user, u32 vbuf)
++{
++    (void)user;
++    if (!vbuf || vbuf > s_vbuf_count || !s_vbuf[vbuf - 1] || s_vbuf_retired[vbuf - 1]) return;
++    s_vbuf_retired[vbuf - 1] = 1;
++    eng_collect_retired_objects();
++}
++
++static void eng_draw_vbuf(void* user, rsx_topology topology, u32 vbuf,
++                          u32 vertex_count, u32 stride, const u32* indices,
++                          u32 index_count)
++{
++    (void)user;
++    if (!vertex_count || !stride || !vbuf || vbuf > s_vbuf_count || !s_vbuf[vbuf - 1]) return;
++    if (s_eng_rec_count >= ENG_MAX_RECORDS) { s_eng_dropped++; return; }
++    u32 ib_off = 0;
++    if (indices && index_count &&
++        !eng_stage_copy(indices, index_count * (u32)sizeof(u32), &ib_off))
++        return;
++    EngRecord* r = &s_eng_rec[s_eng_rec_count++];
++    *r = s_eng_pending;
++    r->kind         = ENG_REC_DRAW;
++    r->topology     = topo_to_metal(topology);
++    r->vb_off       = 0;
++    r->vb_buf       = vbuf;
+     r->stride       = stride;
+     r->vertex_count = vertex_count;
+     r->ib_off       = ib_off;
+@@ -3068,10 +3888,130 @@ static void eng_bound_reset(void)
  }
  #define ENG_PTR(o) ((__bridge const void*)(o))
  
@@ -5443,7 +6043,24 @@ index 98db285..53e68b7 100644
      /* PS3RECOMP_METAL_SKIP_PIPE=a,b,...: drop draws using those pipelines
       * (pass-log p= numbers) to bisect which pass breaks an image. */
      { static u32 skip[16]; static int nskip = -1;
-@@ -3131,9 +3792,37 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+@@ -3105,7 +4045,15 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+         if (!b->have_sc || memcmp(&b->sc, &sc, sizeof sc)) { [enc setScissorRect:sc]; b->sc = sc; b->have_sc = 1; }
+     }
+     /* Same buffer, new offset: setVertexBufferOffset is the cheap form. */
+-    if (b->buf[0] != ENG_PTR(stage)) {
++    if (r->vb_buf && r->vb_buf <= s_vbuf_count && s_vbuf[r->vb_buf - 1]) {
++        id<MTLBuffer> vb = s_vbuf[r->vb_buf - 1];
++        if (b->buf[0] != ENG_PTR(vb)) {
++            [enc setVertexBuffer:vb offset:0 atIndex:MTL_VB_INDEX];
++            b->buf[0] = ENG_PTR(vb); b->buf_off[0] = 0;
++        } else if (b->buf_off[0] != 0) {
++            [enc setVertexBufferOffset:0 atIndex:MTL_VB_INDEX]; b->buf_off[0] = 0;
++        }
++    } else if (b->buf[0] != ENG_PTR(stage)) {
+         [enc setVertexBuffer:stage offset:r->vb_off atIndex:MTL_VB_INDEX];
+         b->buf[0] = ENG_PTR(stage); b->buf_off[0] = r->vb_off;
+     } else if (b->buf_off[0] != r->vb_off) {
+@@ -3131,9 +4079,37 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
              [enc setFragmentBufferOffset:r->ps_cb_off atIndex:1]; b->fbuf_off = r->ps_cb_off;
          }
      }
@@ -5481,7 +6098,7 @@ index 98db285..53e68b7 100644
          id<MTLSamplerState> sm = r->samp[u] >= 0 ? s_eng_samp[r->samp[u]].samp : s_default_sampler;
          if (b->ftex[u] != ENG_PTR(t)) { [enc setFragmentTexture:t atIndex:(NSUInteger)u]; b->ftex[u] = ENG_PTR(t); }
          if (b->fsamp[u] != ENG_PTR(sm)) { [enc setFragmentSamplerState:sm atIndex:(NSUInteger)u]; b->fsamp[u] = ENG_PTR(sm); }
-@@ -3201,24 +3890,116 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
+@@ -3201,24 +4177,116 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
      return 1;
  }
  
@@ -5598,7 +6215,7 @@ index 98db285..53e68b7 100644
          if (s_eng_rec[i].kind == ENG_REC_DEPTH_RESOLVE) {
              const EngRecord* r = &s_eng_rec[i++];
              id<MTLTexture> src = eng_obj(r->depth);
-@@ -3231,8 +4012,20 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3231,8 +4299,20 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              rp.colorAttachments[0].storeAction = MTLStoreActionStore;
              id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
              if (!e) continue;
@@ -5619,7 +6236,7 @@ index 98db285..53e68b7 100644
              [e setFragmentSamplerState:s_eng_point_sampler atIndex:0];
              [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
              [e endEncoding];
-@@ -3243,6 +4036,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3243,6 +4323,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
           * surface and an MRT set arrives as one clear per target, so they are
           * collected rather than compared: they become load actions on the
           * pass below when the draw that follows writes the same targets. */
@@ -5627,7 +6244,7 @@ index 98db285..53e68b7 100644
          u32 n_cc = 0;
          u32 cc_surf[RSX_BE_MAX_COLOR_TARGETS];
          float cc_rgba[RSX_BE_MAX_COLOR_TARGETS][4];
-@@ -3252,7 +4046,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3252,7 +4333,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
          u8 cstencil = 0;
          while (i < s_eng_rec_count && s_eng_rec[i].kind != ENG_REC_DRAW &&
                 s_eng_rec[i].kind != ENG_REC_DEPTH_RESOLVE &&
@@ -5638,7 +6255,7 @@ index 98db285..53e68b7 100644
              const EngRecord* r = &s_eng_rec[i];
              if (r->kind == ENG_REC_CLEAR_COLOR) {
                  u32 k = 0;
-@@ -3281,6 +4077,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3281,6 +4364,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
          u32 nrt = n_cc;
          for (u32 k = 0; k < n_cc; k++) rt[k] = cc_surf[k];
          u32 depth = have_clear_ds ? cd : 0;
@@ -5646,7 +6263,7 @@ index 98db285..53e68b7 100644
          if (i < s_eng_rec_count && s_eng_rec[i].kind == ENG_REC_DRAW &&
              (!have_clear_ds || s_eng_rec[i].depth == cd)) {
              const EngRecord* d = &s_eng_rec[i];
-@@ -3292,12 +4089,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3292,12 +4376,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
                  covered = found;
              }
              if (covered) {
@@ -5670,7 +6287,7 @@ index 98db285..53e68b7 100644
          /* Metal wants every attachment the same size, and the engine registers
           * an MRT set's members at target A's, so a set whose members disagree
           * is one this frame cannot honour: it stops at the gap, as the vtable
-@@ -3364,6 +4172,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3364,6 +4459,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              continue;
          }
          eng_bound_reset();
@@ -5678,7 +6295,7 @@ index 98db285..53e68b7 100644
          while (i < s_eng_rec_count && s_eng_rec[i].kind == ENG_REC_DRAW &&
                 eng_record_targets_are(&s_eng_rec[i], rt, nrt) &&
                 (s_eng_rec[i].depth == depth ||
-@@ -3385,7 +4194,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -3385,7 +4481,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
      if (!s_eng_blit_pso || s_eng_blit_pso_fmt != [dst pixelFormat]) {
          MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
          pd.vertexFunction   = [s_eng_helper_lib newFunctionWithName:@"eng_fullscreen_vs"];
@@ -5687,7 +6304,7 @@ index 98db285..53e68b7 100644
          pd.colorAttachments[0].pixelFormat = [dst pixelFormat];
          NSError* err = nil;
          s_eng_blit_pso = [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
-@@ -3405,6 +4214,11 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -3405,6 +4501,11 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
      [e setRenderPipelineState:s_eng_blit_pso];
      [e setFragmentTexture:src atIndex:0];
      [e setFragmentSamplerState:s_eng_point_sampler atIndex:0];
@@ -5699,7 +6316,7 @@ index 98db285..53e68b7 100644
      [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
      [e endEncoding];
  }
-@@ -3447,10 +4261,20 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3447,10 +4548,20 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
      @autoreleasepool {
          id<CAMetalDrawable> drawable = nil;
          id<MTLTexture> dst = nil;
@@ -5722,7 +6339,7 @@ index 98db285..53e68b7 100644
          if (present_dst) {
              if (s_headless) {
                  dst = s_offscreen;
-@@ -3471,16 +4295,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3471,16 +4582,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          /* PS3RECOMP_METAL_PASS_LOG=1: every 600th present, print the frame's
           * record stream grouped into passes (kind, targets, depth, count, and
           * the textures the first draw samples). */
@@ -5764,7 +6381,7 @@ index 98db285..53e68b7 100644
                      fprintf(stderr, "[pass] %5u x%-4u kind=%d rt=", i, j - i, (int)r->kind);
                      for (u32 k = 0; k < r->nrt; k++) fprintf(stderr, "%s%u", k ? "," : "", r->rt[k]);
                      fprintf(stderr, " depth=%u", r->depth);
-@@ -3498,12 +4343,14 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3498,12 +4630,14 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
                      i = j;
                  }
              }
@@ -5781,7 +6398,7 @@ index 98db285..53e68b7 100644
          if (windowed_present) { pt1 = eng_pt_now(); s_pt_ns[2] += pt1 - pt; pt = pt1; }
          if (windowed_present) {
              dispatch_semaphore_t sem = s_inflight;
-@@ -3519,8 +4366,27 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3519,8 +4653,27 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
              s_pt_n++;
              eng_pt_report();
          } else {
@@ -5809,7 +6426,7 @@ index 98db285..53e68b7 100644
          }
  
  
-@@ -3550,7 +4416,7 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -3550,7 +4703,7 @@ static void eng_dump_frame(id<MTLTexture> src)
      if (!w || !h || w > 16384 || h > 16384) return;
      unsigned char* rgba = malloc(w * h * 4);
      if (!rgba) return;
@@ -5818,7 +6435,7 @@ index 98db285..53e68b7 100644
          id<MTLCommandBuffer> fence = [s_queue commandBuffer];
          [fence commit];
          [fence waitUntilCompleted];
-@@ -3580,7 +4446,11 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -3580,7 +4733,11 @@ static void eng_dump_frame(id<MTLTexture> src)
              fwrite(rgb, 1, 3, f);
          }
          fclose(f);
@@ -5831,7 +6448,7 @@ index 98db285..53e68b7 100644
      }
      free(rgba);
  }
-@@ -3596,14 +4466,30 @@ static float eng_half_to_float(uint16_t h)
+@@ -3596,14 +4753,30 @@ static float eng_half_to_float(uint16_t h)
      else f = (s << 31) | ((e + 112) << 23) | (m << 13);
      float r; memcpy(&r, &f, 4); return r;
  }
@@ -5864,7 +6481,7 @@ index 98db285..53e68b7 100644
      for (u32 h = 1; h <= s_eng_obj_count; ++h) {
          id<MTLTexture> t = s_eng_obj[h - 1];
          /* PS3RECOMP_METAL_SURF_DUMP_EXTRA=h,h,...: also dump these handles even if
-@@ -3672,9 +4558,17 @@ static void eng_present(void* user, u32 surface)
+@@ -3672,9 +4845,17 @@ static void eng_present(void* user, u32 surface)
      const u32 nrec = s_eng_rec_count;
      eng_encode_and_commit(src);
      eng_dump_frame(src);
@@ -5883,7 +6500,7 @@ index 98db285..53e68b7 100644
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
                           void* out, u32 out_pitch)
  {
-@@ -3682,6 +4576,14 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3682,6 +4863,14 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      id<MTLTexture> t = eng_obj(surface);
      if (!t || !out || !out_pitch || !w || !h) return;
      if (x + w > [t width] || y + h > [t height]) return;
@@ -5898,7 +6515,7 @@ index 98db285..53e68b7 100644
      if ([t storageMode] != MTLStorageModePrivate) {
          [t getBytes:out bytesPerRow:out_pitch
           fromRegion:MTLRegionMake2D(x, y, w, h) mipmapLevel:0];
-@@ -3713,6 +4615,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3713,6 +4902,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .texture_create       = eng_texture_create,
      .texture_upload       = eng_texture_upload,
      .texture_release      = eng_obj_release,
@@ -5907,7 +6524,7 @@ index 98db285..53e68b7 100644
      .color_target_create  = eng_color_target_create,
      .color_target_release = eng_obj_release,
      .surface_view         = eng_surface_view,
-@@ -3721,6 +4625,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3721,6 +4912,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .depth_snapshot       = eng_depth_snapshot,
      .color_snapshot       = eng_color_snapshot,
      .depth_snapshot_rgba8 = eng_depth_snapshot_rgba8,
@@ -5916,7 +6533,17 @@ index 98db285..53e68b7 100644
      .pipeline_create      = eng_pipeline_create,
      .pipeline_release     = eng_pipeline_release,
      .bind_targets         = eng_bind_targets,
-@@ -3853,6 +4759,12 @@ void rsx_metal_backend_shutdown(void)
+@@ -3734,6 +4927,9 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+     .set_scissor          = eng_set_scissor,
+     .set_stencil_ref      = eng_set_stencil_ref,
+     .draw                 = eng_draw,
++    .vbuf_create          = eng_vbuf_create,
++    .vbuf_release         = eng_vbuf_release,
++    .draw_vbuf            = eng_draw_vbuf,
+     .clear_color          = eng_clear_color,
+     .clear_depth_stencil  = eng_clear_depth_stencil,
+     .present              = eng_present,
+@@ -3853,6 +5049,12 @@ void rsx_metal_backend_shutdown(void)
              s_inflight = nil;
          }
  #if !TARGET_OS_IPHONE
@@ -5929,7 +6556,7 @@ index 98db285..53e68b7 100644
          if (s_window) { [s_window close]; s_window = nil; }
  #endif
          free(s_verts); s_verts = NULL;
-@@ -3886,6 +4798,38 @@ static int pump_messages_impl(void)
+@@ -3886,15 +5088,85 @@ static int pump_messages_impl(void)
                                                  inMode:NSDefaultRunLoopMode
                                                 dequeue:YES];
              if (!ev) break;
@@ -5937,20 +6564,28 @@ index 98db285..53e68b7 100644
 +             * accumulates as deltas in 1/16 px, which cellPad drains on each
 +             * poll; buttons count only inside the game view, so dragging the
 +             * title bar does not fire a bolt. The events still go to AppKit,
-+             * which is what focuses the window on a click. */
++             * which is what focuses the window on a click.
++             *
++             * With capture on (the default while the mouse camera is), the
++             * mouse belongs to the game only while captured: a left click in
++             * the game captures it (that click fires nothing), Esc, Cmd,
++             * another window or another app release it, and in between the
++             * cursor is free and moving it turns nothing. */
 +            {   extern volatile int32_t  g_pad_mouse_dx, g_pad_mouse_dy;
 +                extern volatile uint32_t g_pad_mouse_buttons;
 +                const NSEventType t = [ev type];
 +                const int motion = (t == NSEventTypeMouseMoved || t == NSEventTypeLeftMouseDragged ||
 +                                    t == NSEventTypeRightMouseDragged || t == NSEventTypeOtherMouseDragged);
-+                /* Motion counts whenever the game window is key: a moved event
-+                 * carries no window once the cursor leaves it, and the camera
-+                 * should keep turning then. */
-+                if (motion && s_window && [s_window isKeyWindow]) {
++                /* Uncaptured (PS3_MOUSE_CAPTURE=0), motion counts whenever the
++                 * game window is key: a moved event carries no window once the
++                 * cursor leaves it, and the camera should keep turning then. */
++                const int take_motion = s_cap_on ? (s_captured && [ev timestamp] >= s_cap_since)
++                                                 : (s_window && [s_window isKeyWindow]);
++                if (motion && take_motion) {
 +                    __atomic_add_fetch(&g_pad_mouse_dx, (int32_t)lround([ev deltaX] * 16.0), __ATOMIC_RELAXED);
 +                    __atomic_add_fetch(&g_pad_mouse_dy, (int32_t)lround([ev deltaY] * 16.0), __ATOMIC_RELAXED);
 +                }
-+                if (!motion && s_window && [ev window] == s_window && [s_window isKeyWindow]) {
++                if (!motion && s_window && [ev window] == s_window) {
 +                    const NSPoint at = [ev locationInWindow];
 +                    const int inside = NSPointInRect(at, [[s_window contentView] frame]);
 +                    uint32_t bit = 0;
@@ -5960,24 +6595,73 @@ index 98db285..53e68b7 100644
 +                    if (bit) {
 +                        const int down = (t == NSEventTypeLeftMouseDown || t == NSEventTypeRightMouseDown ||
 +                                          t == NSEventTypeOtherMouseDown);
-+                        if (down && inside) __atomic_or_fetch(&g_pad_mouse_buttons, bit, __ATOMIC_RELAXED);
-+                        if (!down)          __atomic_and_fetch(&g_pad_mouse_buttons, ~bit, __ATOMIC_RELAXED);
++                        if (!down) {
++                            __atomic_and_fetch(&g_pad_mouse_buttons, ~bit, __ATOMIC_RELAXED);
++                        } else if (!s_cap_on) {
++                            if (inside && [s_window isKeyWindow])
++                                __atomic_or_fetch(&g_pad_mouse_buttons, bit, __ATOMIC_RELAXED);
++                        } else if (s_captured) {
++                            __atomic_or_fetch(&g_pad_mouse_buttons, bit, __ATOMIC_RELAXED);
++                        } else if (inside && bit == 1u) {
++                            mouse_capture();
++                        }
 +                    }
 +                }
++                /* Cmd releases the mouse, so Cmd+Tab and the rest of the
++                 * system's shortcuts find a cursor. */
++                if (t == NSEventTypeFlagsChanged && s_captured &&
++                    ([ev modifierFlags] & NSEventModifierFlagCommand))
++                    mouse_release();
 +            }
              /* Keys drive the keyboard pad (cellPad.c): record and swallow
-              * them -- unhandled, AppKit beeps on every press. */
+-             * them -- unhandled, AppKit beeps on every press. */
++             * them -- unhandled, AppKit beeps on every press. The window's
++             * own shortcuts come first and never reach the pad, and nothing
++             * typed with Cmd held does (Cmd+W is not a step forward). */
              if ([ev type] == NSEventTypeKeyDown || [ev type] == NSEventTypeKeyUp) {
-@@ -3903,6 +4847,8 @@ static int pump_messages_impl(void)
+                 extern volatile uint32_t g_pad_host_keys[4];
+                 const unsigned vk = [ev keyCode] & 127u;
+-                if ([ev type] == NSEventTypeKeyDown)
++                if ([ev type] == NSEventTypeKeyDown) {
++                    const NSEventModifierFlags m = [ev modifierFlags];
++                    const int cmd = (m & NSEventModifierFlagCommand) != 0;
++                    const int ctl = (m & NSEventModifierFlagControl) != 0;
++                    const int opt = (m & NSEventModifierFlagOption)  != 0;
++                    if (vk == 0x03 && cmd) {                                   /* Cmd+F, Cmd+Ctrl+F */
++                        if (![ev isARepeat]) wm_toggle(ctl ? WM_FULLSCREEN : s_wm_fs_style);
++                        continue;
++                    }
++                    if ((vk == 0x24 || vk == 0x4C) && opt && !cmd) {           /* Option+Return/Enter */
++                        if (![ev isARepeat]) wm_toggle(s_wm_fs_style);
++                        continue;
++                    }
++                    if (vk == 0x35 && s_captured) { mouse_release(); continue; } /* Esc */
++                    if (cmd) continue;
+                     __atomic_or_fetch(&g_pad_host_keys[vk >> 5], 1u << (vk & 31), __ATOMIC_RELAXED);
+-                else
++                } else {
+                     __atomic_and_fetch(&g_pad_host_keys[vk >> 5], ~(1u << (vk & 31)), __ATOMIC_RELAXED);
++                }
+                 continue;
+             }
+             [NSApp sendEvent:ev];
+@@ -3903,8 +5175,14 @@ static int pump_messages_impl(void)
          if (![NSApp isActive]) {
              extern volatile uint32_t g_pad_host_keys[4];
              for (int i = 0; i < 4; i++) g_pad_host_keys[i] = 0;
 +            extern volatile uint32_t g_pad_mouse_buttons;
 +            g_pad_mouse_buttons = 0;
++            mouse_release();
          }
-         if (s_window && ![s_window isVisible]) s_closed = 1;
+-        if (s_window && ![s_window isVisible]) s_closed = 1;
++        wm_keep_drawable();
++        /* Closing is the delegate's windowWillClose. "Not visible" is not
++         * closed: a minimised window is not visible either, and neither is
++         * one between Spaces in a fullscreen transition. */
      }
-@@ -4011,7 +4957,7 @@ void rsx_metal_backend_present(void)
+ #endif
+     return s_closed ? -1 : 0;
+@@ -4011,7 +5289,7 @@ void rsx_metal_backend_present(void)
          }
          if (enc) [enc endEncoding];
  
@@ -7852,7 +8536,7 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..fbee956 100644
+index 3addd48..557c993 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -18,6 +18,7 @@
@@ -8104,7 +8788,7 @@ index 3addd48..fbee956 100644
          s_ovl_src_count++;
      }
  }
-@@ -1755,16 +1876,40 @@ void spu_overlay_register_region_at(uint32_t content_ea, uint32_t lsa, uint32_t
+@@ -1755,16 +1876,44 @@ void spu_overlay_register_region_at(uint32_t content_ea, uint32_t lsa, uint32_t
          s_ovl_src[s_ovl_src_count - 1].lift_lsa = lsa;
  }
  
@@ -8142,10 +8826,14 @@ index 3addd48..fbee956 100644
          s_stack_reset[s_stack_reset_count].entry = entry & SPU_LS_MASK;
          s_stack_reset[s_stack_reset_count++].image_id = image_id;
 +        g_spu_stack_reset_hint[((entry & SPU_LS_MASK) >> 2) & 1023u] = 1;
++        /* PS3_SPU_STACK_HINT=0: every slot set, i.e. the full check on every
++         * dispatch as before the hint table (for an A/B). */
++        { const char* e = getenv("PS3_SPU_STACK_HINT");
++          if (e && *e == '0') memset(g_spu_stack_reset_hint, 1, sizeof g_spu_stack_reset_hint); }
      }
  }
  
-@@ -1775,9 +1920,11 @@ void spu_check_stack_reset(spu_context* ctx, void (*fn)(spu_context*))
+@@ -1775,9 +1924,11 @@ void spu_check_stack_reset(spu_context* ctx, void (*fn)(spu_context*))
      /* The registry count first: it is a plain global, s_spu_halt_armed is
       * thread-local (a _tlv_get_addr call on macOS), and with no stack-reset
       * entries registered the loop below cannot fire. Runs on every dispatch. */
@@ -8159,7 +8847,7 @@ index 3addd48..fbee956 100644
              fn == spu_lookup(ctx->pc, s_stack_reset[i].image_id)) {
              g_spu_trampoline_fn = 0;
              SPU_LONGJMP(s_spu_halt_env, 2);
-@@ -1905,6 +2052,44 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
+@@ -1905,6 +2056,44 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
                  ea, size, os, on, ns, nn); }
  }
  
@@ -8204,7 +8892,7 @@ index 3addd48..fbee956 100644
  void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint32_t size)
  {
      uint32_t lsa = (uint32_t)(ls - ctx->ls);
-@@ -1924,7 +2109,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1924,7 +2113,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
                fprintf(stderr, "[spu-get] img=%d pc=0x%05X ea=0x%08X -> LS 0x%05X size=0x%X\n",
                        ctx->image_id, (unsigned)(ctx->pc & SPU_LS_MASK), ea, lsa, size); } } }
      spu_ovl_dump(ctx, ea, lsa, ls, size);
@@ -8213,7 +8901,7 @@ index 3addd48..fbee956 100644
          if (!ctx->resident_code[slot].image_id) continue;
          uint32_t base = ctx->resident_code[slot].lsa;
          uint32_t end = base + ctx->resident_code[slot].size;
-@@ -1949,6 +2134,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1949,6 +2138,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
              ctx->resident_code[slot].image_id = 0;
          }
      }
@@ -8221,7 +8909,7 @@ index 3addd48..fbee956 100644
      for (int i = 0; i < s_ovl_src_count; i++) {
          const spu_ovl_src* o = &s_ovl_src[i];
          int hit = o->has_sig ? (size >= 512 && memcmp(ls, o->sig, 16) == 0)
-@@ -1966,7 +2152,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1966,7 +2156,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
              }
              if (!hit) continue;
              int have = 0;
@@ -8230,7 +8918,7 @@ index 3addd48..fbee956 100644
                  if (ctx->resident_code[slot].image_id == o->image_id &&
                      ctx->resident_code[slot].lsa == o->lift_lsa) have = 1;
              if (have) continue;
-@@ -1975,13 +2161,14 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1975,13 +2165,14 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
          if (hit) {
              if (o->span) {
                  if (lsa + o->span > SPU_LS_SIZE) return;
@@ -8246,7 +8934,7 @@ index 3addd48..fbee956 100644
                      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
                          fprintf(stderr, "[spu-ovl] img=%d code span src=0x%08X -> LS 0x%05X+0x%X resident as image %d (slot %u)\n",
                                  ctx->image_id, ea, lsa, o->span, o->image_id, slot); }
-@@ -2212,7 +2399,7 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2212,7 +2403,7 @@ static int spu_smc_microstep(spu_context* ctx)
        if (s_dbg > 0 && pc >= 0x4000 && pc < 0x3F000) { s_dbg--;
          fprintf(stderr, "[micro-dbg] img=%d pc=0x%05X lr=0x%05X slots", ctx->image_id, pc,
                  ctx->gpr[0]._u32[0] & SPU_LS_MASK);
@@ -8255,7 +8943,7 @@ index 3addd48..fbee956 100644
              fprintf(stderr, " {%d 0x%05X+0x%X}", ctx->resident_code[k].image_id,
                      ctx->resident_code[k].lsa, ctx->resident_code[k].size);
          fprintf(stderr, " ovl=%d lookup10=%p lookup11=%p\n", ctx->resident_ovl,
-@@ -2366,7 +2553,21 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2366,7 +2557,21 @@ static int spu_smc_microstep(spu_context* ctx)
          /* Stop at the drain's return point too: it sits mid-function, so it is
           * no lifted entry, and a job's return would otherwise run on through
           * the caller's code (GH3's song-freeze; see drain_ret_pc). */
@@ -8278,7 +8966,7 @@ index 3addd48..fbee956 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
-@@ -2448,7 +2649,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2448,7 +2653,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
          int lifted = spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->image_id) ||
              (ctx->resident_task && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_task)) ||
              (ctx->resident_ovl  && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_ovl));
@@ -8287,7 +8975,7 @@ index 3addd48..fbee956 100644
              if (ctx->resident_code[slot].image_id &&
                  SPURS_TASKSET_PM_SYSCALL_LS - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size)
                  lifted = 1;
-@@ -2555,11 +2756,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2555,11 +2760,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
       * is 0 outside the region, so this only ever fires for genuine task code.) */
      spu_fn fn = NULL;
      int code_owner = 0;
@@ -8303,7 +8991,7 @@ index 3addd48..fbee956 100644
              break;
          }
      }
-@@ -2573,8 +2776,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2573,8 +2780,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      /* A resident module's code outside its own image: the save/restore stub the
       * WWS policy module writes at the top of local store (LS 0x3FEC0) and calls
       * from its interrupt path. Its lift belongs to the module's image. */
@@ -8314,7 +9002,7 @@ index 3addd48..fbee956 100644
              fn = spu_lookup(ctx->pc, ctx->resident_code[slot].image_id);
      /* The job returned through the link register we planted: it is finished.
       * Its outermost frame ends in `bi $r0`, and r0 was 0 -- so without this the
-@@ -2633,15 +2836,21 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2633,15 +2840,21 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      }
  
      if (!fn && !ctx->policy_mode && ctx->pc >= SPU_JM2_KERNEL_BASE) {
@@ -8342,7 +9030,7 @@ index 3addd48..fbee956 100644
              uint32_t p0 = ctx->pc & SPU_LS_MASK;
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
-@@ -2871,7 +3080,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2871,7 +3084,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
                    s_dumped = 1; } } }
      }
      if (fn) {
@@ -8351,7 +9039,7 @@ index 3addd48..fbee956 100644
          /* MUSTTAIL: a guest loop that iterates through an indirect branch (the
           * Bink decoder's per-command dispatch does) must not grow the host
           * stack -- a plain call here leaked a resolver+callee frame per
-@@ -3013,9 +3222,22 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -3013,9 +3226,22 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
        static int _bt0[BT0_MAX_IMG];
        unsigned img = (ctx->image_id >= 0 && ctx->image_id < BT0_MAX_IMG)
                       ? (unsigned)ctx->image_id : 0;
@@ -8375,7 +9063,39 @@ index 3addd48..fbee956 100644
        spu_ls_watch_dump("branch-to-0"); }
      /* One-shot: the FMOD null-handler DSP node carries a PPU descriptor EA at
       * node+0x14 (observed 0x93C3C0). Dump it to identify which plugin/unit
-@@ -3127,24 +3349,26 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -3105,12 +3331,30 @@ static inline int spu_ib_diag_enabled(void)
+     return on < 0 ? spu_ib_diag_init() : on;
+ }
+ 
++/* Job modules (overlay ids >= 200) used to take the slow resolver on every
++ * indirect branch, and they are most of the SPU work in New Marais: the
++ * resolver's job-specific parts are only the SPU_JOBTRACE / SPU_JOBEXEC /
++ * LBP_HLE_JOBDONE diagnostics (the overlay itself is switched by the GET hook,
++ * or on a lookup miss, which still goes slow). PS3_SPU_FASTJOB=0 restores the
++ * old routing. */
++static int spu_job_slow_routing(void)
++{
++    static int v = -1;
++    if (v < 0) {
++        const char* e = getenv("PS3_SPU_FASTJOB");
++        v = (e && *e == '0') || getenv("SPU_JOBTRACE") || getenv("SPU_JOBEXEC") ||
++            getenv("LBP_HLE_JOBDONE");
++    }
++    return v;
++}
++
+ void spu_indirect_branch(spu_context* ctx)
+ {
+     const uint32_t pc = ctx->pc & SPU_LS_MASK;
+     if (__atomic_load_n(&ctx->stop_request, __ATOMIC_RELAXED) || ctx->irq_saved ||
+         pc == SPURS_TASKSET_PM_SYSCALL_LS || pc == 0xA00u ||
+-        ctx->image_id == SPU_RESOLVER_ONLY_IMAGE_ID || ctx->resident_ovl >= 200 ||
++        ctx->image_id == SPU_RESOLVER_ONLY_IMAGE_ID ||
++        (ctx->resident_ovl >= 200 && spu_job_slow_routing()) ||
+         (ctx->policy_mode && (pc == SPURS_PM_EXIT_TO_KERNEL_LS || pc == SPURS_PM_SELECT_WORKLOAD_LS)) ||
+         (!ctx->policy_mode && pc == SPU_JOB_RETURN_LS) || spu_ib_diag_enabled())
+         goto slow;
+@@ -3127,24 +3371,26 @@ void spu_indirect_branch(spu_context* ctx)
          }
          spu_fn fn = NULL;
          int code_owner = 0;
