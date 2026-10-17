@@ -72,15 +72,31 @@ tools/setup_toolkit.sh                        # toolkit em ./ps3recomp-fork
 .venv/bin/pip install -r ps3recomp-fork/requirements.txt
 ```
 
-Depois siga a receita do port em
-[`infamous2-lle/README.md`](infamous2-lle/README.md#rebuilding):
+Depois um comando faz o resto (descriptografar, traduzir, compilar) a partir
+da sua cópia e da licença dela:
 
-1. Descriptografar o EBOOT e o firmware com o RPCS3.
-2. Traduzir o firmware, o PPU e os programas SPU.
-3. Clonar os dados do jogo para `infamous2/vfs/`.
-4. Compilar.
+```sh
+python3 infamous2-lle/tools/rebuild.py --game "<RPCS3>/dev_hdd0/game/NPUA80638" --rap <NPUA80638...rap>
+```
+
+`--dry-run` lista as etapas e confere antes cada pré-requisito. Por padrão o
+EBOOT e o firmware são descriptografados com o RPCS3; sem o RPCS3, passe o seu
+próprio arquivo de chaves (formato scetool) com `--keys ARQUIVO` e o firmware
+como o `PS3UPDAT.PUP` da Sony com `--firmware PS3UPDAT.PUP`. Nenhuma chave vem
+com este repositório. A receita manual está em
+[`infamous2-lle/README.md`](infamous2-lle/README.md#rebuilding).
 
 A tradução leva poucos minutos e a compilação ~80 s num M4 Pro.
+
+### O app
+
+[`launcher/`](launcher/README.md) é um app de desktop (Tauri) que faz tudo isso
+sem terminal: confere e instala as ferramentas, acha a sua cópia e o `.rap`,
+roda o rebuild com barra de progresso e tem telas de Jogar, tela, controles
+(remapeamento) e saves. O CI gera o app para macOS, Windows e Linux a cada
+mudança (o jogo em si por enquanto só compila no macOS); os instaladores ainda
+não são assinados, então no Mac abra pela primeira vez com botão direito >
+Abrir.
 
 ## Como jogar
 
