@@ -10,7 +10,7 @@ const en = {
 
   "home.notInstalled": "The game is not installed yet",
   "home.notInstalledHint":
-    "The app ships no game files. Point it at your own copy (RPCS3 folder or PKG) and your .rap, and it rebuilds the game on this computer.",
+    "The app ships no game files. Pick your own copy (RPCS3's game folder) and it rebuilds the game on this computer.",
   "home.goInstall": "Install from my copy",
   "home.play": "Play",
   "home.stop": "Stop",
@@ -108,6 +108,72 @@ const en = {
   "settings.preview": "Equivalent command",
   "settings.reset": "Restore defaults",
   "settings.saved": "Saved",
+
+  "unsupported.title": "This system cannot build or play the game yet",
+  "unsupported.body":
+    "The port runs only on macOS (Apple Silicon, Metal) for now. Windows (Direct3D 12) and Linux (Vulkan) are planned; this app already installs here so it is ready when they land. Settings can be edited meanwhile.",
+  "unsupported.follow": "Follow the project",
+
+  "prereq.title": "What this computer needs",
+  "prereq.lead":
+    "Free tools that turn your copy into a native build. The app can install what is missing (with your OK); RPCS3 and the PS3 firmware you get from their official sites.",
+  "prereq.checking": "Checking…",
+  "prereq.error": "Could not run the checks: {e}",
+  "prereq.allOk": "all set",
+  "prereq.missingN": "{n} missing",
+  "prereq.fix": "Install what is missing",
+  "prereq.fixBrew": "Install with Homebrew: {pkgs}",
+  "prereq.recheck": "Check again",
+  "prereq.installClt": "Install the Command Line Tools",
+  "prereq.askClt":
+    "macOS will open Apple's installer for the Xcode Command Line Tools (compiler, git, Python; about 1 GB, no Apple ID needed). Continue?",
+  "prereq.cltStarted": "Follow Apple's installer window. This screen updates by itself when it finishes.",
+  "prereq.askBrew": "This runs \"brew install {pkgs}\" in the background. It can take a few minutes. Continue?",
+  "prereq.brewRunning": "Installing with Homebrew…",
+  "prereq.brewDone": "Installed.",
+  "prereq.brewFailed": "Homebrew stopped with an error ({code}); see the output above.",
+  "prereq.noBrew":
+    "The build tools (CMake, Ninja, SDL2, glslang, SPIRV-Cross, Python) come from Homebrew, which is not installed. Install it with this command in Terminal, then click Check again:",
+  "prereq.openBrew": "Open brew.sh",
+  "prereq.copyCmd": "Copy the command",
+  "prereq.getRpcs3": "Download RPCS3",
+  "prereq.howFirmware": "How to install the firmware",
+  "prereq.hint.rpcs3":
+    "RPCS3 (free PS3 emulator) is used once, to decrypt your copy with your licence. Install it in Applications. It is not bundled with this app.",
+  "prereq.hint.firmware":
+    "Download the PS3 system software (PS3UPDAT.PUP) from playstation.com and install it in RPCS3: File > Install Firmware.",
+  "prereq.hint.clt": "Apple's free compiler package.",
+  "prereq.hint.disk": "Free some space on this disk, or choose another install folder.",
+  "prereq.name.host": "System",
+  "prereq.name.xcode-clt": "Xcode Command Line Tools",
+  "prereq.name.python": "Python 3.10+",
+  "prereq.name.cmake": "CMake",
+  "prereq.name.ninja": "Ninja",
+  "prereq.name.compiler": "C/C++ compiler",
+  "prereq.name.git": "git",
+  "prereq.name.sdl2": "SDL2",
+  "prereq.name.glslang": "glslang",
+  "prereq.name.spirv-cross": "SPIRV-Cross",
+  "prereq.name.rpcs3": "RPCS3",
+  "prereq.name.firmware": "PS3 firmware (in RPCS3)",
+  "prereq.name.disk": "Disk space",
+  "prereq.name.patch": "Toolkit patch",
+  "prereq.name.toolkit": "Toolkit",
+
+  "game.title": "Your copy of the game",
+  "game.lead":
+    "Pick the game's folder: RPCS3's NPUA80638 folder (or RPCS3's data folder). The licence (.rap) is found on its own when it is in RPCS3, next to the copy or in Downloads.",
+  "game.pick": "Choose the game folder…",
+  "game.more": "More options (PKG files, licence, install folder, DLC)",
+  "game.pkgs": "{n} PKG file(s)",
+  "game.notGame": "No inFAMOUS 2 (NPUA80638) in this folder",
+  "game.rapFound": "Licence: {rap}",
+  "game.rapMissing": "Licence {cid}.rap not found: choose it under More options.",
+
+  "run.title": "Install",
+  "run.lead": "Builds the game on this computer. It takes a while the first time; the app keeps working meanwhile.",
+  "install.rapHint": "Your licence file. Filled in automatically when it is found.",
+  "install.askMissing": "Some requirements are still missing, so the install will probably stop early. Start anyway?",
 };
 
 export type Key = keyof typeof en;
@@ -120,7 +186,7 @@ const ptBR: Partial<Record<Key, string>> = {
 
   "home.notInstalled": "O jogo ainda não está instalado",
   "home.notInstalledHint":
-    "O app não traz nenhum arquivo do jogo. Aponte para a sua cópia (pasta do RPCS3 ou PKG) e o seu .rap, e ele recompila o jogo neste computador.",
+    "O app não traz nenhum arquivo do jogo. Escolha a sua cópia (a pasta do jogo no RPCS3) e ele recompila o jogo neste computador.",
   "home.goInstall": "Instalar a partir da minha cópia",
   "home.play": "Jogar",
   "home.stop": "Parar",
@@ -218,6 +284,62 @@ const ptBR: Partial<Record<Key, string>> = {
   "settings.preview": "Comando equivalente",
   "settings.reset": "Restaurar padrões",
   "settings.saved": "Salvo",
+
+  "unsupported.title": "Este sistema ainda não compila nem roda o jogo",
+  "unsupported.body":
+    "Por enquanto o port roda só no macOS (Apple Silicon, Metal). Windows (Direct3D 12) e Linux (Vulkan) estão nos planos; o app já instala aqui para estar pronto quando chegarem. Dá para editar as configurações enquanto isso.",
+  "unsupported.follow": "Acompanhar o projeto",
+
+  "prereq.title": "O que este computador precisa",
+  "prereq.lead":
+    "Ferramentas gratuitas que transformam a sua cópia num build nativo. O app instala o que faltar (com a sua permissão); o RPCS3 e o firmware do PS3 vêm dos sites oficiais.",
+  "prereq.checking": "Verificando…",
+  "prereq.error": "Não foi possível verificar: {e}",
+  "prereq.allOk": "tudo pronto",
+  "prereq.missingN": "{n} faltando",
+  "prereq.fix": "Instalar o que falta",
+  "prereq.fixBrew": "Instalar com o Homebrew: {pkgs}",
+  "prereq.recheck": "Verificar de novo",
+  "prereq.installClt": "Instalar as Command Line Tools",
+  "prereq.askClt":
+    "O macOS vai abrir o instalador da Apple das Xcode Command Line Tools (compilador, git, Python; cerca de 1 GB, sem Apple ID). Continuar?",
+  "prereq.cltStarted": "Siga a janela do instalador da Apple. Esta tela se atualiza sozinha quando terminar.",
+  "prereq.askBrew": "Isto roda \"brew install {pkgs}\" em segundo plano. Pode levar alguns minutos. Continuar?",
+  "prereq.brewRunning": "Instalando com o Homebrew…",
+  "prereq.brewDone": "Instalado.",
+  "prereq.brewFailed": "O Homebrew parou com erro ({code}); veja a saída acima.",
+  "prereq.noBrew":
+    "As ferramentas de build (CMake, Ninja, SDL2, glslang, SPIRV-Cross, Python) vêm do Homebrew, que não está instalado. Instale com este comando no Terminal e depois clique em Verificar de novo:",
+  "prereq.openBrew": "Abrir brew.sh",
+  "prereq.copyCmd": "Copiar o comando",
+  "prereq.getRpcs3": "Baixar o RPCS3",
+  "prereq.howFirmware": "Como instalar o firmware",
+  "prereq.hint.rpcs3":
+    "O RPCS3 (emulador de PS3 gratuito) é usado uma vez, para descriptografar a sua cópia com a sua licença. Instale em Aplicativos. Ele não vem junto com este app.",
+  "prereq.hint.firmware":
+    "Baixe o software do sistema do PS3 (PS3UPDAT.PUP) em playstation.com e instale no RPCS3: File > Install Firmware.",
+  "prereq.hint.clt": "Pacote de compilador gratuito da Apple.",
+  "prereq.hint.disk": "Libere espaço neste disco ou escolha outra pasta de instalação.",
+  "prereq.name.host": "Sistema",
+  "prereq.name.compiler": "Compilador C/C++",
+  "prereq.name.firmware": "Firmware do PS3 (no RPCS3)",
+  "prereq.name.disk": "Espaço em disco",
+  "prereq.name.patch": "Patch do toolkit",
+
+  "game.title": "A sua cópia do jogo",
+  "game.lead":
+    "Escolha a pasta do jogo: a pasta NPUA80638 do RPCS3 (ou a pasta de dados do RPCS3). A licença (.rap) é encontrada sozinha quando está no RPCS3, junto da cópia ou em Downloads.",
+  "game.pick": "Escolher a pasta do jogo…",
+  "game.more": "Mais opções (arquivos PKG, licença, pasta de instalação, DLC)",
+  "game.pkgs": "{n} arquivo(s) PKG",
+  "game.notGame": "Nenhum inFAMOUS 2 (NPUA80638) nesta pasta",
+  "game.rapFound": "Licença: {rap}",
+  "game.rapMissing": "Licença {cid}.rap não encontrada: escolha em Mais opções.",
+
+  "run.title": "Instalar",
+  "run.lead": "Compila o jogo neste computador. Na primeira vez demora; o computador continua utilizável enquanto isso.",
+  "install.rapHint": "O seu arquivo de licença. Preenchido sozinho quando é encontrado.",
+  "install.askMissing": "Ainda faltam requisitos, então a instalação provavelmente vai parar no começo. Começar mesmo assim?",
 };
 
 let current: Lang = "pt-BR";

@@ -112,3 +112,29 @@ legend { padding: 0 6px; color: var(--accent); font-weight: 600; }
 .log-head { justify-content: space-between; }
 .log { background: #080b10; border: 1px solid var(--line); border-radius: 10px; padding: 12px; height: 280px; overflow: auto;
   font: 11.5px/1.45 ui-monospace, Menlo, monospace; color: #b8c2d3; white-space: pre-wrap; word-break: break-all; margin: 0; }
+
+/* install: the three steps */
+.card.step { margin-top: 16px; padding: 10px 18px 16px; }
+.step-head { gap: 12px; }
+.step-head h2 { margin: 6px 0; flex: 1; }
+.step-no { width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--accent); font-weight: 700; font-size: 13px; }
+.card.step.done .step-no { background: color-mix(in srgb, var(--ok) 25%, transparent); border-color: var(--ok); color: var(--ok); }
+.card.step.disabled { opacity: .5; pointer-events: none; }
+.pill.bad { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
+.pill.warn { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.prereqs li { align-items: center; }
+.prereqs .what { flex: 1; min-width: 0; }
+.prereqs .what b { display: block; font-weight: 600; }
+.prereqs button { flex: none; padding: 4px 10px; font-size: 12px; }
+.banner { margin: 14px 0; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel)); }
+.banner strong { color: var(--warn); }
+.banner p { margin: 6px 0 4px; }
+.notice { margin: 10px 0; padding: 10px 14px; border-radius: 10px; background: var(--panel-2); }
+.notice p { margin: 0 0 8px; }
+.summary { margin: 12px 0 4px; padding: 10px 14px; border-radius: 10px; background: var(--panel-2); display: grid; gap: 6px; }
+.summary .ico { display: inline-block; width: 14px; font-weight: 700; }
+.summary .ok-ico { color: var(--ok); }
+.summary .bad-ico { color: var(--bad); }
+.log.short { height: 160px; margin-top: 10px; }
