@@ -126,8 +126,11 @@ o jeito mais rápido de reportar um defeito de imagem.
 
 Problemas conhecidos:
 
-- Algumas fachadas de prédios fora do sol saem quase pretas no Metal (no
-  Windows não acontece); em investigação.
+- Em algumas vistas de perto ao entardecer, os passes de occlusion volume
+  deixavam fachadas inteiras (e o Cole) pretas; o `run.sh` os desliga por
+  enquanto (perde-se só o escurecimento suave de contato perto de objetos)
+  enquanto a conta deles é conferida. `PS3RECOMP_ENG_SKIP_FP=` (vazio) os
+  desenha de novo.
 - Raramente, um SPU rodando o job de geometria do Edge falha e o jogo para;
   diagnosticado até um registrador sobrescrito dentro de um laço atômico, ainda
   sem correção.
