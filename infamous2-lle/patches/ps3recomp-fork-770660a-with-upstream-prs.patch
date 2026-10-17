@@ -4184,7 +4184,7 @@ index aee795c..baba40f 100644
  
  /* The clear colour most recently set via NV4097_SET_COLOR_CLEAR_VALUE, in the
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..9fc312d 100644
+index 98db285..a88e4d8 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -48,11 +48,18 @@
@@ -5299,8 +5299,19 @@ index 98db285..9fc312d 100644
          while (i < s_eng_rec_count && s_eng_rec[i].kind == ENG_REC_DRAW &&
                 eng_record_targets_are(&s_eng_rec[i], rt, nrt) &&
                 (s_eng_rec[i].depth == depth ||
-@@ -3450,7 +4251,10 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
-         const int windowed_present = (present_dst && !s_headless);
+@@ -3447,10 +4248,20 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+     @autoreleasepool {
+         id<CAMetalDrawable> drawable = nil;
+         id<MTLTexture> dst = nil;
+-        const int windowed_present = (present_dst && !s_headless);
++        /* Headless presents used to wait for the GPU every frame (the frame
++         * dump needs a finished frame); they now bound in-flight frames like a
++         * window does, so headless timings match what a window shows. The
++         * dumps fence the queue themselves. PS3RECOMP_METAL_HEADLESS_SYNC=1
++         * restores the wait. */
++        static int s_hl_sync = -1;
++        if (s_hl_sync < 0) s_hl_sync = getenv("PS3RECOMP_METAL_HEADLESS_SYNC") ? 1 : 0;
++        const int windowed_present = (present_dst && (!s_headless || !s_hl_sync));
          u64 pt = eng_pt_now(), pt1;
          if (windowed_present) dispatch_semaphore_wait(s_inflight, DISPATCH_TIME_FOREVER);
 -        pt1 = eng_pt_now(); if (windowed_present) s_pt_ns[0] += pt1 - pt; pt = pt1;
@@ -5311,7 +5322,7 @@ index 98db285..9fc312d 100644
          if (present_dst) {
              if (s_headless) {
                  dst = s_offscreen;
-@@ -3471,16 +4275,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3471,16 +4282,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          /* PS3RECOMP_METAL_PASS_LOG=1: every 600th present, print the frame's
           * record stream grouped into passes (kind, targets, depth, count, and
           * the textures the first draw samples). */
@@ -5353,7 +5364,7 @@ index 98db285..9fc312d 100644
                      fprintf(stderr, "[pass] %5u x%-4u kind=%d rt=", i, j - i, (int)r->kind);
                      for (u32 k = 0; k < r->nrt; k++) fprintf(stderr, "%s%u", k ? "," : "", r->rt[k]);
                      fprintf(stderr, " depth=%u", r->depth);
-@@ -3498,12 +4323,14 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3498,12 +4330,14 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
                      i = j;
                  }
              }
@@ -5370,7 +5381,7 @@ index 98db285..9fc312d 100644
          if (windowed_present) { pt1 = eng_pt_now(); s_pt_ns[2] += pt1 - pt; pt = pt1; }
          if (windowed_present) {
              dispatch_semaphore_t sem = s_inflight;
-@@ -3519,8 +4346,27 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3519,8 +4353,27 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
              s_pt_n++;
              eng_pt_report();
          } else {
@@ -5398,7 +5409,16 @@ index 98db285..9fc312d 100644
          }
  
  
-@@ -3580,7 +4426,11 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -3550,7 +4403,7 @@ static void eng_dump_frame(id<MTLTexture> src)
+     if (!w || !h || w > 16384 || h > 16384) return;
+     unsigned char* rgba = malloc(w * h * 4);
+     if (!rgba) return;
+-    if (!s_headless) {
++    {   /* the frame may still be in flight (windowed, or headless without HEADLESS_SYNC) */
+         id<MTLCommandBuffer> fence = [s_queue commandBuffer];
+         [fence commit];
+         [fence waitUntilCompleted];
+@@ -3580,7 +4433,11 @@ static void eng_dump_frame(id<MTLTexture> src)
              fwrite(rgb, 1, 3, f);
          }
          fclose(f);
@@ -5411,7 +5431,7 @@ index 98db285..9fc312d 100644
      }
      free(rgba);
  }
-@@ -3596,13 +4446,29 @@ static float eng_half_to_float(uint16_t h)
+@@ -3596,14 +4453,30 @@ static float eng_half_to_float(uint16_t h)
      else f = (s << 31) | ((e + 112) << 23) | (m << 13);
      float r; memcpy(&r, &f, 4); return r;
  }
@@ -5426,6 +5446,7 @@ index 98db285..9fc312d 100644
      static unsigned frame, every;
      if (!every) { const char* e = getenv("PS3RECOMP_METAL_SURF_DUMP_EVERY"); every = e && atoi(e) > 0 ? (unsigned)atoi(e) : 300; }
 -    if ((frame++ % every) != 0) return;
+-    if (!s_headless) { id<MTLCommandBuffer> fence = [s_queue commandBuffer]; [fence commit]; [fence waitUntilCompleted]; }
 +    if (s_dump_force) { s_dump_force = 0; frame++; fprintf(stderr, "[surf-dump] triggered (present %u)\n", frame); } else
 +    /* PS3RECOMP_METAL_SURF_DUMP_AT=<sec>: instead of every Nth present, one
 +     * dump that many seconds after the first present (capture.sh's t minus
@@ -5439,10 +5460,11 @@ index 98db285..9fc312d 100644
 +          at_done = 1;
 +          fprintf(stderr, "[surf-dump] one-shot at %ld s (present %u)\n", at_sec, frame);
 +      } else if ((frame++ % every) != 0) return; }
-     if (!s_headless) { id<MTLCommandBuffer> fence = [s_queue commandBuffer]; [fence commit]; [fence waitUntilCompleted]; }
++    { id<MTLCommandBuffer> fence = [s_queue commandBuffer]; [fence commit]; [fence waitUntilCompleted]; }
      for (u32 h = 1; h <= s_eng_obj_count; ++h) {
          id<MTLTexture> t = s_eng_obj[h - 1];
-@@ -3672,9 +4538,17 @@ static void eng_present(void* user, u32 surface)
+         /* PS3RECOMP_METAL_SURF_DUMP_EXTRA=h,h,...: also dump these handles even if
+@@ -3672,9 +4545,17 @@ static void eng_present(void* user, u32 surface)
      const u32 nrec = s_eng_rec_count;
      eng_encode_and_commit(src);
      eng_dump_frame(src);
@@ -5461,7 +5483,7 @@ index 98db285..9fc312d 100644
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
                           void* out, u32 out_pitch)
  {
-@@ -3682,6 +4556,14 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3682,6 +4563,14 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      id<MTLTexture> t = eng_obj(surface);
      if (!t || !out || !out_pitch || !w || !h) return;
      if (x + w > [t width] || y + h > [t height]) return;
@@ -5476,7 +5498,7 @@ index 98db285..9fc312d 100644
      if ([t storageMode] != MTLStorageModePrivate) {
          [t getBytes:out bytesPerRow:out_pitch
           fromRegion:MTLRegionMake2D(x, y, w, h) mipmapLevel:0];
-@@ -3713,6 +4595,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3713,6 +4602,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .texture_create       = eng_texture_create,
      .texture_upload       = eng_texture_upload,
      .texture_release      = eng_obj_release,
@@ -5485,7 +5507,7 @@ index 98db285..9fc312d 100644
      .color_target_create  = eng_color_target_create,
      .color_target_release = eng_obj_release,
      .surface_view         = eng_surface_view,
-@@ -3721,6 +4605,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3721,6 +4612,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .depth_snapshot       = eng_depth_snapshot,
      .color_snapshot       = eng_color_snapshot,
      .depth_snapshot_rgba8 = eng_depth_snapshot_rgba8,
@@ -5494,7 +5516,7 @@ index 98db285..9fc312d 100644
      .pipeline_create      = eng_pipeline_create,
      .pipeline_release     = eng_pipeline_release,
      .bind_targets         = eng_bind_targets,
-@@ -3853,6 +4739,12 @@ void rsx_metal_backend_shutdown(void)
+@@ -3853,6 +4746,12 @@ void rsx_metal_backend_shutdown(void)
              s_inflight = nil;
          }
  #if !TARGET_OS_IPHONE
@@ -5507,7 +5529,7 @@ index 98db285..9fc312d 100644
          if (s_window) { [s_window close]; s_window = nil; }
  #endif
          free(s_verts); s_verts = NULL;
-@@ -3886,6 +4778,38 @@ static int pump_messages_impl(void)
+@@ -3886,6 +4785,38 @@ static int pump_messages_impl(void)
                                                  inMode:NSDefaultRunLoopMode
                                                 dequeue:YES];
              if (!ev) break;
@@ -5546,7 +5568,7 @@ index 98db285..9fc312d 100644
              /* Keys drive the keyboard pad (cellPad.c): record and swallow
               * them -- unhandled, AppKit beeps on every press. */
              if ([ev type] == NSEventTypeKeyDown || [ev type] == NSEventTypeKeyUp) {
-@@ -3903,6 +4827,8 @@ static int pump_messages_impl(void)
+@@ -3903,6 +4834,8 @@ static int pump_messages_impl(void)
          if (![NSApp isActive]) {
              extern volatile uint32_t g_pad_host_keys[4];
              for (int i = 0; i < 4; i++) g_pad_host_keys[i] = 0;
@@ -5555,7 +5577,7 @@ index 98db285..9fc312d 100644
          }
          if (s_window && ![s_window isVisible]) s_closed = 1;
      }
-@@ -4011,7 +4937,7 @@ void rsx_metal_backend_present(void)
+@@ -4011,7 +4944,7 @@ void rsx_metal_backend_present(void)
          }
          if (enc) [enc endEncoding];
  
