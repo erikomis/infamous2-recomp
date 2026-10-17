@@ -70,4 +70,16 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 # PS3RECOMP_ENG_SKIP_FP= (empty) draws them again.
 export PS3RECOMP_ENG_SKIP_FP="${PS3RECOMP_ENG_SKIP_FP-5f740845528b0e62,7875289ea6b856a6}"
 
+# The window (Metal backend; rsx_metal_backend.h has the details):
+#   PS3_WINDOW_MODE=windowed|fullscreen|borderless   how it opens (windowed)
+#   PS3_WINDOW_SIZE=1920x1080   windowed size in points (1280x720 by default)
+#   PS3_MOUSE_CAPTURE=0         the mouse camera without capturing the cursor
+# It resizes freely and the image stays 16:9, letterboxed. Cmd+F or
+# Option+Return toggles fullscreen, Cmd+Ctrl+F macOS fullscreen; a click in
+# the game captures the mouse, Esc or Cmd releases it.
+# The Dock icon is the launcher's original placeholder (no Sony art);
+# PS3_WINDOW_ICON=game uses the player's own PS3_GAME/ICON0.PNG instead,
+# =<file> any image, =none the system's generic icon.
+export PS3_WINDOW_ICON="${PS3_WINDOW_ICON-$here/window_icon.png}"
+
 exec "$here/build/Infamous2Recomp" "$vfs/PS3_GAME/USRDIR/EBOOT.elf" "$@"

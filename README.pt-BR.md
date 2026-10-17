@@ -105,7 +105,24 @@ Um controle (DualSense testado) funciona direto. Teclado e mouse somam com ele:
 | Botão esquerdo / direito / do meio do mouse | R1 / R2 / L1 |
 
 O mouse se ajusta com `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1` e
-`PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` desliga.
+`PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` desliga. Um clique no jogo captura o
+mouse (o cursor some e a câmera segue o mouse); Esc ou Cmd solta, assim como
+trocar de app. `PS3_MOUSE_CAPTURE=0` volta para a câmera sem captura.
+
+A janela muda de tamanho livremente e a imagem mantém o formato 16:9, com
+faixas pretas quando a janela tem outro formato.
+
+| Atalho | O que faz |
+| --- | --- |
+| Cmd+F ou Option+Return | liga/desliga a tela cheia (sem bordas com `PS3_WINDOW_MODE=borderless`, a do macOS nos outros casos) |
+| Cmd+Ctrl+F | liga/desliga a tela cheia do macOS |
+| Esc / Cmd | solta o mouse |
+
+| Variável | O que faz |
+| --- | --- |
+| `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | como o jogo abre: em janela (padrão), na tela cheia do macOS (um Space só dele) ou em tela cheia sem bordas (cobre a tela no lugar, sem barra de menus nem Dock, troca de app na hora) |
+| `PS3_WINDOW_SIZE=<l>x<a>` | o tamanho da janela em pontos, p. ex. `1920x1080` (padrão 1280x720, reduzido para caber na tela) |
+| `PS3_WINDOW_ICON=game\|<arquivo>\|none` | o ícone no Dock: por padrão o placeholder original do launcher (`infamous2-lle/window_icon.png`, sem arte da Sony); `game` usa o `PS3_GAME/ICON0.PNG` da sua própria cópia |
 
 Saves e troféus ficam em `~/Library/Application Support/infamous2-recomp/gamedata`
 (Linux: `~/.local/share/infamous2-recomp`), não importa de qual pasta o jogo é aberto;
