@@ -248,7 +248,7 @@ jobs:
           else shasum -a 256 -- * > SHA256SUMS-${{ matrix.name }}.txt; fi
           cat SHA256SUMS-${{ matrix.name }}.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: infamous2-launcher-${{ matrix.name }}
           path: ${{ env.OUT }}/*
