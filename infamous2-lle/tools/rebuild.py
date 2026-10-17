@@ -7,8 +7,16 @@
 data folder that holds dev_hdd0/game/NPUA80638) or one or more PKGs (base
 game first, then updates: pass --game once per file). The .rap is the
 player's licence. Every step of infamous2-lle/README.md "Rebuilding" runs in
-order: toolkit, Python venv, game import, decryption (RPCS3 --decrypt), the
-firmware/PPU/SPU/job lifts and the CMake build.
+order: toolkit, Python venv, game import, decryption, the firmware/PPU/SPU/job
+lifts and the CMake build.
+
+Decryption (the EBOOT and the three firmware modules the port translates) runs
+either through RPCS3 (`rpcs3 --decrypt`, the licence installed in RPCS3's
+exdata) or, with --keys KEYFILE (or $PS3_KEYS), through tools/decrypt_self.py
+with no RPCS3 at all; --decrypt-with picks one (default: python when a key
+file is given, else rpcs3). Both write the same bytes. The firmware .sprx are
+read from --firmware (a dev_flash folder, its sys/external, or any folder
+holding liblv2/libsysmodule/libsre.sprx; default: RPCS3's dev_flash).
 
 --out (default: the app data folder, ~/Library/Application Support/
 infamous2-recomp/install on macOS) mirrors this repository's layout, so the
@@ -21,8 +29,8 @@ port's own scripts work there unchanged:
     <out>/install.json        what the launcher reads (paths, version)
 
 Nothing here embeds a key, a licence or a game file: they all come from the
-player's machine at run time (PS3_RAP_KEY, only for the optional DLC step,
-comes from the environment and is never printed).
+player's machine at run time (the key file, and PS3_RAP_KEY for the DLC step
+or the python decryption, are never printed).
 
 Machine-readable output, one per line, for the launcher (everything else a
 tool prints is passed through as "LOG <line>"):
@@ -68,6 +76,14 @@ TESTED_APP_VER = '01.03'
 # built and tested against. A hash, not data: a different one only warns.
 TESTED_EBOOT_ELF_SHA256 = '3bfe08df4e2ed1201a83be3d38f13a66e900153dd4071f25a35c3c95a1717298'
 FIRMWARE = ('liblv2', 'libsysmodule', 'libsre')
+# sha256 of the decrypted firmware modules (PS3 firmware 4.93) the port is
+# tested with. Hashes, not data: a different one only warns.
+TESTED_FW_PRX_SHA256 = {
+    'liblv2': 'aac69540830b4a6673b93331bf52266f360551a2732adcbb3c7a808daddf09c5',
+    'libsysmodule': '6e4c69756c84a0965206e64fee264c14d0e5ae09e35ec37f6713f519283c3be0',
+    'libsre': '9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6',
+}
+DECRYPT_SELF = os.path.join(HERE, 'decrypt_self.py')
 
 # Port files copied into <out>/infamous2-lle (the build's sources and tools).
 PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
@@ -88,7 +104,7 @@ STEPS = [
     ('toolkit',  'Toolkit (ps3recomp fork + patches)'),
     ('venv',     'Python environment for the translators'),
     ('game',     'Import the game copy'),
-    ('decrypt',  'Decrypt EBOOT and firmware (RPCS3)'),
+    ('decrypt',  'Decrypt EBOOT and firmware'),
     ('port',     'Port sources'),
     ('firmware', 'Translate the firmware (liblv2, libsysmodule, libsre)'),
     ('ppu',      'Translate the PPU code'),
@@ -275,6 +291,44 @@ def tool_version(cmd):
         return None
 
 
+def resolve_fw_dir(path):
+    """The folder holding the firmware .sprx, from a dev_flash, its parent or sys/external."""
+    if not path:
+        return None
+    for c in (path,
+              os.path.join(path, 'sys', 'external'),
+              os.path.join(path, 'dev_flash', 'sys', 'external')):
+        if all(os.path.isfile(os.path.join(c, m + '.sprx')) for m in FIRMWARE):
+            return os.path.abspath(c)
+    return None
+
+
+def self_header(path):
+    """(program type, key revision) of a SELF, read from its clear header; None if not a SELF."""
+    with open(path, 'rb') as f:
+        h = f.read(0x200)
+    if len(h) < 0x70 or h[:4] != b'SCE\0':
+        return None
+    rev = struct.unpack_from('>H', h, 8)[0]
+    app = struct.unpack_from('>Q', h, 0x28)[0]
+    if app + 0x10 > len(h):
+        return None
+    ptype = struct.unpack_from('>I', h, app + 0xC)[0]
+    return {4: 'APP', 8: 'NPDRM'}.get(ptype, str(ptype)), rev
+
+
+def load_keys(path):
+    """The key file through decrypt_self.Keys (parsing needs no pycryptodome; decrypting
+    runs later in the venv, which has it)."""
+    sys.path.insert(0, HERE)
+    sys.dont_write_bytecode = True      # leave no __pycache__ in the checkout
+    try:
+        import decrypt_self
+    finally:
+        sys.path.pop(0)
+    return decrypt_self, decrypt_self.Keys.load(path)
+
+
 def resolve_game_dir(path):
     """The NPUA80638 folder from whatever the player pointed at."""
     for c in (path,
@@ -307,6 +361,13 @@ class Rebuild:
         self.elf = os.path.join(self.game_dir, 'EBOOT.elf')
         self.rpcs3_dir = os.path.abspath(os.path.expanduser(a.rpcs3_dir)) if a.rpcs3_dir else default_rpcs3_dir()
         self.rpcs3 = find_rpcs3(a.rpcs3)
+        self.keys_file = os.path.abspath(os.path.expanduser(a.keys)) if a.keys else None
+        self.decrypt_with = a.decrypt_with
+        if self.decrypt_with == 'auto':
+            self.decrypt_with = 'python' if self.keys_file else 'rpcs3'
+        fw = a.firmware or (os.path.join(self.rpcs3_dir, 'dev_flash') if self.rpcs3_dir else None)
+        self.fw_given = os.path.abspath(os.path.expanduser(fw)) if fw else None
+        self.fw_src = resolve_fw_dir(self.fw_given)
         self.jobs = a.jobs or os.cpu_count() or 4
         self.sources = []          # [('dir', path)] or [('pkg', path), ...]
         self.sfo = {}
@@ -389,19 +450,22 @@ class Rebuild:
             if self.content_id is None and TITLE_ID in name and name.lower().endswith('.rap'):
                 self.content_id = name[:-4]
 
-        # RPCS3: decryption and the firmware
-        if self.rpcs3:
-            self.check('ok', 'rpcs3', self.rpcs3)
+        # decryption: RPCS3, or decrypt_self.py with the player's key file
+        if self.decrypt_with == 'rpcs3':
+            if self.rpcs3:
+                self.check('ok', 'rpcs3', self.rpcs3)
+            else:
+                self.check('fail', 'rpcs3', 'RPCS3 not found (it decrypts the EBOOT and the firmware); '
+                           'install it or pass --rpcs3, or decrypt without it: --keys KEYFILE')
         else:
-            self.check('fail', 'rpcs3', 'RPCS3 not found (it decrypts the EBOOT and the firmware); install it or pass --rpcs3')
-        ext = os.path.join(self.rpcs3_dir, 'dev_flash', 'sys', 'external')
-        missing = [m for m in FIRMWARE if not os.path.isfile(os.path.join(ext, m + '.sprx'))]
-        if not self.rpcs3_dir:
-            self.check('fail', 'firmware', 'pass --rpcs3-dir (the folder holding dev_flash/)')
-        elif missing:
-            self.check('fail', 'firmware', 'PS3 firmware not installed in RPCS3 (%s missing in %s)' % (', '.join(missing), ext))
+            self.check_keys()
+        if not self.fw_given:
+            self.check('fail', 'firmware', 'pass --firmware (a dev_flash folder) or --rpcs3-dir')
+        elif not self.fw_src:
+            self.check('fail', 'firmware', 'PS3 firmware not found: no %s in %s (or its sys/external)'
+                       % ('/'.join(m + '.sprx' for m in FIRMWARE), self.fw_given))
         else:
-            self.check('ok', 'firmware', os.path.join(self.rpcs3_dir, 'dev_flash'))
+            self.check('ok', 'firmware', self.fw_src)
 
         # build tools
         py, pv = find_python(a.python)
@@ -494,6 +558,49 @@ class Rebuild:
         else:
             self.check('warn', 'dlc', 'PS3_RAP_KEY not set: the optional DLC step will be skipped')
 
+    def check_keys(self):
+        """The key file holds what this copy's EBOOT and firmware need (read from their clear headers)."""
+        if not self.keys_file:
+            self.check('fail', 'keys', '--decrypt-with python needs a key file (--keys or PS3_KEYS)')
+            return
+        if not os.path.isfile(self.keys_file):
+            self.check('fail', 'keys', '%s: not found' % self.keys_file)
+            return
+        try:
+            ds, keys = load_keys(self.keys_file)
+        except Exception as e:
+            self.check('fail', 'keys', '%s: %s' % (self.keys_file, e))
+            return
+        need = []
+        for kind, p in self.sources:
+            if kind == 'dir':
+                h = self_header(os.path.join(p, 'USRDIR', 'EBOOT.BIN'))
+                if h:
+                    need.append(('EBOOT.BIN',) + h)
+        if self.fw_src:
+            for m in FIRMWARE:
+                h = self_header(os.path.join(self.fw_src, m + '.sprx'))
+                if h:
+                    need.append((m + '.sprx',) + h)
+        missing = []
+        for what, ptype, rev in need:
+            try:
+                keys.self_key(ptype, rev)
+            except ds.SelfError:
+                missing.append('%s (%s, key revision 0x%04X)' % (what, ptype, rev))
+        try:
+            keys.get('NP_klic_key')
+        except ds.SelfError as e:
+            missing.append(str(e))
+        try:
+            keys.rap_key()
+        except ds.SelfError as e:
+            missing.append(str(e))
+        if missing:
+            self.check('fail', 'keys', '%s lacks: %s' % (self.keys_file, '; '.join(missing)))
+        else:
+            self.check('ok', 'keys', '%s (decryption without RPCS3)' % self.keys_file)
+
     # ---- state ----------------------------------------------------------
     def load_state(self):
         try:
@@ -536,7 +643,8 @@ class Rebuild:
                         src.append(file_sig(q))
         k['game'] = sha256_text('game', *src)
         rap = h(self.rap) if self.rap else ''
-        k['decrypt'] = sha256_text('decrypt', k['game'], rap, self.rpcs3_dir)
+        fw = [file_sig(os.path.join(self.fw_src, m + '.sprx')) for m in FIRMWARE] if self.fw_src else []
+        k['decrypt'] = sha256_text('decrypt', k['game'], rap, self.decrypt_with, *fw)
         port = [f + h(os.path.join(PORT_SRC, f)) for f in PORT_FILES]
         for f in sorted(os.listdir(HERE)):
             if f.endswith(('.py', '.sh')):
@@ -692,6 +800,17 @@ class Rebuild:
         if not os.path.lexists(link):
             os.symlink(os.path.join('dev_hdd0', 'game', TITLE_ID), link)
 
+    def python_decrypt(self, path, want, rap=False):
+        if os.path.exists(want):
+            os.remove(want)
+        cmd = [self.py, DECRYPT_SELF, path, '-o', want, '--keys', self.keys_file]
+        if rap:
+            cmd += ['--rap', self.rap]
+        # secret: decrypt_self.py may take the RAP key from PS3_RAP_KEY
+        self.run('decrypt', cmd, secret=True)
+        if not os.path.isfile(want):
+            raise StepError('decrypt_self.py did not write %s' % want)
+
     def rpcs3_decrypt(self, path, want):
         if os.path.exists(want):
             os.remove(want)
@@ -712,37 +831,48 @@ class Rebuild:
         if not os.path.isfile(bin_dst):
             raise StepError('no EBOOT.BIN in the imported copy')
 
-        # RPCS3 looks the licence up as exdata/<content id>.rap
         cid = npd_content_id(bin_dst) or self.content_id
         if not cid:
             raise StepError('EBOOT.BIN has no NPD header (not the PSN release?)')
-        exdata = os.path.join(self.rpcs3_dir, 'dev_hdd0', 'home', '00000001', 'exdata')
-        dst = os.path.join(exdata, cid + '.rap')
-        if os.path.isfile(dst):
-            if sha256_file(dst) != sha256_file(self.rap):
-                emit('WARN', 'decrypt', '%s already in RPCS3 and differs from %s; using RPCS3\'s'
-                     % (os.path.basename(dst), self.rap))
+        if self.decrypt_with == 'rpcs3':
+            # RPCS3 looks the licence up as exdata/<content id>.rap
+            exdata = os.path.join(self.rpcs3_dir, 'dev_hdd0', 'home', '00000001', 'exdata')
+            dst = os.path.join(exdata, cid + '.rap')
+            if os.path.isfile(dst):
+                if sha256_file(dst) != sha256_file(self.rap):
+                    emit('WARN', 'decrypt', '%s already in RPCS3 and differs from %s; using RPCS3\'s'
+                         % (os.path.basename(dst), self.rap))
+                else:
+                    log('licence already installed in RPCS3: %s' % dst)
             else:
-                log('licence already installed in RPCS3: %s' % dst)
+                os.makedirs(exdata, exist_ok=True)
+                shutil.copyfile(self.rap, dst)
+                log('licence installed in RPCS3: %s' % dst)
+            decrypt = self.rpcs3_decrypt
         else:
-            os.makedirs(exdata, exist_ok=True)
-            shutil.copyfile(self.rap, dst)
-            log('licence installed in RPCS3: %s' % dst)
+            log('decrypting with %s (no RPCS3)' % os.path.basename(DECRYPT_SELF))
+            decrypt = self.python_decrypt
 
         emit('PROGRESS', 'decrypt', self.idx('decrypt'), 'EBOOT.BIN')
-        self.rpcs3_decrypt(bin_dst, self.elf)
+        if self.decrypt_with == 'rpcs3':
+            decrypt(bin_dst, self.elf)
+        else:
+            decrypt(bin_dst, self.elf, rap=True)
         with open(self.elf, 'rb') as f:
             if f.read(4) != b'\x7fELF':
                 raise StepError('EBOOT.elf is not an ELF: decryption failed')
         if sha256_file(self.elf) != TESTED_EBOOT_ELF_SHA256:
             emit('WARN', 'decrypt', 'EBOOT.elf differs from the tested 01.03 executable: '
                  'the lift may not match (expect problems)')
-        ext = os.path.join(self.rpcs3_dir, 'dev_flash', 'sys', 'external')
         for m in FIRMWARE:
             emit('PROGRESS', 'decrypt', self.idx('decrypt'), m + '.sprx')
             s = os.path.join(self.fw_dir, m + '.sprx')
-            shutil.copy2(os.path.join(ext, m + '.sprx'), s)
-            self.rpcs3_decrypt(s, os.path.join(self.fw_dir, m + '.prx'))
+            prx = os.path.join(self.fw_dir, m + '.prx')
+            shutil.copy2(os.path.join(self.fw_src, m + '.sprx'), s)
+            decrypt(s, prx)
+            if sha256_file(prx) != TESTED_FW_PRX_SHA256[m]:
+                emit('WARN', 'decrypt', '%s.prx differs from the tested firmware 4.93 module: '
+                     'the lift may not match (expect problems)' % m)
         # the game runs the decrypted executable from its own USRDIR
         if os.path.isfile(bin_src):
             os.remove(bin_src)
@@ -899,7 +1029,7 @@ class Rebuild:
             'executable': exe,
             'eboot': os.path.join(title, 'USRDIR', 'EBOOT.elf'),
             'vfs': self.vfs,
-            'dev_flash': os.path.join(self.rpcs3_dir, 'dev_flash'),
+            'dev_flash': self.dev_flash_root(),
             'icon': os.path.join(title, 'ICON0.PNG'),
             'background': os.path.join(title, 'PIC1.PNG'),
             'toolkit_commit': tk,
@@ -911,6 +1041,15 @@ class Rebuild:
             json.dump(info, f, indent=2)
         os.replace(path + '.tmp', path)
         log('wrote %s' % path)
+
+    def dev_flash_root(self):
+        """The dev_flash tree the game's /dev_flash maps to at run time."""
+        if self.fw_src and os.path.basename(self.fw_src) == 'external':
+            root = os.path.dirname(os.path.dirname(self.fw_src))
+            if os.path.basename(os.path.dirname(self.fw_src)) == 'sys':
+                return root
+        rp = os.path.join(self.rpcs3_dir, 'dev_flash') if self.rpcs3_dir else ''
+        return rp if rp and os.path.isdir(rp) else ''
 
     # ---- driver ---------------------------------------------------------
     def idx(self, step):
@@ -980,6 +1119,13 @@ def main(argv=None):
     ap.add_argument('--rpcs3', help='RPCS3 executable (default: found in the usual places)')
     ap.add_argument('--rpcs3-dir', help="RPCS3's data folder, holding dev_flash/ and dev_hdd0/ "
                                         '(default: %s)' % (default_rpcs3_dir() or 'none'))
+    ap.add_argument('--decrypt-with', choices=('auto', 'python', 'rpcs3'), default='auto',
+                    help='python: tools/decrypt_self.py with --keys, no RPCS3; rpcs3: rpcs3 --decrypt '
+                         '(default auto: python when a key file is given)')
+    ap.add_argument('--keys', default=os.environ.get('PS3_KEYS'),
+                    help='key file for --decrypt-with python, scetool format (default: $PS3_KEYS)')
+    ap.add_argument('--firmware', help='PS3 firmware: a dev_flash folder, its sys/external, or a folder '
+                                       'with liblv2/libsysmodule/libsre.sprx (default: RPCS3\'s dev_flash)')
     ap.add_argument('--toolkit', help='use this patched ps3recomp checkout instead of cloning one (left untouched)')
     ap.add_argument('--venv', help='use this Python venv instead of creating one')
     ap.add_argument('--python', help='Python 3.10+ used to create the venv')

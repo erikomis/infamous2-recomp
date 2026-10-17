@@ -19,7 +19,10 @@ This runs on the player's own licence file for their own copy; the runtime
 deliberately does not do it on its own.
 """
 import argparse, hashlib, os, sys
-from Crypto.Cipher import AES   # pycryptodome, in the toolkit's requirements
+try:
+    from Crypto.Cipher import AES   # pycryptodome, in the toolkit's requirements
+except ImportError:                 # decrypt_self.py, imported by rebuild.py only to read
+    AES = None                      # key files, runs without it
 
 RAP_KEY_SHA256 = 'ae5fcb75a631aa3e1e7a514c1eb42cb90e7f0ff83743f8769e6de7be64ff94db'
 PBOX = [0x0C, 0x03, 0x06, 0x04, 0x01, 0x0B, 0x0F, 0x08, 0x02, 0x07, 0x00, 0x05, 0x0A, 0x0E, 0x0D, 0x09]
