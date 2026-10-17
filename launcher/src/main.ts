@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { GAME_LANGS, Key, Lang, lang, setLang, t, translateDom } from "./i18n";
+import { initControls, renderControls, showControls } from "./controls";
 import { RebuildProgress } from "./progress";
 
 // ---- types shared with src-tauri/src/lib.rs (camelCase) ----------------------
@@ -17,6 +18,7 @@ interface Settings {
   mouse: boolean;
   mouseSens: number;
   mouseInvertY: boolean;
+  mouseInvertX: boolean;
   mouseDeadzone: number;
   mouseCapture: boolean;
   windowMode: string;
@@ -101,6 +103,7 @@ function showView(name: string) {
   document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "home") refreshStatus();
   if (name === "settings") updatePreview();
+  if (name === "controls") showControls();
 }
 document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view!)));
 
@@ -110,9 +113,10 @@ function persist() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(async () => {
     await invoke("save_settings", { settings });
-    const s = $("saved");
-    show(s, true);
-    window.setTimeout(() => show(s, false), 1200);
+    for (const s of [$("saved"), $("controls-saved")]) {
+      show(s, true);
+      window.setTimeout(() => show(s, false), 1200);
+    }
     updatePreview();
   }, 250);
 }
@@ -141,6 +145,7 @@ function applyLang(l: Lang) {
   renderProgress();
   renderPrereqs();
   renderGame(lastSearch);
+  renderControls();
 }
 
 function bindSettings() {
@@ -170,6 +175,7 @@ function bindSettings() {
   bindCheck("gamma-on", "gammaOverride");
   bindCheck("mouse-on", "mouse");
   bindCheck("mouse-invert", "mouseInvertY");
+  bindCheck("mouse-invert-x", "mouseInvertX");
   bindCheck("mouse-capture", "mouseCapture");
   bindCheck("game-icon", "gameIcon");
   const bindSelect = (id: string, key: "windowMode" | "windowSize") => {
@@ -231,6 +237,7 @@ function bindSettings() {
       mouse: true,
       mouseSens: 1.0,
       mouseInvertY: false,
+      mouseInvertX: false,
       mouseDeadzone: 30,
       mouseCapture: true,
       windowMode: "windowed",
@@ -249,7 +256,7 @@ function syncDependent() {
   const ssao = $<HTMLInputElement>("gpu-ssao");
   ssao.disabled = !settings.gpuLight;
   $<HTMLInputElement>("gamma").disabled = !settings.gammaOverride;
-  for (const id of ["mouse-sens", "mouse-invert", "mouse-dz", "mouse-capture"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
+  for (const id of ["mouse-sens", "mouse-invert", "mouse-invert-x", "mouse-dz", "mouse-capture"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
 }
 
 // ---- home ---------------------------------------------------------------------
@@ -700,6 +707,7 @@ async function main() {
   settings = await invoke<Settings>("get_settings");
   setLang(settings.uiLang as Lang);
   bindSettings();
+  initControls();
   gamePaths.value = settings.gamePaths.join("\n");
   rapPath.value = settings.rapPath;
   outDir.value = settings.installDir;
