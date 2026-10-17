@@ -8536,7 +8536,7 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..557c993 100644
+index 3addd48..4168c05 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -18,6 +18,7 @@
@@ -8943,7 +8943,37 @@ index 3addd48..557c993 100644
              fprintf(stderr, " {%d 0x%05X+0x%X}", ctx->resident_code[k].image_id,
                      ctx->resident_code[k].lsa, ctx->resident_code[k].size);
          fprintf(stderr, " ovl=%d lookup10=%p lookup11=%p\n", ctx->resident_ovl,
-@@ -2366,7 +2557,21 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2234,6 +2425,17 @@ static int spu_smc_microstep(spu_context* ctx)
+             else if (w & 0x80000) ctx->int_enable = 0;
+             uint32_t tgt = (op11 == 0x1AA) ? ctx->srr0
+                                            : ctx->gpr[ra]._u32[0];
++            /* iret: the same register-file restore the full interpreter does
++             * (spu_interp.c, T-0001) -- a genuine return to the take point puts
++             * the interrupted registers back; without it the snapshot stayed
++             * armed and fired later over live registers. */
++            if (op11 == 0x1AA && ctx->irq_saved) {
++                extern void spu_irq_ring_note(spu_context*, char, uint32_t, uint32_t);
++                const uint32_t next = tgt & SPU_LS_MASK & ~3u;
++                const uint32_t resume = ctx->irq_resume_pc & SPU_LS_MASK;
++                spu_irq_ring_note(ctx, next == resume ? 'I' : 'M', next, resume);
++                if (next == resume) { memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr); ctx->irq_saved = 0; }
++            }
+             if (op11 == 0x1A9 || op11 == 0x1AB)
+                 ctx->gpr[rt] = spu_splat_u32(pc + 4);
+             ctx->pc = tgt & SPU_LS_MASK & ~3u;
+@@ -2311,6 +2513,11 @@ static int spu_smc_microstep(spu_context* ctx)
+             ctx->gpr[rt] = spu_xori(ctx->gpr[ra], i10);
+             pc += 4; continue;
+         }
++        if (op8 == 0x04) {                                    /* ori rt,ra,i10 */
++            u128 r = ctx->gpr[ra];
++            for (int k = 0; k < 4; k++) r._u32[k] |= (uint32_t)i10;
++            ctx->gpr[rt] = r; pc += 4; continue;
++        }
+         if (op8 == 0x1C) {                                    /* ai rt,ra,i10 */
+             u128 r = ctx->gpr[ra];
+             for (int k = 0; k < 4; k++) r._u32[k] += (uint32_t)i10;
+@@ -2366,7 +2573,21 @@ static int spu_smc_microstep(spu_context* ctx)
          /* Stop at the drain's return point too: it sits mid-function, so it is
           * no lifted entry, and a job's return would otherwise run on through
           * the caller's code (GH3's song-freeze; see drain_ret_pc). */
@@ -8966,7 +8996,7 @@ index 3addd48..557c993 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
-@@ -2448,7 +2653,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2448,7 +2669,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
          int lifted = spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->image_id) ||
              (ctx->resident_task && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_task)) ||
              (ctx->resident_ovl  && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_ovl));
@@ -8975,7 +9005,7 @@ index 3addd48..557c993 100644
              if (ctx->resident_code[slot].image_id &&
                  SPURS_TASKSET_PM_SYSCALL_LS - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size)
                  lifted = 1;
-@@ -2555,11 +2760,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2555,11 +2776,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
       * is 0 outside the region, so this only ever fires for genuine task code.) */
      spu_fn fn = NULL;
      int code_owner = 0;
@@ -8991,7 +9021,7 @@ index 3addd48..557c993 100644
              break;
          }
      }
-@@ -2573,8 +2780,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2573,8 +2796,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      /* A resident module's code outside its own image: the save/restore stub the
       * WWS policy module writes at the top of local store (LS 0x3FEC0) and calls
       * from its interrupt path. Its lift belongs to the module's image. */
@@ -9002,7 +9032,7 @@ index 3addd48..557c993 100644
              fn = spu_lookup(ctx->pc, ctx->resident_code[slot].image_id);
      /* The job returned through the link register we planted: it is finished.
       * Its outermost frame ends in `bi $r0`, and r0 was 0 -- so without this the
-@@ -2633,15 +2840,21 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2633,15 +2856,21 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      }
  
      if (!fn && !ctx->policy_mode && ctx->pc >= SPU_JM2_KERNEL_BASE) {
@@ -9030,7 +9060,38 @@ index 3addd48..557c993 100644
              uint32_t p0 = ctx->pc & SPU_LS_MASK;
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
-@@ -2871,7 +3084,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2692,6 +2921,30 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+               if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 8)
+                   fprintf(stderr, "[spu] img=%d interpreting unlifted LS 0x%05X "
+                           "(runtime-loaded code)\n", ctx->image_id, p);
++              /* The WWS job manager's save/restore stub at the top of local
++               * store (written at runtime, so never lifted) runs on every
++               * interrupt: ~93% of all interpreted steps in New Marais. It is
++               * the stqd/lqd chain the microstepper was written for, which
++               * costs far less per instruction than the full interpreter's
++               * per-step bookkeeping and hands anything else to it.
++               * PS3_SPU_STUB_MICRO=0: the full interpreter as before. */
++              static int s_micro = -1;
++              if (s_micro < 0) { const char* e = getenv("PS3_SPU_STUB_MICRO"); s_micro = !(e && *e == '0'); }
++              if (s_micro && p >= 0x3F000u) {
++                  /* It ran (and possibly handed off to the interpreter) either
++                   * way: a 0 is a stop or a runaway, not "try again". */
++                  const int ran = spu_smc_microstep(ctx);
++                  spu_stop_exit_check(ctx);
++                  if (!ran || g_spu_trampoline_fn ||
++                      (ctx->drain_ret_pc && ctx->pc == ctx->drain_ret_pc))
++                      return;
++#if defined(__clang__)
++                  __attribute__((musttail)) return spu_indirect_branch(ctx);
++#else
++                  spu_indirect_branch(ctx);
++                  return;
++#endif
++              }
+               spu_interp_run(ctx, p);
+               return;
+           } }
+@@ -2871,7 +3124,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
                    s_dumped = 1; } } }
      }
      if (fn) {
@@ -9039,7 +9100,7 @@ index 3addd48..557c993 100644
          /* MUSTTAIL: a guest loop that iterates through an indirect branch (the
           * Bink decoder's per-command dispatch does) must not grow the host
           * stack -- a plain call here leaked a resolver+callee frame per
-@@ -3013,9 +3226,22 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -3013,9 +3266,22 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
        static int _bt0[BT0_MAX_IMG];
        unsigned img = (ctx->image_id >= 0 && ctx->image_id < BT0_MAX_IMG)
                       ? (unsigned)ctx->image_id : 0;
@@ -9063,7 +9124,7 @@ index 3addd48..557c993 100644
        spu_ls_watch_dump("branch-to-0"); }
      /* One-shot: the FMOD null-handler DSP node carries a PPU descriptor EA at
       * node+0x14 (observed 0x93C3C0). Dump it to identify which plugin/unit
-@@ -3105,12 +3331,30 @@ static inline int spu_ib_diag_enabled(void)
+@@ -3105,12 +3371,30 @@ static inline int spu_ib_diag_enabled(void)
      return on < 0 ? spu_ib_diag_init() : on;
  }
  
@@ -9095,7 +9156,7 @@ index 3addd48..557c993 100644
          (ctx->policy_mode && (pc == SPURS_PM_EXIT_TO_KERNEL_LS || pc == SPURS_PM_SELECT_WORKLOAD_LS)) ||
          (!ctx->policy_mode && pc == SPU_JOB_RETURN_LS) || spu_ib_diag_enabled())
          goto slow;
-@@ -3127,24 +3371,26 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -3127,24 +3411,26 @@ void spu_indirect_branch(spu_context* ctx)
          }
          spu_fn fn = NULL;
          int code_owner = 0;
