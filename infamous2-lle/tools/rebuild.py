@@ -38,6 +38,11 @@ tool prints is passed through as "LOG <line>"):
     DONE <path of install.json, or - when it was not written>
 
 Exit status: 0 done, 1 a step failed, 2 a prerequisite is missing.
+
+--check-json checks only the machine (host, RPCS3 and its firmware, the build
+tools, disk space; no game or licence needed) and prints one JSON object
+{"supported", "ok", "homebrew", "checks": [{"level", "name", "message"}], ...}
+instead of CHECK lines; the launcher's first-run screen reads it.
 Each step remembers what it was built from (<out>/.rebuild/state.json); a
 rerun skips the steps whose inputs did not change. --force reruns all,
 --from STEP reruns from STEP on, --only STEP[,STEP] runs just those.
@@ -200,8 +205,7 @@ def existing_ancestor(path):
 
 
 def free_bytes(path):
-    st = os.statvfs(existing_ancestor(path))
-    return st.f_bavail * st.f_frsize
+    return shutil.disk_usage(existing_ancestor(path)).free
 
 
 def tree_size(path):
@@ -250,11 +254,29 @@ def find_rpcs3(explicit):
     return None
 
 
+_CLT = []
+
+
+def macos_clt():
+    """macOS: the Command Line Tools folder, or '' when they are missing.
+    Until they are installed /usr/bin/{clang,git,python3} are stubs that pop
+    up Apple's installer, so nothing here may run them."""
+    if sys.platform != 'darwin':
+        return 'n/a'
+    if not _CLT:
+        try:
+            r = subprocess.run(['xcode-select', '-p'], capture_output=True, text=True, timeout=20)
+            _CLT.append(r.stdout.strip() if r.returncode == 0 and os.path.isdir(r.stdout.strip()) else '')
+        except Exception:
+            _CLT.append('')
+    return _CLT[0]
+
+
 def find_python(explicit):
     cands = [explicit] if explicit else ['python3.12', 'python3.13', 'python3.11', 'python3.10', 'python3']
     for c in cands:
         p = c if os.path.sep in c else shutil.which(c)
-        if not p:
+        if not p or (not explicit and p.startswith('/usr/bin/') and not macos_clt()):
             continue
         try:
             v = subprocess.run([p, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'],
@@ -273,6 +295,16 @@ def tool_version(cmd):
         return (r.stdout or r.stderr).strip().splitlines()[0]
     except Exception:
         return None
+
+
+def port_build_info():
+    """BUILD_INFO.json, written next to the sources when the launcher bundles
+    them (launcher/scripts/stage_port.py): there is no git checkout there."""
+    try:
+        with open(os.path.join(REPO, 'BUILD_INFO.json')) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 
 def resolve_game_dir(path):
@@ -313,21 +345,33 @@ class Rebuild:
         self.content_id = None
         self.state = {}
         self.fails = 0
+        self.checks = []           # (level, name, message), for --check-json
+        self.quiet = False
         self.keys = {}
 
     # ---- checks ---------------------------------------------------------
     def check(self, level, name, msg):
-        emit('CHECK', level, name, msg)
+        self.checks.append((level, name, msg))
+        if not self.quiet:
+            emit('CHECK', level, name, msg)
         if level == 'fail':
             self.fails += 1
 
-    def check_all(self):
-        a = self.a
+    def check_host(self):
         mach = platform.machine()
         if sys.platform == 'darwin' and mach == 'arm64':
             self.check('ok', 'host', 'macOS %s arm64' % platform.mac_ver()[0])
+        elif sys.platform == 'darwin':
+            self.check('warn', 'host', 'macOS %s %s: only macOS on Apple Silicon is tested' % (platform.mac_ver()[0], mach))
         else:
-            self.check('warn', 'host', '%s %s: only macOS on Apple Silicon is tested' % (sys.platform, mach))
+            # The game's renderer and window are Metal/Cocoa only so far.
+            # INFAMOUS2_ANY_HOST=1 lets someone working on another port try anyway.
+            self.check('warn' if os.environ.get('INFAMOUS2_ANY_HOST') else 'fail', 'host',
+                       '%s %s: the port builds and runs only on macOS for now' % (sys.platform, mach))
+
+    def check_all(self):
+        a = self.a
+        self.check_host()
 
         # the game copy
         if not a.game:
@@ -389,6 +433,17 @@ class Rebuild:
             if self.content_id is None and TITLE_ID in name and name.lower().endswith('.rap'):
                 self.content_id = name[:-4]
 
+        self.check_tools()
+        self.check_space()
+        if os.environ.get('PS3_RAP_KEY'):
+            self.check('ok', 'dlc', 'PS3_RAP_KEY set: the DLC licence key will be derived')
+        else:
+            self.check('warn', 'dlc', 'PS3_RAP_KEY not set: the optional DLC step will be skipped')
+
+    def check_tools(self):
+        """RPCS3, its firmware and the build tools: everything that does not
+        depend on the game copy or the licence (all --check-json runs)."""
+        a = self.a
         # RPCS3: decryption and the firmware
         if self.rpcs3:
             self.check('ok', 'rpcs3', self.rpcs3)
@@ -424,15 +479,25 @@ class Rebuild:
         nj = shutil.which('ninja')
         self.check('ok' if nj else 'fail', 'ninja',
                    tool_version([nj, '--version']) if nj else 'Ninja not found (brew install ninja)')
+        clt = macos_clt()
+        if sys.platform == 'darwin':
+            self.check('ok' if clt else 'fail', 'xcode-clt',
+                       clt or 'Xcode Command Line Tools not installed (xcode-select --install)')
         cc = shutil.which('clang') or shutil.which('cc')
         cxx = shutil.which('clang++') or shutil.which('c++')
-        if cc and cxx:
+        if sys.platform == 'darwin' and not clt:
+            # /usr/bin/clang is a stub that would pop up Apple's installer
+            self.check('fail', 'compiler', 'no C/C++ compiler (xcode-select --install)')
+        elif cc and cxx:
             self.check('ok', 'compiler', tool_version([cc, '--version']))
         else:
             self.check('fail', 'compiler', 'no C/C++ compiler (macOS: xcode-select --install)')
         if not a.toolkit or not os.path.isdir(self.toolkit):
-            self.check('ok' if shutil.which('git') else 'fail', 'git',
-                       'git found' if shutil.which('git') else 'git not found (needed to fetch the toolkit)')
+            git = shutil.which('git')
+            if git and git.startswith('/usr/bin/') and not clt:
+                git = None          # the CLT stub
+            self.check('ok' if git else 'fail', 'git',
+                       'git found' if git else 'git not found (needed to fetch the toolkit)')
         if sys.platform == 'darwin':
             prefix = '/opt/homebrew' if os.path.isdir('/opt/homebrew') else '/usr/local'
             libs = (('SDL2', os.path.join(prefix, 'lib', 'cmake', 'SDL2'), 'fail', 'sdl2'),
@@ -459,6 +524,8 @@ class Rebuild:
                            '%s (%s)' % (self.toolkit, 'patched' if r.returncode == 0 else
                                         'patch not detected: it may be ahead of this port'))
 
+    def check_space(self):
+        a = self.a
         # the output folder
         if os.path.abspath(self.out) in (os.path.abspath(PORT_SRC), os.path.abspath(REPO)):
             self.check('fail', 'out', 'the output folder must not be the repository itself')
@@ -489,10 +556,30 @@ class Rebuild:
         else:
             self.check('ok', 'disk', what)
 
-        if os.environ.get('PS3_RAP_KEY'):
-            self.check('ok', 'dlc', 'PS3_RAP_KEY set: the DLC licence key will be derived')
-        else:
-            self.check('warn', 'dlc', 'PS3_RAP_KEY not set: the optional DLC step will be skipped')
+    def check_json(self):
+        """--check-json: the machine's prerequisites as one JSON object, for
+        the launcher's first-run screen. Needs no game copy and no licence."""
+        self.quiet = True
+        self.check_host()
+        self.check_tools()
+        self.check_space()
+        brew = next((b for b in ('/opt/homebrew/bin/brew', '/usr/local/bin/brew') if os.path.isfile(b)),
+                    shutil.which('brew'))
+        out = {
+            'schema': 1,
+            'platform': sys.platform,
+            'machine': platform.machine(),
+            'supported': sys.platform == 'darwin',
+            'ok': self.fails == 0,
+            'python': platform.python_version(),
+            'homebrew': brew,
+            'rpcs3': self.rpcs3,
+            'rpcs3_dir': self.rpcs3_dir,
+            'out': self.out,
+            'checks': [{'level': l, 'name': n, 'message': m} for l, n, m in self.checks],
+        }
+        sys.stdout.write(json.dumps(out, indent=1) + '\n')
+        return 0 if self.fails == 0 else 2
 
     # ---- state ----------------------------------------------------------
     def load_state(self):
@@ -885,8 +972,8 @@ class Rebuild:
             sfo = read_sfo(os.path.join(self.vfs_title, 'PARAM.SFO'))
         tk = subprocess.run(['git', '-C', self.toolkit, 'rev-parse', '--short', 'HEAD'],
                             capture_output=True, text=True).stdout.strip()
-        port_commit = subprocess.run(['git', '-C', REPO, 'rev-parse', '--short', 'HEAD'],
-                                     capture_output=True, text=True).stdout.strip()
+        port_commit = port_build_info().get('port_commit') or subprocess.run(
+            ['git', '-C', REPO, 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()
         title = os.path.join(self.vfs, 'PS3_GAME')
         info = {
             'schema': 1,
@@ -990,11 +1077,16 @@ def main(argv=None):
     ap.add_argument('--from', dest='from_step', choices=STEP_IDS, help='rerun from this step on')
     ap.add_argument('--only', help='run only these steps (comma-separated)')
     ap.add_argument('--list-steps', action='store_true', help='print the step ids and exit')
+    ap.add_argument('--check-json', action='store_true',
+                    help='check only the machine (RPCS3, firmware, tools, disk; no game or licence needed) '
+                         'and print the result as JSON')
     a = ap.parse_args(argv)
     if a.list_steps:
         for i, (sid, title) in enumerate(STEPS):
             emit('STEP', '%d/%d' % (i + 1, len(STEPS)), sid, title)
         return 0
+    if a.check_json:
+        return Rebuild(a).check_json()
     if a.only:
         bad = [s for s in a.only.split(',') if s not in STEP_IDS]
         if bad:
