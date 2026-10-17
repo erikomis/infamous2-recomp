@@ -52,6 +52,10 @@ Original diffs in `infamous2-lle/patches/upstream-prs/`.
 - [RPCS3](https://github.com/RPCS3/rpcs3) — decryption of the player's own
   EBOOT and firmware (`rpcs3 --decrypt`), and the toolkit's behavior
   reference.
+- [sp00nznet/twistedmetal](https://github.com/sp00nznet/twistedmetal) —
+  `tools/decrypt_self.py` (MIT), the base of the port's own
+  `tools/decrypt_self.py` (decryption without RPCS3, NPDRM with the
+  player's `.rap`).
 - [SDL2](https://www.libsdl.org/), [glslang](https://github.com/KhronosGroup/glslang),
   [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross),
   [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools),
