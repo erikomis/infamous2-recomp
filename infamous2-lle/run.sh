@@ -57,6 +57,11 @@ export GCM_PARK_GRACE_MS="${GCM_PARK_GRACE_MS:-1000}"
 # the job itself reduced to its completion bookkeeping (gpu_light.c). New Marais
 # walk ~12 -> ~15 fps. PS3RECOMP_ENG_GPU_LIGHT= (empty) turns it off.
 export PS3RECOMP_ENG_GPU_LIGHT="${PS3RECOMP_ENG_GPU_LIGHT-07000B80:07384B80}"
+# The SSAO job runs on the GPU too (gpu_ssao.c, the job's five passes as Metal
+# passes; needs the light pass on): walk ~21 -> 26-28 fps. Its opt-in period
+# ended once the flip-status races were fixed (6/6 runs clean, 2026-10-17).
+# PS3RECOMP_ENG_GPU_SSAO= (empty) puts it back on the SPUs.
+export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 # The occlusion-volume passes (props/buildings FP 5f740845528b0e62 with the
 # 8x8x8 cone LUT, characters FP 7875289ea6b856a6) multiply the ambient term,
 # and in some close-up views at dusk they turn whole facades -- and Cole --

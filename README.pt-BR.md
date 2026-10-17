@@ -36,7 +36,7 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Prólogo em Empire City (a Besta, o cargueiro) | ✅ |
 | New Marais: primeiras missões, jogadas com janela e DualSense | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), saves, DLC | ✅ |
-| Desempenho | 🚶 ~21 fps andando em New Marais, 25–27 com SSAO na GPU (o jogo foi feito para 30) |
+| Desempenho | 🚶 26–28 fps andando em New Marais (o jogo foi feito para 30) |
 | Jogo inteiro | ❓ ninguém passou ainda de 1% |
 | Teclado e mouse com janela | 🧪 mapeados, pouco testados |
 | Linux e Windows | ⏳ planejado |
@@ -116,7 +116,7 @@ Opções úteis:
 
 | Variável | O que faz |
 | --- | --- |
-| `PS3RECOMP_ENG_GPU_SSAO=0F800000` | roda também o job de SSAO na GPU: ~21 → 25–27 fps andando (opcional enquanto é validado) |
+| `PS3RECOMP_ENG_GPU_SSAO=` (vazio) | devolve o job de SSAO para os SPUs (na GPU por padrão desde 2026-10-17: ~21 → 26–28 fps andando) |
 | `PS3RECOMP_ENG_GPU_LIGHT=` (vazio) | devolve a iluminação para os SPUs (mais lento; por padrão ela roda na GPU) |
 | `PS3_DISPLAY_GAMMA=<0.8..1.2>` | força o gamma da saída de vídeo; por padrão vale o brilho escolhido nas opções do jogo, como no console |
 

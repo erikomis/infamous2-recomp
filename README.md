@@ -35,7 +35,7 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Empire City prologue (the Beast, the freighter) | ✅ |
 | New Marais: first missions, played in a window with a DualSense | ✅ |
 | Brazilian Portuguese dub and subtitles (default), saves, DLC | ✅ |
-| Performance | 🚶 ~21 fps walking in New Marais, 25–27 with GPU SSAO (the game targets 30) |
+| Performance | 🚶 26–28 fps walking in New Marais (the game targets 30) |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Keyboard and mouse in a window | 🧪 mapped, barely tested |
 | Linux and Windows | ⏳ planned |
@@ -116,7 +116,7 @@ Options worth knowing:
 
 | Variable | What it does |
 | --- | --- |
-| `PS3RECOMP_ENG_GPU_SSAO=0F800000` | runs the SSAO job on the GPU too: ~21 → 25–27 fps walking (opt-in while it is validated) |
+| `PS3RECOMP_ENG_GPU_SSAO=` (empty) | puts the SSAO job back on the SPUs (on the GPU by default since 2026-10-17: ~21 → 26–28 fps walking) |
 | `PS3RECOMP_ENG_GPU_LIGHT=` (empty) | puts the light pass back on the SPUs (slower; on the GPU by default) |
 | `PS3_DISPLAY_GAMMA=<0.8..1.2>` | overrides the display gamma; by default the game's own brightness setting is applied, as on the console |
 
