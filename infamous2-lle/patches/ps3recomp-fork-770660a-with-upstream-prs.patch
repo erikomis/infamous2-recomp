@@ -983,7 +983,7 @@ index 621d53e..9b33bdc 100644
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
 diff --git a/libs/misc/cellAvconfExt.c b/libs/misc/cellAvconfExt.c
-index 50e6fe8..6a840b8 100644
+index 50e6fe8..2ab88b8 100644
 --- a/libs/misc/cellAvconfExt.c
 +++ b/libs/misc/cellAvconfExt.c
 @@ -7,6 +7,8 @@
@@ -999,7 +999,7 @@ index 50e6fe8..6a840b8 100644
  {
      (void)videoOut;
      printf("[cellAvconfExt] VideoOutSetGamma(%.2f)\n", gamma);
-+    if (gamma < 0.8f || gamma > 1.2f) return (s32)0x8002b222;   /* PARAMETER_OUT_OF_RANGE */
++    if (gamma < 0.8f || gamma > 1.2f) return (s32)0x8002b223;   /* PARAMETER_OUT_OF_RANGE */
      s_gamma = gamma;
      return CELL_OK;
  }
