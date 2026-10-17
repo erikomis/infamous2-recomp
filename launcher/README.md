@@ -45,12 +45,24 @@ roadmap).
   rebuild. **Check** runs `rebuild.py --dry-run` (requirements and plan,
   changes nothing); **Install** runs the rebuild with a progress bar, time
   estimate, step list and log; **Cancel** stops it and the tools it started.
+- **Controls / Controles**: a table of the PS3 controls with their key,
+  mouse button and controller button. Click a cell and press what should
+  drive it (a key, a mouse button or the wheel, a controller button, or pick
+  the controller input from a list when the web view sees no pad); an input
+  bound elsewhere on the same device moves to the new control, × unbinds,
+  **Restore defaults** brings back the built-in layout. While the screen is
+  open, the rows light up for whatever is held (keys, mouse buttons over the
+  table, a controller through the Gamepad API): the button test. Saved at
+  once to `~/Library/Application Support/infamous2-recomp/input.toml`, which
+  Play passes as `PS3_INPUT_MAP` (format: the main README, "Playing"). Below
+  it, the mouse options: camera on/off, sensitivity, vertical and horizontal
+  inversion, dead zone, cursor capture (`PS3_MOUSE*`).
 - **Settings / Configurações**: game language (`PS3_LANG`), light pass and
   SSAO on the GPU, the occlusion-volume skip, a gamma override, the window
   mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the Dock icon
-  (`PS3_WINDOW_ICON=game`), mouse options (cursor capture: `PS3_MOUSE_CAPTURE`),
-  the install folder and extra environment variables; shows the equivalent
-  command line. UI in Brazilian Portuguese (default) and English.
+  (`PS3_WINDOW_ICON=game`), the install folder and extra environment
+  variables; shows the equivalent command line. UI in Brazilian Portuguese
+  (default) and English.
 
 ## How it fits together
 
@@ -72,6 +84,12 @@ launcher (Rust, src-tauri/src/lib.rs)
   `${VAR-default}`, so an empty value switches a default off).
 - Settings live in `~/Library/Application Support/infamous2-recomp/launcher.json`;
   the game's output goes to `…/infamous2-recomp/logs/game.log`.
+- The bindings live in `…/infamous2-recomp/input.toml` (`src-tauri/src/input_map.rs`
+  reads and writes it). The launcher rewrites only `[keyboard]`,
+  `[mouse_buttons]` and `[controller]` and keeps any other section as it was.
+  The mouse options stay launcher settings passed as variables, which win
+  over the file; if the file has a hand-written `[mouse]`, every mouse
+  variable is passed so the screen's values are the ones that apply.
 - The optional RAP key field (DLC only) is passed to `rebuild.py` in
   `PS3_RAP_KEY` for that run and never stored.
 - A GUI app on macOS starts with a minimal `PATH`; the launcher puts

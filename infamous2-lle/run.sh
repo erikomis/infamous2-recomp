@@ -38,6 +38,19 @@ if [ -z "$HEADLESS" ] && [ -z "$PS3_GAMEDATA_ROOT" ]; then
     fi
     export PS3_GAMEDATA_ROOT="$data/gamedata"
 fi
+# Controls (keyboard, mouse buttons, controller; format in the toolkit's
+# libs/input/pad_input_map.h, README "Playing"): input.toml in the same folder
+# (or input.ini), as the launcher's Controls screen writes it. Windowed runs
+# only; PS3_INPUT_MAP=<file> picks another one, PS3_INPUT_MAP= (empty) none.
+if [ -z "$HEADLESS" ] && [ -z "${PS3_INPUT_MAP+set}" ]; then
+    case $(uname) in
+        Darwin) cfg="$HOME/Library/Application Support/infamous2-recomp" ;;
+        *)      cfg="${XDG_DATA_HOME:-$HOME/.local/share}/infamous2-recomp" ;;
+    esac
+    for f in "$cfg/input.toml" "$cfg/input.ini"; do
+        [ -f "$f" ] && { export PS3_INPUT_MAP="$f"; break; }
+    done
+fi
 # The RSX must block on its semaphore ACQUIREs: each frame the FIFO acquires
 # the label the SPU light task writes when it has turned the normals/depth
 # copies in XDR into the light buffers, and only then composites. With the

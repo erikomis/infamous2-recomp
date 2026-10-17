@@ -104,10 +104,68 @@ Um controle (DualSense testado) funciona direto. Teclado e mouse somam com ele:
 | Return / Tab | START / SELECT |
 | Botão esquerdo / direito / do meio do mouse | R1 / R2 / L1 |
 
-O mouse se ajusta com `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1` e
-`PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` desliga. Um clique no jogo captura o
-mouse (o cursor some e a câmera segue o mouse); Esc ou Cmd solta, assim como
-trocar de app. `PS3_MOUSE_CAPTURE=0` volta para a câmera sem captura.
+O mouse se ajusta com `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1`,
+`PS3_MOUSE_INVERT_X=1` e `PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` desliga. Um
+clique no jogo captura o mouse (o cursor some e a câmera segue o mouse); Esc
+ou Cmd solta, assim como trocar de app. `PS3_MOUSE_CAPTURE=0` volta para a
+câmera sem captura.
+
+Todas as associações acima podem ser trocadas num arquivo de controles: a
+tela **Controles** do launcher grava esse arquivo, ou escreva à mão em
+`~/Library/Application Support/infamous2-recomp/input.toml` (`input.ini`
+também serve; `PS3_INPUT_MAP=<arquivo>` escolhe outro, `PS3_INPUT_MAP=`
+nenhum). O que o arquivo não cita fica como na tabela acima (os botões laterais do
+mouse apertam L1, como o do meio), só que uma entrada que o arquivo associa
+sai dos controles que ele não cita: `cross = "Q"` tira o Q do ○ (cite nos
+dois para manter nos dois). Os nomes não diferenciam maiúsculas, e um nome
+desconhecido aparece uma vez no log e é ignorado.
+
+```toml
+[keyboard]                  # controle do PS3 = teclas
+cross    = "Space"
+circle   = "F"
+start    = "Return, KeypadEnter"   # várias teclas
+l3       = "Shift"
+r3       = ""                      # sem associação
+
+[mouse_buttons]             # controle do PS3 = botões do mouse
+r1   = "Left"
+up   = "WheelUp"            # cada passo da roda é um aperto
+down = "WheelDown"
+l1   = "Button4"
+
+[mouse]                     # as variáveis de ambiente acima valem mais que estes
+camera      = true
+sensitivity = 1.5
+invert_x    = false
+invert_y    = false
+deadzone    = 30
+capture     = true
+
+[controller]                # controle do PS3 = entradas do controle (SDL)
+cross  = "a"                # ✕ no DualSense, A no controle de Xbox
+circle = "b"
+select = "touchpad"
+```
+
+- Controles do PS3: `cross circle square triangle l1 r1 l2 r2 l3 r3 start
+  select`, `up down left right` (D-pad), `ls_up ls_down ls_left ls_right` e
+  `rs_up rs_down rs_left rs_right` (analógicos).
+- Teclas, pela posição num teclado Mac americano: `A`-`Z`, `0`-`9`,
+  `F1`-`F20`, `Space Return Tab Escape Backspace ForwardDelete Up Down Left
+  Right Home End PageUp PageDown`, `Minus Equal LeftBracket RightBracket
+  Backslash Semicolon Quote Comma Period Slash Grave Section`,
+  `Keypad0`-`Keypad9 KeypadEnter KeypadPlus KeypadMinus KeypadMultiply
+  KeypadDivide KeypadDecimal KeypadEquals KeypadClear`, `Shift RightShift
+  Control RightControl Option RightOption`, ou um código de tecla
+  (`0x00`-`0x7F`). Cmd não pode ser associado, e Esc solta o mouse capturado
+  antes de chegar ao jogo.
+- Botões do mouse: `Left Right Middle Button4`-`Button8 WheelUp WheelDown`.
+- Controle (nomes do SDL): `a b x y back guide start leftstick rightstick
+  leftshoulder rightshoulder lefttrigger righttrigger dpup dpdown dpleft
+  dpright touchpad misc1 paddle1`-`paddle4`; nomes de PlayStation e Xbox
+  também valem (`cross`, `options`, `share`, `l1`, `r2`, `lb`, `rt`, ...). Os
+  analógicos físicos sempre movem os analógicos do PS3.
 
 A janela muda de tamanho livremente e a imagem mantém o formato 16:9, com
 faixas pretas quando a janela tem outro formato.

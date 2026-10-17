@@ -12,6 +12,7 @@
       <div class="brand">inFAMOUS 2<span>recomp</span></div>
       <button class="nav active" data-view="home" data-i18n="nav.home">Início</button>
       <button class="nav" data-view="install" data-i18n="nav.install">Instalar</button>
+      <button class="nav" data-view="controls" data-i18n="nav.controls">Controles</button>
       <button class="nav" data-view="settings" data-i18n="nav.settings">Configurações</button>
       <div class="spacer"></div>
       <label class="small" for="ui-lang" data-i18n="app.lang">Idioma do app</label>
@@ -183,6 +184,48 @@
         </div>
       </section>
 
+      <!-- Controls -------------------------------------------------------->
+      <section id="view-controls" class="view">
+        <div class="row"><h1 data-i18n="controls.title">Controles</h1><span id="controls-saved" class="pill hidden" data-i18n="settings.saved">Salvo</span></div>
+        <p class="muted" data-i18n="controls.lead"></p>
+
+        <fieldset id="controls-test">
+          <legend data-i18n="controls.bindings">Botões</legend>
+          <p class="hint" data-i18n="controls.testHint"></p>
+          <table class="bindings">
+            <thead>
+              <tr>
+                <th>PS3</th>
+                <th data-i18n="controls.keyboard">Teclado</th>
+                <th data-i18n="controls.mouseCol">Mouse</th>
+                <th data-i18n="controls.controller">Controle</th>
+              </tr>
+            </thead>
+            <tbody id="controls-body"></tbody>
+          </table>
+          <p id="controls-msg" class="small"></p>
+          <p class="hint" data-i18n="controls.notes"></p>
+          <div class="row">
+            <button id="controls-reset" data-i18n="controls.reset">Restaurar padrões</button>
+            <button id="controls-open" class="link" data-i18n="controls.open">Mostrar o arquivo</button>
+          </div>
+          <code id="controls-path" class="preview"></code>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="settings.mouse">Mouse</legend>
+          <label class="check"><input id="mouse-on" type="checkbox" /> <span data-i18n="settings.mouseOn"></span></label>
+          <label data-i18n="settings.mouseSens">Sensibilidade</label>
+          <div class="slider"><input id="mouse-sens" type="range" min="0.25" max="4" step="0.05" /><output id="mouse-sens-out"></output></div>
+          <label class="check"><input id="mouse-invert" type="checkbox" /> <span data-i18n="settings.mouseInvert"></span></label>
+          <label class="check"><input id="mouse-invert-x" type="checkbox" /> <span data-i18n="settings.mouseInvertX"></span></label>
+          <label data-i18n="settings.mouseDeadzone">Zona morta</label>
+          <div class="slider"><input id="mouse-dz" type="range" min="0" max="120" step="1" /><output id="mouse-dz-out"></output></div>
+          <label class="check"><input id="mouse-capture" type="checkbox" /> <span data-i18n="settings.mouseCapture"></span></label>
+          <p class="hint" data-i18n="settings.mouseCaptureHint"></p>
+        </fieldset>
+      </section>
+
       <!-- Settings -------------------------------------------------------->
       <section id="view-settings" class="view">
         <div class="row"><h1 data-i18n="settings.title">Configurações</h1><span id="saved" class="pill hidden" data-i18n="settings.saved">Salvo</span></div>
@@ -224,17 +267,6 @@
           <p class="hint" data-i18n="settings.gameIconHint"></p>
         </fieldset>
 
-        <fieldset>
-          <legend data-i18n="settings.mouse">Mouse</legend>
-          <label class="check"><input id="mouse-on" type="checkbox" /> <span data-i18n="settings.mouseOn"></span></label>
-          <label data-i18n="settings.mouseSens">Sensibilidade</label>
-          <div class="slider"><input id="mouse-sens" type="range" min="0.25" max="4" step="0.05" /><output id="mouse-sens-out"></output></div>
-          <label class="check"><input id="mouse-invert" type="checkbox" /> <span data-i18n="settings.mouseInvert"></span></label>
-          <label data-i18n="settings.mouseDeadzone">Zona morta</label>
-          <div class="slider"><input id="mouse-dz" type="range" min="0" max="120" step="1" /><output id="mouse-dz-out"></output></div>
-          <label class="check"><input id="mouse-capture" type="checkbox" /> <span data-i18n="settings.mouseCapture"></span></label>
-          <p class="hint" data-i18n="settings.mouseCaptureHint"></p>
-        </fieldset>
 
         <fieldset>
           <legend data-i18n="settings.advanced">Avançado</legend>

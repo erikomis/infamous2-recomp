@@ -4,6 +4,9 @@
 //! variables. No game code or data is part of the app: everything it shows or
 //! starts comes from the player's own install folder.
 
+mod input_map;
+
+use input_map::{Bindings, InputEnv};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -40,10 +43,12 @@ pub struct Settings {
     /// PS3_DISPLAY_GAMMA when set; otherwise the game's own brightness setting.
     pub gamma_override: bool,
     pub gamma: f32,
-    /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_DEADZONE.
+    /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
+    /// PS3_MOUSE_DEADZONE.
     pub mouse: bool,
     pub mouse_sens: f32,
     pub mouse_invert_y: bool,
+    pub mouse_invert_x: bool,
     pub mouse_deadzone: u32,
     /// PS3_MOUSE_CAPTURE: a click captures the cursor (Esc/Cmd releases it).
     pub mouse_capture: bool,
@@ -75,6 +80,7 @@ impl Default for Settings {
             mouse: true,
             mouse_sens: 1.0,
             mouse_invert_y: false,
+            mouse_invert_x: false,
             mouse_deadzone: 30,
             mouse_capture: true,
             window_mode: "windowed".into(),
@@ -129,6 +135,24 @@ fn rpcs3_dir() -> PathBuf {
 
 fn settings_path() -> PathBuf {
     data_root().join("launcher.json")
+}
+
+/// The controls file (PS3_INPUT_MAP), next to launcher.json; run.sh points
+/// windowed runs at the same file.
+fn input_map_path() -> PathBuf {
+    data_root().join("input.toml")
+}
+
+/// The controls file as "Play" passes it (see `launch_env`).
+fn input_env() -> InputEnv {
+    let p = input_map_path();
+    match fs::read_to_string(&p) {
+        Ok(text) => InputEnv {
+            path: Some(p.to_string_lossy().into_owned()),
+            has_mouse_section: input_map::parse(&text).has_mouse_section,
+        },
+        Err(_) => InputEnv::default(),
+    }
 }
 
 fn load_settings_file() -> Settings {
@@ -491,7 +515,7 @@ fn parse_env_lines(text: &str) -> Vec<(String, String)> {
 /// The environment "Play" adds on top of run.sh's defaults. run.sh uses
 /// `${VAR-default}`, so an empty value turns a default off, exactly as on the
 /// command line.
-fn launch_env(s: &Settings, inst: &InstallInfo) -> Vec<(String, String)> {
+fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     let mut set = |k: &str, v: String| env.push((k.to_string(), v));
     set("INFAMOUS2_VFS", inst.vfs.clone());
@@ -511,20 +535,32 @@ fn launch_env(s: &Settings, inst: &InstallInfo) -> Vec<(String, String)> {
     if s.gamma_override {
         set("PS3_DISPLAY_GAMMA", format!("{:.2}", s.gamma.clamp(0.8, 1.2)));
     }
+    if let Some(p) = &input.path {
+        set("PS3_INPUT_MAP", p.clone());
+    }
+    // The variables win over the file's [mouse]; when the file has one (a
+    // hand edit), every mouse setting is passed so the launcher's stand.
+    let all = input.has_mouse_section;
     if !s.mouse {
         set("PS3_MOUSE", "0".into());
     } else {
-        if (s.mouse_sens - 1.0).abs() > 1e-3 {
+        if all {
+            set("PS3_MOUSE", "1".into());
+        }
+        if all || (s.mouse_sens - 1.0).abs() > 1e-3 {
             set("PS3_MOUSE_SENS", format!("{:.2}", s.mouse_sens));
         }
-        if s.mouse_invert_y {
-            set("PS3_MOUSE_INVERT_Y", "1".into());
+        if all || s.mouse_invert_y {
+            set("PS3_MOUSE_INVERT_Y", if s.mouse_invert_y { "1" } else { "0" }.into());
         }
-        if s.mouse_deadzone != 30 {
+        if all || s.mouse_invert_x {
+            set("PS3_MOUSE_INVERT_X", if s.mouse_invert_x { "1" } else { "0" }.into());
+        }
+        if all || s.mouse_deadzone != 30 {
             set("PS3_MOUSE_DEADZONE", s.mouse_deadzone.min(120).to_string());
         }
-        if !s.mouse_capture {
-            set("PS3_MOUSE_CAPTURE", "0".into());
+        if all || !s.mouse_capture {
+            set("PS3_MOUSE_CAPTURE", if s.mouse_capture { "1" } else { "0" }.into());
         }
     }
     if matches!(s.window_mode.as_str(), "fullscreen" | "borderless") {
@@ -574,6 +610,44 @@ fn save_settings(settings: Settings) -> Result<(), String> {
     fs::write(&tmp, serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     fs::rename(&tmp, &p).map_err(|e| e.to_string())
+}
+
+/// The controls file for the Controls screen: what it binds (the screen
+/// fills in the defaults for the rest), and where it is.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputMapView {
+    path: String,
+    exists: bool,
+    bindings: Bindings,
+}
+
+#[tauri::command]
+fn get_input_map() -> InputMapView {
+    let p = input_map_path();
+    let text = fs::read_to_string(&p);
+    InputMapView {
+        path: p.to_string_lossy().into_owned(),
+        exists: text.is_ok(),
+        bindings: text.map(|t| input_map::parse(&t).bindings).unwrap_or_default(),
+    }
+}
+
+/// Write the bindings; the file's other sections ([mouse], anything newer)
+/// stay as they were.
+#[tauri::command]
+fn save_input_map(bindings: Bindings) -> Result<String, String> {
+    input_map::validate(&bindings)?;
+    let p = input_map_path();
+    let mut file = fs::read_to_string(&p).map(|t| input_map::parse(&t)).unwrap_or_default();
+    file.bindings = bindings;
+    if let Some(d) = p.parent() {
+        fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    let tmp = p.with_extension("toml.tmp");
+    fs::write(&tmp, input_map::render(&file)).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
+    Ok(p.to_string_lossy().into_owned())
 }
 
 #[derive(Serialize)]
@@ -1083,7 +1157,7 @@ fn cancel_rebuild(state: State<'_, AppState>) {
 #[tauri::command]
 fn launch_preview(settings: Settings) -> Result<String, String> {
     let inst = resolve_install(Path::new(&settings.install_dir))?;
-    let mut s: Vec<String> = launch_env(&settings, &inst)
+    let mut s: Vec<String> = launch_env(&settings, &inst, &input_env())
         .into_iter()
         .map(|(k, v)| format!("{k}={}", shell_quote(&v)))
         .collect();
@@ -1119,7 +1193,7 @@ fn play(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
         .stdin(Stdio::null())
         .stdout(log)
         .stderr(log2);
-    for (k, v) in launch_env(&s, &inst) {
+    for (k, v) in launch_env(&s, &inst, &input_env()) {
         cmd.env(k, v);
     }
     own_process_group(&mut cmd);
@@ -1173,6 +1247,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
+            get_input_map,
+            save_input_map,
             get_status,
             detect_rpcs3,
             find_licence,
@@ -1228,8 +1304,9 @@ mod tests {
             port_commit: String::new(),
             toolkit_commit: String::new(),
         };
+        let none = InputEnv::default();
         let mut s = Settings::default();
-        let env: BTreeMap<_, _> = launch_env(&s, &inst).into_iter().collect();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3_LANG").map(String::as_str), Some("pt"));
         assert!(!env.contains_key("PS3RECOMP_ENG_GPU_LIGHT")); // run.sh default stays
         assert!(!env.contains_key("PS3_DISPLAY_GAMMA"));
@@ -1238,7 +1315,7 @@ mod tests {
         s.gamma_override = true;
         s.gamma = 1.5;
         s.mouse = false;
-        let env: BTreeMap<_, _> = launch_env(&s, &inst).into_iter().collect();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3RECOMP_ENG_GPU_LIGHT").map(String::as_str), Some(""));
         assert_eq!(env.get("PS3RECOMP_ENG_GPU_SSAO").map(String::as_str), Some(""));
         assert_eq!(env.get("PS3RECOMP_ENG_SKIP_FP").map(String::as_str), Some(""));
@@ -1252,14 +1329,51 @@ mod tests {
         s.window_mode = "borderless".into();
         s.window_size = "1920x1080".into();
         s.game_icon = true;
-        let env: BTreeMap<_, _> = launch_env(&s, &inst).into_iter().collect();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3_MOUSE_CAPTURE").map(String::as_str), Some("0"));
         assert_eq!(env.get("PS3_WINDOW_MODE").map(String::as_str), Some("borderless"));
         assert_eq!(env.get("PS3_WINDOW_SIZE").map(String::as_str), Some("1920x1080"));
         assert_eq!(env.get("PS3_WINDOW_ICON").map(String::as_str), Some("game"));
         s.window_size = "big".into();
-        let env: BTreeMap<_, _> = launch_env(&s, &inst).into_iter().collect();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert!(!env.contains_key("PS3_WINDOW_SIZE"));
+        assert!(!env.contains_key("PS3_INPUT_MAP")); // no controls file yet
+        assert!(!env.contains_key("PS3_MOUSE_SENS"));
+    }
+
+    #[test]
+    fn env_with_a_controls_file() {
+        let inst = InstallInfo {
+            layout: "install".into(),
+            title: String::new(),
+            app_ver: String::new(),
+            port_dir: "/p".into(),
+            run_sh: "/p/run.sh".into(),
+            executable: "/p/build/x".into(),
+            vfs: "/v".into(),
+            dev_flash: String::new(),
+            icon: String::new(),
+            background: String::new(),
+            built_at: String::new(),
+            port_commit: String::new(),
+            toolkit_commit: String::new(),
+        };
+        let mut s = Settings::default();
+        let file = InputEnv { path: Some("/d/input.toml".into()), has_mouse_section: false };
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &file).into_iter().collect();
+        assert_eq!(env.get("PS3_INPUT_MAP").map(String::as_str), Some("/d/input.toml"));
+        assert!(!env.contains_key("PS3_MOUSE_SENS")); // defaults stay out of the environment
+        s.mouse_invert_x = true;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &file).into_iter().collect();
+        assert_eq!(env.get("PS3_MOUSE_INVERT_X").map(String::as_str), Some("1"));
+        // a [mouse] in the file: every mouse setting is passed, so the launcher's win
+        let file = InputEnv { path: Some("/d/input.toml".into()), has_mouse_section: true };
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &file).into_iter().collect();
+        assert_eq!(env.get("PS3_MOUSE").map(String::as_str), Some("1"));
+        assert_eq!(env.get("PS3_MOUSE_SENS").map(String::as_str), Some("1.00"));
+        assert_eq!(env.get("PS3_MOUSE_INVERT_Y").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_MOUSE_DEADZONE").map(String::as_str), Some("30"));
+        assert_eq!(env.get("PS3_MOUSE_CAPTURE").map(String::as_str), Some("1"));
     }
 
     #[test]
