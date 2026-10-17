@@ -1357,7 +1357,7 @@ index 0000000..f8ee047
 +    puts("PS3_GAMEDATA_ROOT moves the save root and the listing follows it");
 +}
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..7346892 100644
+index 73b7e71..e0ade71 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -14,8 +14,10 @@
@@ -1371,7 +1371,55 @@ index 73b7e71..7346892 100644
  
  /* Guest EA of the GCM context (begin/end/current/callback) the title writes its
   * command stream into; recorded by cellGcmSetupContext, drained by the RSX. */
-@@ -773,15 +775,83 @@ unsigned long long ps3_ms_now(void)
+@@ -71,6 +73,10 @@ static u64 get_timestamp_ns(void)
+ static int  s_gcm_initialized = 0;
+ static u32  s_flip_mode   = CELL_GCM_DISPLAY_VSYNC;
+ static u32  s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
++/* Flip requests (each puts the status back to WAITING) and the request a
++ * pending flip completion was marked for: a completion delivered late must not
++ * mark DONE a flip requested after it (see ppu_gcm_pump). */
++static volatile u32 s_flip_req_seq, s_flip_tick_seq;
+ 
+ /* Count of guest flip requests (SetFlipCommand / SetPrepareFlip). The present
+  * loop uses this as the frame boundary: presenting only when a flip arrived
+@@ -602,6 +608,7 @@ void cellGcmResetFlipStatus(void)
+       if (getenv("FLIP_DBG") && __atomic_fetch_add(&n, 1, __ATOMIC_RELAXED) < 12)
+           fprintf(stderr, "[FLIP] ResetFlipStatus%c", 10); }
+     s_flip_status = CELL_GCM_FLIP_STATUS_WAITING;
++    s_flip_req_seq++;
+ }
+ 
+ /* NID: 0xE315A0B2 */
+@@ -701,7 +708,15 @@ void ppu_gcm_pump(void)
+                            0, 0, 0, 0, 0, 0, 0);
+     }
+     if (p & 2) {
+-        s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
++        /* Delivery waits for a guest thread to reach an HLE call or a timer
++         * sleep, so a newer flip may have been requested (status WAITING
++         * again) since this completion was marked. Marking DONE then would
++         * erase that request: the ticker only completes WAITING flips, so its
++         * handler would never run. inFAMOUS 2 writes its next FIFO put from
++         * the flip handler, and hung with get == put on exactly that. Leave
++         * the newer flip WAITING for the next tick. */
++        if (s_flip_tick_seq == s_flip_req_seq)
++            s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
+         if (s_flip_handler_opd && g_ps3_guest_caller) {
+             ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
+             g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0, 0, 0, 0, 0);
+@@ -732,8 +747,10 @@ void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
+  * the callback IS the flip interrupt -- no flip, no callback. */
+ void cellGcmTickFlip(void)
+ {
+-    if (s_flip_status == CELL_GCM_FLIP_STATUS_WAITING)
++    if (s_flip_status == CELL_GCM_FLIP_STATUS_WAITING) {
++        s_flip_tick_seq = s_flip_req_seq;
+         GCM_PENDING_SET(2);
++    }
+ }
+ 
+ /* Drain the game's GCM FIFO into the RSX backend. Called from the present thread
+@@ -773,15 +790,83 @@ unsigned long long ps3_ms_now(void)
  #ifdef _WIN32
      return (unsigned long long)GetTickCount64();
  #else
@@ -1456,7 +1504,7 @@ index 73b7e71..7346892 100644
  /* How close `current` must get to `end` before the runtime will recycle a ring
   * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
   * title that is merely near the end from being touched. */
-@@ -857,6 +927,29 @@ static u32 nv309e_swz(u32 x, u32 y, u32 l2w, u32 l2h)
+@@ -857,6 +942,29 @@ static u32 nv309e_swz(u32 x, u32 y, u32 l2w, u32 l2h)
      return off;
  }
  
@@ -1486,7 +1534,7 @@ index 73b7e71..7346892 100644
  static void nv3089_blit(void)
  {
      u32 out_w = s_nv3089.out_sz & 0xFFFF, out_h = s_nv3089.out_sz >> 16;
-@@ -864,6 +957,15 @@ static void nv3089_blit(void)
+@@ -864,6 +972,15 @@ static void nv3089_blit(void)
      u32 in_pitch = s_nv3089.in_fmt & 0xFFFF;
      u32 dst_pitch = s_gcm2d.pitch >> 16;
      if (!out_w || !out_h || !in_pitch || !dst_pitch) return;
@@ -1502,7 +1550,7 @@ index 73b7e71..7346892 100644
      /* NV3089_GATE=<file>: log every blit's geometry while <file> exists, so a
       * capture covers the scene of interest instead of the first N since boot. */
      { static const char* gate = (const char*)-1; static unsigned poll; static int open_gate;
-@@ -1000,6 +1102,34 @@ static void nv3089_blit(void)
+@@ -1000,6 +1117,34 @@ static void nv3089_blit(void)
      u32 dbpp = (s_gcm2d.color_fmt == 4u /* R5G6B5 */) ? 2u
               : (s_gcm2d.color_fmt == 1u /* Y8 */)     ? 1u : 4u;
      u32 bpp = (sbpp == dbpp) ? sbpp : 4u;
@@ -1537,7 +1585,7 @@ index 73b7e71..7346892 100644
      for (u32 y = 0; y < out_h; y++) {
          u32 dy = out_y + y;
          if (dy < cy0 || dy >= cy1) continue;
-@@ -1017,6 +1147,7 @@ static void nv3089_blit(void)
+@@ -1017,6 +1162,7 @@ static void nv3089_blit(void)
              else               vm_write8(d, vm_read8(s));
          }
      }
@@ -1545,7 +1593,7 @@ index 73b7e71..7346892 100644
      { static int _n = 0; static int cap = -1;
        if (cap < 0) { const char* e = getenv("NV3089_DBG"); cap = e ? atoi(e) : 0; }
        if (cap && _n < cap) { _n++;
-@@ -1332,8 +1463,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+@@ -1332,8 +1478,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
  
  static void gcm_fifo_dump_around(u32 getoff)
  {
@@ -1559,7 +1607,7 @@ index 73b7e71..7346892 100644
      for (u32 t = 0; t < GCM_TRACE_N; t++) {
          u32 k = (s_tr_i + t) % GCM_TRACE_N;
          if (!s_tr_w[k]) continue;
-@@ -1469,17 +1604,48 @@ void cellGcm_ref_on_poll(void)
+@@ -1469,17 +1619,48 @@ void cellGcm_ref_on_poll(void)
      ReleaseSRWLockExclusive(&s_ref_pub_lock);
      if (dry && s_gcm_kick_ev)
          SetEvent(s_gcm_kick_ev);       /* dry: ask the present thread to walk */
@@ -1608,7 +1656,7 @@ index 73b7e71..7346892 100644
      { static unsigned _n = 0; static unsigned long long _t0 = 0;
        extern unsigned long long ps3_ms_now(void);
        _n++;
-@@ -1647,6 +1813,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1647,6 +1828,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
                if (dbg && (flips <= 8ull || (flips % 200ull) == 0))
                    fprintf(stderr, "[flipword] %llu FIFO flip words decoded%c",
                            flips, 10); }
@@ -1617,7 +1665,7 @@ index 73b7e71..7346892 100644
              if ((w & 0xFFFFFF00u) == GCM_FLIP_MARKER) {
                  /* Queued by _cellGcmSetFlipCommand, which already did the
                   * guest-visible half of the request. */
-@@ -1677,6 +1845,17 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1677,6 +1860,17 @@ static void gcm_rsx_process_fifo_unlocked(void)
                                 s_fifo_getoff, w & 0x1FFFFFFCu, put); }
              { u32 tgt = w & 0x1FFFFFFCu;
                if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("JUMP", tgt, w); gcm_fifo_dump_around(s_fifo_getoff); gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put); break; }
@@ -1635,7 +1683,7 @@ index 73b7e71..7346892 100644
                /* A JUMP to its own address is the "park the RSX here" idiom:
                 * the title leaves it at the write head so the GPU stops if it
                 * catches up, and overwrites it when the next segment is
-@@ -1690,8 +1869,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1690,8 +1884,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -1672,7 +1720,7 @@ index 73b7e71..7346892 100644
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -1754,8 +1959,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1754,8 +1974,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
                      u32 m = (type == 0) ? method + i * 4 : method;
                      u32 v = vm_read32(dea);
                      u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
@@ -1696,7 +1744,7 @@ index 73b7e71..7346892 100644
                      if (m == 0x64u)      s_sema_offset = v;
                      else if (m == 0x6Cu) vm_write32(la, v);
                      else if (m == 0x68u && vm_read32(la) != v) {
-@@ -1763,12 +1981,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1763,12 +1996,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * the hardware does. Off by default: a title whose label nothing
               * ever writes would wedge the drain permanently, and RELEASE on
               * its own is the half that unblocks a waiting guest. */
@@ -1737,7 +1785,7 @@ index 73b7e71..7346892 100644
                  s_fifo_getoff += 4 + count * 4;
                  continue;
              }
-@@ -1964,8 +2206,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1964,8 +2221,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
            }
        } else burned = 0; }
  
@@ -1761,16 +1809,18 @@ index 73b7e71..7346892 100644
            if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
                               gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
        } else { stuck = 0; last = s_fifo_getoff; } }
-@@ -2268,6 +2524,8 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -2267,7 +2538,10 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+     /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
       * until the present thread's cellGcmTickFlip marks it done (vsync). */
      s_flip_status = CELL_GCM_FLIP_STATUS_WAITING;
++    s_flip_req_seq++;
      s_last_flip_time = get_timestamp_ns();
 +    if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
 +                       ps3_ft_span(PS3_FT_FLIP_REQ, 0, bufferId, (uint32_t)in_fifo, t, t); }
  
      /* Invoke via OPD resolution, not a raw call into guest code.
       *
-@@ -2310,9 +2568,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -2310,9 +2584,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of
@@ -7310,7 +7360,7 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..b30f067 100644
+index 3addd48..e9b8cba 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -18,6 +18,7 @@
@@ -7321,7 +7371,20 @@ index 3addd48..b30f067 100644
  #include <stdint.h>
  #include <stdio.h>
  #include <stdlib.h>
-@@ -709,6 +710,51 @@ static int spu_mfc_atomic_body(spu_context* ctx, uint32_t cmd)
+@@ -26,6 +27,12 @@
+ #include <sched.h>   /* sched_yield */
+ #endif
+ #include <time.h>
++#if defined(__APPLE__) || defined(__linux__)
++#include <execinfo.h>   /* backtrace of an unresolved branch */
++#endif
++#if defined(__APPLE__)
++#include <mach-o/dyld.h>
++#endif
+ #include "../platform/win32_compat.h"
+ 
+ #ifdef __cplusplus
+@@ -709,6 +716,51 @@ static int spu_mfc_atomic_body(spu_context* ctx, uint32_t cmd)
        } }
      switch (cmd) {
      case MFC_GETLLAR_CMD:
@@ -7373,7 +7436,7 @@ index 3addd48..b30f067 100644
          /* Lockstep tick: a guest GETLLAR..PUTLLC poll loop is intra-function
           * (all gotos), so it never crosses the SPU_DRAIN tick site -- without a
           * tick here a polling SPU would hold the run token forever while the
-@@ -1181,10 +1227,31 @@ void spu_ch_wake(spu_context* ctx)
+@@ -1181,10 +1233,31 @@ void spu_ch_wake(spu_context* ctx)
      WakeAllConditionVariable((CONDITION_VARIABLE*)&ctx->ch_wait_cv);
  }
  
@@ -7405,7 +7468,7 @@ index 3addd48..b30f067 100644
  
      { static unsigned long bn = 0; unsigned long n = __atomic_add_fetch(&bn, 1, __ATOMIC_RELAXED);
        if (n <= 50 || (n % 512) == 0)
-@@ -1202,6 +1269,7 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
+@@ -1202,6 +1275,7 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
                   * A lifted SPU leaves through its halt landing pad; the
                   * interpreter sees the request at its next step. */
                  yz_lockstep_block_end(ctx);
@@ -7413,7 +7476,7 @@ index 3addd48..b30f067 100644
                  ctx->status = SPU_STATUS_STOPPED_BY_HALT;
                  spu_halt(ctx);
                  return;
-@@ -1223,6 +1291,7 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
+@@ -1223,6 +1297,7 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
          }
      }
      yz_lockstep_block_end(ctx);            /* rejoin the rotation, reacquire the token */
@@ -7421,7 +7484,7 @@ index 3addd48..b30f067 100644
      ctx->status = SPU_STATUS_RUNNING;
  }
  
-@@ -1294,8 +1363,14 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+@@ -1294,8 +1369,14 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
           * read the decrementer before writing it. */
          if (!ctx->dec_base_ns) ctx->dec_base_ns = spu_host_ns();
          uint64_t elapsed = spu_host_ns() - ctx->dec_base_ns;
@@ -7438,7 +7501,7 @@ index 3addd48..b30f067 100644
          v = ctx->decrementer - ticks;
          break;
      }
-@@ -1571,6 +1646,22 @@ static inline uint32_t spu_fn_hash(uint32_t addr)
+@@ -1571,6 +1652,22 @@ static inline uint32_t spu_fn_hash(uint32_t addr)
  static int s_reg_image = 0;
  void spu_begin_image(int image_id) { s_reg_image = image_id; }
  
@@ -7461,7 +7524,7 @@ index 3addd48..b30f067 100644
  void spu_register_function(uint32_t addr, spu_fn fn)
  {
      if (s_registry_count >= SPU_FN_REGISTRY_MAX) {
-@@ -1644,6 +1735,14 @@ static void spu_report_cross_image(uint32_t addr, int want, int got)
+@@ -1644,6 +1741,14 @@ static void spu_report_cross_image(uint32_t addr, int want, int got)
              "issue #59.\n", addr, want, got);
  }
  
@@ -7476,7 +7539,7 @@ index 3addd48..b30f067 100644
  spu_fn spu_lookup(uint32_t addr, int image_id)   /* exported: clang-built fast-path dispatch (spu_dispatch_mt.c) needs it */
  {
      /* Match the context's active image; image_id 0 (context or entry) matches
-@@ -1651,7 +1750,8 @@ spu_fn spu_lookup(uint32_t addr, int image_id)   /* exported: clang-built fast-p
+@@ -1651,7 +1756,8 @@ spu_fn spu_lookup(uint32_t addr, int image_id)   /* exported: clang-built fast-p
      for (uint32_t n = s_hash_head[spu_fn_hash(addr)]; n; n = s_hash_next[n - 1]) {
          const spu_reg_entry* e = &s_registry[n - 1];
          if (e->addr == addr &&
@@ -7486,7 +7549,7 @@ index 3addd48..b30f067 100644
              /* One compare on the return path; the report itself is rare. */
              if (e->image_id != image_id)
                  spu_report_cross_image(addr, image_id, e->image_id);
-@@ -1672,7 +1772,7 @@ int spu_image_of_function(uint32_t addr)
+@@ -1672,7 +1778,7 @@ int spu_image_of_function(uint32_t addr)
  {
      for (uint32_t n = s_hash_head[spu_fn_hash(addr)]; n; n = s_hash_next[n - 1]) {
          const spu_reg_entry* e = &s_registry[n - 1];
@@ -7495,7 +7558,7 @@ index 3addd48..b30f067 100644
      }
      return -1;
  }
-@@ -1694,17 +1794,30 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
+@@ -1694,17 +1800,30 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
       * spu_indirect_branch): the interpreter hands back to its lift as soon as
       * it reaches a lifted entry, instead of interpreting the whole job. */
      if (ctx) {
@@ -7531,7 +7594,7 @@ index 3addd48..b30f067 100644
      return f;
  }
  
-@@ -1713,7 +1826,7 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
+@@ -1713,7 +1832,7 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
   * the image id its lifted functions were registered under. The MFC GET path
   * marks that overlay resident in the streaming context; dispatch retries a
   * primary-image miss against the resident overlay's registry. */
@@ -7540,7 +7603,7 @@ index 3addd48..b30f067 100644
  /* 6 FMOD codec/DSP overlays + up to 89 WWS job-code modules (all stream into
   * the same job code buffer at LS 0x4000, dispatched by content signature). */
  #define SPU_OVL_SRC_MAX 128
-@@ -1726,6 +1839,8 @@ void spu_overlay_register_source(uint32_t content_ea, int image_id)
+@@ -1726,6 +1845,8 @@ void spu_overlay_register_source(uint32_t content_ea, int image_id)
          s_ovl_src[s_ovl_src_count].src_ea = content_ea;
          s_ovl_src[s_ovl_src_count].image_id = image_id;
          s_ovl_src[s_ovl_src_count].has_sig = 0;
@@ -7549,7 +7612,7 @@ index 3addd48..b30f067 100644
          s_ovl_src_count++;
      }
  }
-@@ -1755,6 +1870,23 @@ void spu_overlay_register_region_at(uint32_t content_ea, uint32_t lsa, uint32_t
+@@ -1755,6 +1876,23 @@ void spu_overlay_register_region_at(uint32_t content_ea, uint32_t lsa, uint32_t
          s_ovl_src[s_ovl_src_count - 1].lift_lsa = lsa;
  }
  
@@ -7573,7 +7636,7 @@ index 3addd48..b30f067 100644
  /* Register one-way runtime entries that replace the guest call stack.
   * Matching the resolved function, not just its LS address, avoids affecting
   * unrelated overlays using the same address. Registration precedes execution. */
-@@ -1775,9 +1907,11 @@ void spu_check_stack_reset(spu_context* ctx, void (*fn)(spu_context*))
+@@ -1775,9 +1913,11 @@ void spu_check_stack_reset(spu_context* ctx, void (*fn)(spu_context*))
      /* The registry count first: it is a plain global, s_spu_halt_armed is
       * thread-local (a _tlv_get_addr call on macOS), and with no stack-reset
       * entries registered the loop below cannot fire. Runs on every dispatch. */
@@ -7587,7 +7650,7 @@ index 3addd48..b30f067 100644
              fn == spu_lookup(ctx->pc, s_stack_reset[i].image_id)) {
              g_spu_trampoline_fn = 0;
              SPU_LONGJMP(s_spu_halt_env, 2);
-@@ -1905,6 +2039,44 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
+@@ -1905,6 +2045,44 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
                  ea, size, os, on, ns, nn); }
  }
  
@@ -7632,7 +7695,7 @@ index 3addd48..b30f067 100644
  void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint32_t size)
  {
      uint32_t lsa = (uint32_t)(ls - ctx->ls);
-@@ -1924,7 +2096,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1924,7 +2102,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
                fprintf(stderr, "[spu-get] img=%d pc=0x%05X ea=0x%08X -> LS 0x%05X size=0x%X\n",
                        ctx->image_id, (unsigned)(ctx->pc & SPU_LS_MASK), ea, lsa, size); } } }
      spu_ovl_dump(ctx, ea, lsa, ls, size);
@@ -7641,7 +7704,7 @@ index 3addd48..b30f067 100644
          if (!ctx->resident_code[slot].image_id) continue;
          uint32_t base = ctx->resident_code[slot].lsa;
          uint32_t end = base + ctx->resident_code[slot].size;
-@@ -1949,6 +2121,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1949,6 +2127,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
              ctx->resident_code[slot].image_id = 0;
          }
      }
@@ -7649,7 +7712,7 @@ index 3addd48..b30f067 100644
      for (int i = 0; i < s_ovl_src_count; i++) {
          const spu_ovl_src* o = &s_ovl_src[i];
          int hit = o->has_sig ? (size >= 512 && memcmp(ls, o->sig, 16) == 0)
-@@ -1966,7 +2139,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1966,7 +2145,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
              }
              if (!hit) continue;
              int have = 0;
@@ -7658,7 +7721,7 @@ index 3addd48..b30f067 100644
                  if (ctx->resident_code[slot].image_id == o->image_id &&
                      ctx->resident_code[slot].lsa == o->lift_lsa) have = 1;
              if (have) continue;
-@@ -1975,13 +2148,14 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1975,13 +2154,14 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
          if (hit) {
              if (o->span) {
                  if (lsa + o->span > SPU_LS_SIZE) return;
@@ -7674,7 +7737,7 @@ index 3addd48..b30f067 100644
                      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
                          fprintf(stderr, "[spu-ovl] img=%d code span src=0x%08X -> LS 0x%05X+0x%X resident as image %d (slot %u)\n",
                                  ctx->image_id, ea, lsa, o->span, o->image_id, slot); }
-@@ -2212,7 +2386,7 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2212,7 +2392,7 @@ static int spu_smc_microstep(spu_context* ctx)
        if (s_dbg > 0 && pc >= 0x4000 && pc < 0x3F000) { s_dbg--;
          fprintf(stderr, "[micro-dbg] img=%d pc=0x%05X lr=0x%05X slots", ctx->image_id, pc,
                  ctx->gpr[0]._u32[0] & SPU_LS_MASK);
@@ -7683,7 +7746,7 @@ index 3addd48..b30f067 100644
              fprintf(stderr, " {%d 0x%05X+0x%X}", ctx->resident_code[k].image_id,
                      ctx->resident_code[k].lsa, ctx->resident_code[k].size);
          fprintf(stderr, " ovl=%d lookup10=%p lookup11=%p\n", ctx->resident_ovl,
-@@ -2366,7 +2540,21 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2366,7 +2546,21 @@ static int spu_smc_microstep(spu_context* ctx)
          /* Stop at the drain's return point too: it sits mid-function, so it is
           * no lifted entry, and a job's return would otherwise run on through
           * the caller's code (GH3's song-freeze; see drain_ret_pc). */
@@ -7706,7 +7769,7 @@ index 3addd48..b30f067 100644
      }
      { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 4)
          fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
-@@ -2448,7 +2636,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2448,7 +2642,7 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
          int lifted = spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->image_id) ||
              (ctx->resident_task && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_task)) ||
              (ctx->resident_ovl  && spu_lookup(SPURS_TASKSET_PM_SYSCALL_LS, ctx->resident_ovl));
@@ -7715,7 +7778,7 @@ index 3addd48..b30f067 100644
              if (ctx->resident_code[slot].image_id &&
                  SPURS_TASKSET_PM_SYSCALL_LS - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size)
                  lifted = 1;
-@@ -2555,11 +2743,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2555,11 +2749,13 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
       * is 0 outside the region, so this only ever fires for genuine task code.) */
      spu_fn fn = NULL;
      int code_owner = 0;
@@ -7731,7 +7794,7 @@ index 3addd48..b30f067 100644
              break;
          }
      }
-@@ -2573,8 +2763,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2573,8 +2769,8 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      /* A resident module's code outside its own image: the save/restore stub the
       * WWS policy module writes at the top of local store (LS 0x3FEC0) and calls
       * from its interrupt path. Its lift belongs to the module's image. */
@@ -7742,7 +7805,7 @@ index 3addd48..b30f067 100644
              fn = spu_lookup(ctx->pc, ctx->resident_code[slot].image_id);
      /* The job returned through the link register we planted: it is finished.
       * Its outermost frame ends in `bi $r0`, and r0 was 0 -- so without this the
-@@ -2633,15 +2823,19 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -2633,15 +2829,21 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
      }
  
      if (!fn && !ctx->policy_mode && ctx->pc >= SPU_JM2_KERNEL_BASE) {
@@ -7761,6 +7824,8 @@ index 3addd48..b30f067 100644
 +        for (int i = 0; i < n && i < UNLIFTED_SEEN_MAX; i++)
              if (__atomic_load_n(&seen[i], __ATOMIC_RELAXED) == ctx->pc) { known = 1; break; }
 -        if (!known && n < 16) {
++        { extern void spu_irq_ring_note(spu_context*, char, uint32_t, uint32_t);
++          spu_irq_ring_note(ctx, 'U', ctx->pc & SPU_LS_MASK, ctx->gpr[0]._u32[0] & SPU_LS_MASK); }
 +        if (!known && n < UNLIFTED_SEEN_MAX) {
              int slot = __atomic_fetch_add(&n_seen, 1, __ATOMIC_ACQ_REL);
 -            if (slot < 16) __atomic_store_n(&seen[slot], ctx->pc, __ATOMIC_RELAXED);
@@ -7768,7 +7833,31 @@ index 3addd48..b30f067 100644
              uint32_t p0 = ctx->pc & SPU_LS_MASK;
              uint32_t w0 = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                            ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
-@@ -3127,19 +3321,21 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -3013,9 +3215,22 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+       static int _bt0[BT0_MAX_IMG];
+       unsigned img = (ctx->image_id >= 0 && ctx->image_id < BT0_MAX_IMG)
+                      ? (unsigned)ctx->image_id : 0;
+-      if (_bt0[img]++ < BT0_PER_IMG)
++      if (_bt0[img]++ < BT0_PER_IMG) {
+         fprintf(stderr, "[SPU] BRANCH-TO-0 unresolved pc=0x%05X image=%d lr=0x%05X\n",
+                 ctx->pc, ctx->image_id, ctx->gpr[0]._u32[0] & SPU_LS_MASK);
++        /* The host stack still holds the lifted functions that branched
++         * here (func_<image>_<lsa> frames): name them, so a branch into data
++         * says which code computed the target. */
++#if defined(__APPLE__) || defined(__linux__)
++        { void* bt[24]; const int nb = backtrace(bt, 24);
++#if defined(__APPLE__)
++          /* Lifted SPU functions are mostly static: `atos -o <exe> -l <base>`
++           * names them offline. */
++          fprintf(stderr, "[SPU] backtrace (image base %p):\n", (const void*)_dyld_get_image_header(0));
++#endif
++          fflush(stderr); backtrace_symbols_fd(bt, nb, 2); }
++#endif
++      }
+       spu_ls_watch_dump("branch-to-0"); }
+     /* One-shot: the FMOD null-handler DSP node carries a PPU descriptor EA at
+      * node+0x14 (observed 0x93C3C0). Dump it to identify which plugin/unit
+@@ -3127,19 +3342,21 @@ void spu_indirect_branch(spu_context* ctx)
          }
          spu_fn fn = NULL;
          int code_owner = 0;
@@ -7992,7 +8081,7 @@ index 142931a..32d9b2f 100644
       * bucket histogram showed spu1..3 writing only bucket 0 and spu0 buckets
       * 1..3, with nothing in bucket 4 -- where the composite samples PS1 VRAM
 diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
-index 7c1089c..0566701 100644
+index 7c1089c..d0923a9 100644
 --- a/runtime/spu/spu_drain.c
 +++ b/runtime/spu/spu_drain.c
 @@ -7,6 +7,8 @@
@@ -8031,7 +8120,77 @@ index 7c1089c..0566701 100644
      /* A SPURS job returning to LS 0 is finished -- its crt tail-jumps to the
       * resident job manager, and with the job loaded at 0 that lands on its own
       * entry. Planting a return address in r0 catches the jobs that get there
-@@ -316,6 +338,39 @@ void (*spu_take_interrupt(spu_context* ctx,
+@@ -206,8 +228,45 @@ unsigned spu_sn_defer_ticks(void)
+  * the irete). State the handler legitimately publishes lives in LS/channels
+  * and is untouched. Per-ctx slots; no nesting (interrupts stay disabled
+  * until iret). */
++/* Per-SPU ring of the last interrupt-related events, dumped when an SPU
++ * faults (spu_lifted_thread.c): the take, the restore at the iret on the lifted
++ * or the interpreted path, an iret that did not land on the saved resume pc,
++ * a frame unwind, a branch into unlifted LS. The logs above are capped at the
++ * first few hundred events of a run; a fault minutes in needs the last ones. */
++#define SPU_IRQ_RING 32
++typedef struct { uint64_t steps; uint32_t a, b; uint16_t depth; char kind; uint8_t flags; } spu_irq_ev;
++static struct { const spu_context* ctx; uint32_t n; spu_irq_ev ev[SPU_IRQ_RING]; } s_irq_ring[16];
++
++void spu_irq_ring_note(spu_context* ctx, char kind, uint32_t a, uint32_t b)
++{
++    const unsigned k = ctx->spu_id & 15u;
++    s_irq_ring[k].ctx = ctx;
++    spu_irq_ev* e = &s_irq_ring[k].ev[s_irq_ring[k].n++ % SPU_IRQ_RING];
++    e->steps = ctx->steps; e->a = a; e->b = b; e->depth = (uint16_t)ctx->host_depth; e->kind = kind;
++    e->flags = (uint8_t)((ctx->int_enable ? 1 : 0) | (ctx->irq_saved ? 2 : 0));
++}
++
++void spu_irq_ring_dump(spu_context* ctx)
++{
++    const unsigned k = ctx->spu_id & 15u;
++    const uint32_t n = s_irq_ring[k].n;
++    fprintf(stderr, "[irq-ring] spu=%X last %u interrupt events (oldest first; T take srr0, "
++            "R lifted restore pc, I interp iret next/resume, M interp iret mismatch next/resume, "
++            "J unwind depth->frame, D unwind to driver, U unlifted branch pc/lr; flags ie=1 saved=2):\n",
++            ctx->spu_id, n < SPU_IRQ_RING ? n : SPU_IRQ_RING);
++    for (uint32_t i = n > SPU_IRQ_RING ? n - SPU_IRQ_RING : 0; i < n; i++) {
++        const spu_irq_ev* e = &s_irq_ring[k].ev[i % SPU_IRQ_RING];
++        fprintf(stderr, "[irq-ring]   %c steps=%llu a=0x%05X b=0x%05X depth=%u flags=%u\n", e->kind,
++                (unsigned long long)e->steps, e->a, e->b, e->depth, e->flags);
++    }
++    fprintf(stderr, "[irq-ring]   now: pc=0x%05X depth=%u ie=%d saved=%d resume=0x%05X steps=%llu\n",
++            ctx->pc & SPU_LS_MASK, ctx->host_depth, ctx->int_enable, ctx->irq_saved,
++            ctx->irq_resume_pc & SPU_LS_MASK, (unsigned long long)ctx->steps);
++}
++
+ static void spu_irq_regs_save(spu_context* ctx)
+ {
++    spu_irq_ring_note(ctx, 'T', ctx->srr0 & SPU_LS_MASK, ctx->irq_saved ? ctx->irq_resume_pc & SPU_LS_MASK : 0);
+     /* T-0001 (2026-10-08): no nesting guard existed despite the "no nesting"
+      * contract below -- a second take while a save is armed silently
+      * OVERWRITES the snapshot and loses the outer resume point. Log it. */
+@@ -253,6 +312,7 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
+                               "ago (resume=%05X) -- genuine iret was MISSED\n",
+                               (unsigned long long)_age,
+                               ctx->irq_resume_pc & SPU_LS_MASK); }
++                spu_irq_ring_note(ctx, 'R', ctx->pc & SPU_LS_MASK, ctx->irq_resume_pc & SPU_LS_MASK);
+                 memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
+                 ctx->irq_saved = 0;
+                 /* The iret completed below the frame that took the interrupt:
+@@ -261,6 +321,7 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
+                 if (f && ctx->host_depth <= f->depth)
+                     ctx->irq_frame = f->prev;      /* returned to its loop the ordinary way */
+                 if (f && ctx->host_depth > f->depth) {
++                    spu_irq_ring_note(ctx, 'J', ctx->host_depth, f->depth);
+                     { static _Atomic int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
+                       static int _n = 0;
+                       if (s_it && __atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 200)
+@@ -269,6 +330,7 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
+                     SPU_LONGJMP(f->env, 1);
+                 }
+                 if (!f && ctx->host_depth > 0) {
++                    spu_irq_ring_note(ctx, 'D', ctx->host_depth, 0);
+                     /* Taken by the top-level driver loop (depth 0), which
+                      * keeps no frame: the driver's own restart re-enters at
+                      * srr0 with the host stack empty, which is that frame. */
+@@ -316,6 +378,39 @@ void (*spu_take_interrupt(spu_context* ctx,
      ctx->srr0 = ctx->pc;             /* resume point for iret */
      ctx->int_enable = 0;
      spu_irq_regs_save(ctx);          /* hardware contract: handler preserves regs */
@@ -8071,7 +8230,7 @@ index 7c1089c..0566701 100644
      { static _Atomic int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
        if (s_it) { static int _n = 0; if (__atomic_fetch_add(&_n, 1, __ATOMIC_RELAXED) < 200)
          fprintf(stderr, "[irq] TAKE srr0=0x%05X depth=%d r13=%08X r15=%08X\n",
-@@ -458,15 +513,18 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -458,15 +553,18 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
              uint32_t pc = ctx->pc & SPU_LS_MASK;
              spu_drain_fn fn = 0;
              int owned = 0;
@@ -8144,10 +8303,21 @@ index 8d96768..7b9ade2 100644
      r._u32[i] = v ? spu__sf_pack(v < 0 ? 0x80000000u : 0, v < 0 ? 0u - (uint32_t)v : (uint32_t)v, -(155 - (i8 & 0xFF))) : 0; } return r; }
  static inline u128 spu_cuflt(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const uint32_t v = a._u32[i];
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
-index 772c2d6..42057dc 100644
+index 772c2d6..668a8ed 100644
 --- a/runtime/spu/spu_interp.c
 +++ b/runtime/spu/spu_interp.c
-@@ -495,7 +495,7 @@ static void spu_xfer_log(const spu_context* ctx, const char* kind, uint32_t from
+@@ -364,6 +364,10 @@ static int spu_step(spu_context* ctx) {
+          * it publishes lives in LS/channels. On a genuine return to the
+          * take point, restore the interrupted register file. */
+         SPU_IED_BITS();                              /* E/D bits, like the lift */
++        { extern void spu_irq_ring_note(spu_context*, char, uint32_t, uint32_t);
++          if (ctx->irq_saved)
++              spu_irq_ring_note(ctx, next == (ctx->irq_resume_pc & SPU_LS_MASK) ? 'I' : 'M',
++                                next, ctx->irq_resume_pc & SPU_LS_MASK); }
+         if (ctx->irq_saved) {
+             if (next == (ctx->irq_resume_pc & SPU_LS_MASK)) {
+                 memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
+@@ -495,7 +499,7 @@ static void spu_xfer_log(const spu_context* ctx, const char* kind, uint32_t from
      if (s_left < 0) { const char* e = getenv("SPU_INTERP_XFER_LOG"); s_left = e ? atol(e) : 0; }
      if (s_left <= 0 || s_left-- <= 0) return;
      int owner = ctx->image_id, slot_hit = -1;
@@ -8156,7 +8326,7 @@ index 772c2d6..42057dc 100644
          if (ctx->resident_code[k].image_id && to - ctx->resident_code[k].lsa < ctx->resident_code[k].size) {
              owner = ctx->resident_code[k].image_id; slot_hit = (int)k; break; }
      uint32_t w = ((uint32_t)ctx->ls[to] << 24) | ((uint32_t)ctx->ls[to+1] << 16) |
-@@ -524,10 +524,39 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
+@@ -524,10 +528,39 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
      return spu_interp_run_until(ctx, start_lsa, 0);
  }
  
@@ -8196,7 +8366,7 @@ index 772c2d6..42057dc 100644
      /* YDKJ_SPU_TRACE=N: log the last N PCs into a ring buffer and dump them when the
       * interp halts -- shows the path to a branch-to-0 (the cri task/policy wall). */
      static _Atomic int _tr=-1; if(_tr<0){const char*e=getenv("YDKJ_SPU_TRACE");_tr=e?atoi(e):0;}
-@@ -563,8 +592,11 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+@@ -563,8 +596,11 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
          /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
          if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) {
              { static _Atomic int s_rj = -1; if (s_rj < 0) { const char* e = getenv("SPU_REJOIN_DBG"); s_rj = e ? atoi(e) : 0; }
@@ -8210,7 +8380,7 @@ index 772c2d6..42057dc 100644
              spu_xfer_log(ctx, "rejoin", g_spu_interp_last_pc, ctx->pc);
              g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
          g_spu_interp_last_pc = ctx->pc;
-@@ -602,6 +634,16 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+@@ -602,6 +638,16 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
                      ctx->pc, (unsigned long long)steps, rn);
              for(int k=rn;k>0;k--) fprintf(stderr," %05X", ring[(rc-k)&63]);
              fprintf(stderr,"\n");
@@ -8227,7 +8397,7 @@ index 772c2d6..42057dc 100644
              /* dump the LS 0x2700 SpursTasksetContext the poll reads -- compare to the
               * working RPCS3 SPU0 dump (RUNNING/READY/ENABLED=0x80000000, SIGNALLED=0). */
              #define LB(o) (((uint32_t)ctx->ls[(o)]<<24)|((uint32_t)ctx->ls[(o)+1]<<16)|((uint32_t)ctx->ls[(o)+2]<<8)|ctx->ls[(o)+3])
-@@ -630,6 +672,20 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+@@ -630,6 +676,20 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
                        if (hist[i][j] > tot / 50) fprintf(stderr, "[spu-hist]   img %d page 0x%05X: %.1f%%\n",
                                                          i == 63 ? -1 : i, j << 12, 100.0 * hist[i][j] / tot);
                } } }
@@ -8248,6 +8418,20 @@ index 772c2d6..42057dc 100644
          if (__atomic_load_n(&ctx->stop_request, __ATOMIC_RELAXED)) {   /* group terminated */
              ctx->status = SPU_STATUS_STOPPED_BY_HALT; ctx->stop_code = 0;
              g_spu_interp_steps = steps;
+diff --git a/runtime/spu/spu_lifted_thread.c b/runtime/spu/spu_lifted_thread.c
+index fe7755e..adcc218 100644
+--- a/runtime/spu/spu_lifted_thread.c
++++ b/runtime/spu/spu_lifted_thread.c
+@@ -101,7 +101,8 @@ void spu_lifted_thread_run(spu_context* ctx, spu_lifted_thread_result* out)
+             "-> status=%d%s%s\n",
+             ctx->spu_id, ctx->status, ctx->pc, ctx->stop_code, r.exit_status,
+             r.group_exit ? " group-exit" : "", r.faulted ? " FAULT" : "");
+-    if (r.faulted) spu_ls_watch_dump("thread-fault");
++    if (r.faulted) { extern void spu_irq_ring_dump(spu_context*); spu_irq_ring_dump(ctx);
++                     spu_ls_watch_dump("thread-fault"); }
+     fflush(stderr);
+ 
+     /* The SPU has stopped, so its MFC engine is idle and the slot it holds in
 diff --git a/runtime/spu/tests/test_spu_cflt_fast.c b/runtime/spu/tests/test_spu_cflt_fast.c
 new file mode 100644
 index 0000000..6433225
