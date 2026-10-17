@@ -104,11 +104,67 @@ on top of it:
 | Return / Tab | START / SELECT |
 | Left / right / middle mouse button | R1 / R2 / L1 |
 
-The mouse is tuned with `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1` and
-`PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` turns it off. A click in the game
-captures it (the cursor hides and the camera follows the mouse); Esc or Cmd
-releases it, and so does switching to another app. `PS3_MOUSE_CAPTURE=0`
-goes back to the uncaptured camera.
+The mouse is tuned with `PS3_MOUSE_SENS`, `PS3_MOUSE_INVERT_Y=1`,
+`PS3_MOUSE_INVERT_X=1` and `PS3_MOUSE_DEADZONE`; `PS3_MOUSE=0` turns it off. A
+click in the game captures it (the cursor hides and the camera follows the
+mouse); Esc or Cmd releases it, and so does switching to another app.
+`PS3_MOUSE_CAPTURE=0` goes back to the uncaptured camera.
+
+Every binding above can be changed in a controls file: the launcher's
+**Controls** screen writes it, or write it by hand at
+`~/Library/Application Support/infamous2-recomp/input.toml` (`input.ini` also
+works; `PS3_INPUT_MAP=<file>` picks another one, `PS3_INPUT_MAP=` none).
+Anything the file leaves out keeps the layout above (the mouse's side
+buttons press L1, like the middle one), except that an input the file binds
+leaves the controls it does not mention: `cross = "Q"` takes Q off ○ (list it
+under both to keep both). Names are not case-sensitive, and an unknown one
+is reported once in the log and ignored.
+
+```toml
+[keyboard]                  # PS3 control = keys
+cross    = "Space"
+circle   = "F"
+start    = "Return, KeypadEnter"   # several keys
+l3       = "Shift"
+r3       = ""                      # unbound
+
+[mouse_buttons]             # PS3 control = mouse buttons
+r1   = "Left"
+up   = "WheelUp"            # each wheel notch is one press
+down = "WheelDown"
+l1   = "Button4"
+
+[mouse]                     # the environment variables above win over these
+camera      = true
+sensitivity = 1.5
+invert_x    = false
+invert_y    = false
+deadzone    = 30
+capture     = true
+
+[controller]                # PS3 control = SDL controller inputs
+cross  = "a"                # Cross on a DualSense, A on an Xbox pad
+circle = "b"
+select = "touchpad"
+```
+
+- PS3 controls: `cross circle square triangle l1 r1 l2 r2 l3 r3 start select`,
+  `up down left right` (D-pad), `ls_up ls_down ls_left ls_right` and
+  `rs_up rs_down rs_left rs_right` (sticks).
+- Keys, by their place on a US Mac keyboard: `A`-`Z`, `0`-`9`, `F1`-`F20`,
+  `Space Return Tab Escape Backspace ForwardDelete Up Down Left Right Home End
+  PageUp PageDown`, `Minus Equal LeftBracket RightBracket Backslash Semicolon
+  Quote Comma Period Slash Grave Section`, `Keypad0`-`Keypad9 KeypadEnter
+  KeypadPlus KeypadMinus KeypadMultiply KeypadDivide KeypadDecimal
+  KeypadEquals KeypadClear`, `Shift RightShift Control RightControl Option
+  RightOption`, or a raw key code (`0x00`-`0x7F`). Cmd cannot be bound, and
+  Esc releases the captured mouse before it reaches the game.
+- Mouse buttons: `Left Right Middle Button4`-`Button8 WheelUp WheelDown`.
+- Controller (SDL names): `a b x y back guide start leftstick rightstick
+  leftshoulder rightshoulder lefttrigger righttrigger dpup dpdown dpleft
+  dpright touchpad misc1 paddle1`-`paddle4`; PlayStation and Xbox names work
+  too (`cross`, `options`, `share`, `l1`, `r2`, `lb`, `rt`, ...). The physical
+  sticks always drive the PS3 sticks.
 
 The window resizes freely and the image keeps its 16:9 shape, with black bars
 when the window has another one.

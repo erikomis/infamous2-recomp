@@ -86,6 +86,7 @@ jogo.
 - [ ] Captura do cursor na janela e atalho para soltá-lo.
   - Atualização 2026-10-17: implementado, falta testar em janela (patch do toolkit `infamous2-lle/patches/pending/window-modes.patch`): um clique esquerdo no jogo captura o mouse (cursor escondido e preso, o movimento move a câmera; esse clique não dispara nada), Esc, Cmd, outra janela ou outro app soltam, e o próximo clique captura de novo. Solto, mexer o mouse não gira nada. `PS3_MOUSE_CAPTURE=0` volta para a câmera sem captura.
 - [ ] Mapeamento configurável (arquivo de configuração em vez de teclas fixas no código).
+  - Atualização 2026-10-17: implementado, esperando teste na janela (patch do toolkit `infamous2-lle/patches/pending/input-mapping.patch`): `PS3_INPUT_MAP=<arquivo>` (o run.sh usa `~/Library/Application Support/infamous2-recomp/input.toml` por padrão) troca teclas, botões do mouse (também os botões 4-8 e a roda), Shift/Control/Option e botões do controle, e guarda as opções do mouse; o que ficar de fora mantém o layout antigo, nomes desconhecidos vão uma vez para o log. Testes do parser e da equivalência do teclado em `libs/input/tests/`.
 - [ ] Controle físico via SDL2 (DualShock/DualSense/Xbox) testado, incluindo vibração.
   - Atualização: o DualSense funciona (botões e analógicos) no jogo com janela. Faltam vibração, Xbox e DualShock.
 - [ ] Prompts de botão: opção de trocar os ícones de PS3 pelos de teclado.
@@ -132,6 +133,7 @@ Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que lev
   - filtragem anisotrópica, anti-aliasing (FXAA/SMAA/TAA), nitidez;
   - brilho/gamma e HDR (EDR no Mac).
 - [ ] **Controles:** remapear teclado, mouse e controle (DualSense/DualShock/Xbox) com a tela de teste dos botões; sensibilidade e inversão do mouse; vibração; ícones de botão PS3 ou teclado nos prompts.
+  - Atualização 2026-10-17: remapeamento implementado, esperando teste na janela: uma tela Controles (clique numa célula, aperte a tecla/botão do mouse/botão do controle; as linhas acendem enquanto suas entradas estão apertadas, que é o teste dos botões) grava o `input.toml`, com sensibilidade, as duas inversões, zona morta e captura do mouse ao lado. Vibração e ícones de botão ainda faltam.
 - [ ] **Áudio:** volume geral e dispositivo de saída.
 - [ ] **Saves:** listar, fazer backup, restaurar e importar/exportar (inclusive saves do RPCS3), para nunca perder o progresso.
 - [ ] **Pacotes de texturas e mods:** carregar texturas substitutas (alta resolução, refeitas por IA) e patches, ligar/desligar cada um.

@@ -85,6 +85,7 @@ left in New Marais, and the fact that nobody has gone past 1% of the game yet.
 - [ ] Cursor capture in the window and a shortcut to release it.
   - Update 2026-10-17: implemented, waiting for a windowed test (toolkit patch `infamous2-lle/patches/pending/window-modes.patch`): a left click in the game captures the mouse (cursor hidden and pinned, motion drives the camera; that click fires nothing), Esc, Cmd, another window or another app release it, the next click captures again. While released, moving the mouse turns nothing. `PS3_MOUSE_CAPTURE=0` brings back the uncaptured camera.
 - [ ] Configurable mapping (a config file instead of keys hard-coded).
+  - Update 2026-10-17: implemented, waiting for a windowed test (toolkit patch `infamous2-lle/patches/pending/input-mapping.patch`): `PS3_INPUT_MAP=<file>` (run.sh defaults it to `~/Library/Application Support/infamous2-recomp/input.toml`) rebinds keys, mouse buttons (also buttons 4-8 and the wheel), Shift/Control/Option and controller buttons, and holds the mouse settings; anything left out keeps the old layout, unknown names are logged once. Parser and keyboard-equivalence tests in `libs/input/tests/`.
 - [ ] Physical controller via SDL2 (DualShock/DualSense/Xbox) tested, including rumble.
   - Update: the DualSense works (buttons and sticks) in the windowed game. Rumble, Xbox and DualShock are still missing.
 - [ ] Button prompts: option to swap the PS3 icons for keyboard ones.
@@ -131,6 +132,7 @@ An app for **macOS, Windows and Linux**, with the same interface on all three, t
   - anisotropic filtering, anti-aliasing (FXAA/SMAA/TAA), sharpening;
   - brightness/gamma and HDR (EDR on the Mac).
 - [ ] **Controls:** remap keyboard, mouse and controller (DualSense/DualShock/Xbox) with a button test screen; mouse sensitivity and inversion; rumble; PS3 or keyboard button icons in prompts.
+  - Update 2026-10-17: remapping implemented, waiting for a windowed test: a Controls screen (click a cell, press the key/mouse button/controller button; rows light up while their inputs are held, the button test) writes `input.toml`, with mouse sensitivity, both inversions, dead zone and capture beside it. Rumble and button icons are still missing.
 - [ ] **Audio:** master volume and output device.
 - [ ] **Saves:** list, back up, restore and import/export (including RPCS3 saves), so progress is never lost.
 - [ ] **Texture packs and mods:** load replacement textures (high resolution, AI-remade) and patches, toggle each one.
