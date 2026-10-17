@@ -124,7 +124,21 @@ reference.
 
 ## Rebuilding
 
-From `../infamous2/README.md`, steps 1, 4 (job modules) and 6 (vfs) are
+`tools/rebuild.py` runs every step below in one go, from your RPCS3 install
+(or PKGs) and your `.rap` into a separate folder that mirrors this repository
+(`--out`, default `~/Library/Application Support/infamous2-recomp/install`),
+and only redoes what changed on a rerun. `--dry-run` checks the requirements
+and prints the plan; its output lines are what the launcher (`../launcher/`)
+reads. It also adds the extra SPU entry points the tested build carries
+(`relift_jobmod.py` for `jobmod_ab654d30fd90_efe70` and
+`jobmod_cbb4b5c85d75_e59f8`, `--extra-funcs` for `spu_0000_at_007FA100`).
+
+```sh
+python3 tools/rebuild.py --dry-run --game "$HOME/Library/Application Support/rpcs3/dev_hdd0/game/NPUA80638" \
+    --rap "$HOME/Library/Application Support/rpcs3/dev_hdd0/home/00000001/exdata/<content id>.rap"
+```
+
+By hand, from `../infamous2/README.md`, steps 1, 4 (job modules) and 6 (vfs) are
 shared. With `T=../ps3recomp-fork/tools` and `P=../.venv/bin/python`:
 
 ```sh
@@ -144,9 +158,12 @@ $P $T/ppu_lifter.py ../infamous2/game/EBOOT.elf --functions out/EBOOT.functions.
     --max-chunk-lines 150000 --output recompiled/
 $P $T/build_spu_workloads.py --images spu/images --lifted spu --out spu/spu_workloads.c \
     --register-fn infamous2_spu_register_all --constructor --title infamous2 \
-    --eboot ../infamous2/game/EBOOT.elf --extra-funcs wwsjob_pm_at_008E5B00=0xA2C
+    --eboot ../infamous2/game/EBOOT.elf --extra-funcs wwsjob_pm_at_008E5B00=0xA2C \
+    --extra-funcs spu_0000_at_007FA100=0x9C84,0x9DB8
 $P $T/lift_jobmods.py --jobmods spu/jobmods --out spu \
     --register spu/jobmods_register.c --symbol-prefix infamous2
+$P tools/relift_jobmod.py jobmod_ab654d30fd90_efe70 --extra 0x15280,0x155EC
+$P tools/relift_jobmod.py jobmod_cbb4b5c85d75_e59f8 --extra 0x6C44,0x6C64
 $P tools/lift_datamods.py ../infamous2/game/EBOOT.elf --extra 0x6C44,0x6C64
 $P tools/lift_relocmods.py ../infamous2/game/EBOOT.elf
 PS3_RAP_KEY=<RAP_KEY from RPCS3 Crypto/key_vault.h, 32 hex digits> \
