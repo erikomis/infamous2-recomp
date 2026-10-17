@@ -23,6 +23,7 @@ const WEIGHT: Record<string, number> = {
   toolkit: 3,
   venv: 3,
   game: 2,
+  pup: 1,
   decrypt: 2,
   port: 0.2,
   firmware: 2,
