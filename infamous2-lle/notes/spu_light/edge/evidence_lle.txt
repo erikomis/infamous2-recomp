@@ -1,0 +1,36 @@
+Redo with LLE libsre + lifted kernel (image 100). Supersedes the "emulation gap" part of evidence.txt.
+
+1. PPU side of the kick is coherent.
+   cellSpursReadyCountStore (NID 0xF843818D) -> libsre OPD 0x3013134C -> code 0x3010AC24
+   (infamous2-lle/lle/libsre/libsre_recomp_000.cpp:13083): checks, lwsync, then a PLAIN `stb r5, wid(spurs)`
+   = vm_write8 -> VM_WRITE_COH (runtime/ppu/ppu_loader.cpp:1600): stripe lock, store,
+   spu_coh_notify_write_from_ppu (LR event + drop SPU reservations), unlock. No lwarx/stwcx involved.
+   Non-coherent PPU stores exist (stvx/stvxl -> vm_raw_st16, st*brx -> VM_RAW_ST, dcbz -> memset: no stripe,
+   no notify) but in libsre only libsre_func_3011DB18 uses them (init), so not this path.
+
+2. Lost LR events cannot explain a 158 s sleep.
+   spu_ch_wait (spu_channels.c) re-polls every 10 ms; spu_ch_ready(SPU_RdEventStat) runs spu_resv_lost_poll,
+   which memcmp's the reserved line in memory against ctx->resv_line and raises 0x400 if they differ.
+   "[ch-wait] ... resv[valid=1 ea=0x00A40A80]" after minutes therefore means: memory == the kernels' snapshot.
+   The SPURS line itself says "nothing runnable"; the wakeup path did its job.
+   (A real but self-healing race: GETLLAR does RESV_SET (release store) then spu_lockline_read_valid
+   (acquire fence + relaxed load of seq); ll_take does seq store (relaxed) + release fence, then the store and the
+   notify's load of resv_word. No StoreLoad fence on either side, so on arm64 both can miss each other; the 10 ms
+   poll then delivers the event late. Fix anyway: atomic_thread_fence(seq_cst) after RESV_SET in the GETLLAR loop
+   (spu_channels.c ~808-816) and after the seq increment in ll_take (spu_coherency.c ll_take).)
+
+3. So the question is what the line holds. At the hang dump, for the Edge workload:
+     cw = 0xB03080; spurs = [cw+0x84] (expect 0x00A40A80), wid = [cw+0x88], P = [cw+0x80]
+     line spurs+0x00..0x7F: READY1[wid] (+0x00+wid), IDLE2 (+0x10), CURCONT (+0x20), PENDCONT (+0x30),
+       MINCONT (+0x40), MAXCONT (+0x50), SIGNAL1 (+0x70), SPU_IDLING (+0x73)
+     line spurs+0x80..0xFF: STATUS1[wid] (+0x90, bit per SPU holding the workload), STATE1, priorities in WKL_INFO
+     job list: [P+8], per-SPU progress u16 at P+64+16k+2..+14 (k = 0,1), Edge handle at 0xA93E00+1704 (h2 = seq)
+   Reading the result:
+     a) READY1[wid]==0, progress < seq          -> kick lost / zeroed early by the Edge job manager (SPU side)
+     b) READY1[wid]==0, progress >= seq, CURCONT[wid]!=0 with no SPU running it -> contention leak; 0x54CE30 waits for 0
+     c) READY1[wid]>0, CURCONT>=MAXCONT or READY+IDLE<=CURCONT -> leak blocks scheduling; SPUs idle with work queued
+     d) all of it clean (READY 0, CURCONT 0, progress >= seq) -> kicker side: check 0xA93E00+1696/+1704..1707 and
+        cw[184]/cw[212]/cw[260] vs the handle generation byte (38B534 picks the list by generation)
+   For b/c, compare STATUS1[wid] with CURCONT[wid] and find the code that left the workload without its
+   contention decrement (the kernel's PM-exit path; SPU_ATOM_EA=0x00A40A80 SPU_ATOM_FULL=1 logs every GETLLAR/
+   PUTLLC on the line with image/pc and the RAM/STORE bytes, enough to see who wrote the bad CURCONT/READY).

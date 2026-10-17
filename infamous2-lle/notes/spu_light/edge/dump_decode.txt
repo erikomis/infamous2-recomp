@@ -1,0 +1,38 @@
+Edge stall dump (ed1, stall_00a00000.bin) decoded
+
+Chain wrappers (q = cw+0x80: P, spurs, wid, ?):
+  Edge  cw 0xB03080 "EdgeGeom Jobs": P = 0xB03080 (= cw, inside the dump), spurs 0x00A40A80, wid 1
+  Light cw 0xB02F00 "SpuLight Jobs" (light + SSAO): P = 0xB02F00, spurs 0x00A40A80, wid 2
+  per list k: base [P+0x30+4k], u16 at P+0x40+16k: +0 = end, +2..+14 = 7 per-SPU progress (0xFFFF = not in)
+    Edge  list0: end 0x1F, SPUs 001F FFFF 0012 FFFF FFFF FFFF FFFF  -> min 0x12 < 0x1F  (NOT drained)
+    Edge  list1: end 0x05, SPUs 0005 FFFF ...                        -> drained
+    Light list0: end 0x1F, SPUs 001F FFFF ...  list1: end 0x0A, 000A ...  -> both drained
+  Edge cw[184]=0xB7 cw[212]=0xB8 cw[260]=0xB8; [P+8] = 1
+Edge kicker obj 0xA93E00: state (+1696) = 2, +1700 = FF B6 0015 (unused), handle +1704 = 0D B8 0005
+  frame block [obj+4] = 0xA94380: h2 = h4 = 0x00A1 -> state-2 wait on 0x38B534:
+  gen 0xB8 = cw[212] -> list1 seq 5: min 5 >= 5 ok; gen == cw[260] -> 0x54CE30(list0): min 0x12 < end 0x1F -> wait forever
+SPURS 0x00A40A80 line 0:
+  READY1   00 00 00 00 ...          (Edge wid1 = 0, Light wid2 = 0)
+  IDLE2    07 07 07 00 07 ...
+  CURCONT  00 01 00 00 ...          (Edge wid1 = 1 !, Light wid2 = 0)
+  PENDCONT 0 ; MINCONT 01 01 01 08 ..; MAXCONT 05 05 05 08 ..
+  0x6C wklFlag = FFFFFFFF; 0x70 wklSignal1 = 0000; 0x72 sysSrvMessage = E0; 0x73 spuIdling = 1D (SPU1 not idle);
+  0x76 nSpus = 5; 0x80 wklState1 = 02 (runnable); 0x90 wklStatus1 = 1F
+=> case (b): Edge ready count 0, contention 1 held by an SPU that is not running, list 0 stuck at job 0x12.
+
+Why: SPU thread 0x2001 (SPU1) FAULTED (ed1.log:79786-79863):
+  [spu] img=100 branched into unlifted LS 0x2EB97 (lr=0x060D4); last dispatched 0x032CC 0x02D38 0x02D70 0x032E4
+  0x02BD8 0x02BE0 0x02BF0 0x02C00 (WWS job-manager loop / interrupt window 0x2CA8: bie, 0x2CB0: bid r0);
+  interp on vertex floats -> "[SPU] tid=0x2001 stopped (status=0x4 pc=0x2EB98) FAULT".
+  [ch-wait] heartbeats afterwards list only SPUs 2000/2002/2003/2004.
+  Running job: jobmod_d0d15ec83992 (Edge geom; its bytes match LS 0x4000+, ed1.cwd/recomp_spu_ls.bin).
+  Register file at the fault is the JOB's (r0 = 0x60D4, a mid-function job pc; r4 = r62+r63 vector junk,
+  r1 = 0x3F570) while pc came from job-manager code: the PM's `bi $r4` return of 0x22A0 (tag wait) or the
+  `bid $r0` window took a job register set. Fits the runtime's host-side interrupt GPR snapshot/restore
+  (spu_drain.c spu_irq_regs_save / spu_irq_regs_maybe_restore: restore fires on the first enabled dispatch
+  at pc == srr0) firing at the wrong moment or the wrong frame. ed1 and mrt4 fault identically (same PCs,
+  0x2EB97, lr 0x60D4).
+  Older stalls (nn3, nm4, so1, w33, w42, ab6_u1) are the same failure in another spot: an SPU stops with
+  "unimplemented op" at LS 0x143xx-0x144xx = an EA masked to LS (nn3: r2 = 0x00A94388 -> pc 0x14388; r3 =
+  the Edge block 0xA94380).
+SSAO skip: not the cause (fault predates it); it only changes timing.
