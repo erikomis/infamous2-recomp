@@ -114,6 +114,7 @@ reference.
 | `tools/boot.sh` | Timed headless run |
 | `tools/capture.sh` | Headless run that keeps a PNG of the presented frame every 10 s |
 | `tools/lldb_barrier.py` | Prints the WWS job barrier lanes (attach did not work here; kept for a debug launch) |
+| `tools/decrypt_self.py` | Decrypts a retail SELF (the NPDRM `EBOOT.BIN` with the player's `.rap`, the firmware `.sprx`) to the same ELF bytes `rpcs3 --decrypt` writes, without RPCS3; keys come from the player's key file (`--keys`/`PS3_KEYS`, scetool format), none are in this repository. `--selftest` round-trips a synthetic SELF with made-up keys |
 | `tools/rap2rifkey.py` | Derives an EDAT's RIF key from the player's own `.rap` and writes the `<edat>.rifkey` sidecar (the RAP key itself comes from `PS3_RAP_KEY`; it is not in this repository) |
 | `tools/relift_jobmod.py` | Re-lifts one WWS job module with extra entry addresses |
 | `tools/lift_datamods.py` | Extracts, lifts and registers the five `DA7ABA5E` modules the job manager streams to LS 0x6C00 |
@@ -137,6 +138,16 @@ reads. It also adds the extra SPU entry points the tested build carries
 python3 tools/rebuild.py --dry-run --game "$HOME/Library/Application Support/rpcs3/dev_hdd0/game/NPUA80638" \
     --rap "$HOME/Library/Application Support/rpcs3/dev_hdd0/home/00000001/exdata/<content id>.rap"
 ```
+
+Decryption goes through `rpcs3 --decrypt` by default. With a key file
+(`--keys FILE` or `PS3_KEYS`, scetool format: the NPDRM key set for key
+revision 0x10, the APP key set for 0x1C, `NP_klic_key` and `RAP_KEY`, or
+`PS3_RAP_KEY` for the last) it runs `tools/decrypt_self.py` instead and
+RPCS3 is not needed at all; `--firmware DIR` points at the `.sprx` (a
+`dev_flash`, its `sys/external`, or any folder holding the three). Either way
+the decrypted EBOOT and modules are checked against the hashes of the tested
+build. At run time the game opens nothing under `/dev_flash` (no such open in
+any logged run), so `PS3_DEV_FLASH` does not need RPCS3 either.
 
 By hand, from `../infamous2/README.md`, steps 1, 4 (job modules) and 6 (vfs) are
 shared. With `T=../ps3recomp-fork/tools` and `P=../.venv/bin/python`:
