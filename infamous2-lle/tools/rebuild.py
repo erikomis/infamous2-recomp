@@ -99,6 +99,12 @@ PUP_EXTRACT = os.path.join(HERE, 'pup_extract.py')
 PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
               'ssao_gpu.c', 'ssao_gpu.h', 'run.sh', 'config.toml',
               'window_icon.png')   # the Dock icon run.sh points the game at
+# Data files of the tools, copied with their *.py / *.sh into <out>/infamous2-lle/tools.
+TOOL_DATA = ('log_triage_known.txt',)   # log_triage.py's known-harmless lines
+
+
+def is_tool(name):
+    return name.endswith(('.py', '.sh')) or name in TOOL_DATA
 
 # Extra lifted entry points beyond the README recipe, found at run time and
 # present in the build the port is tested with (an interrupted SPU job that
@@ -798,7 +804,7 @@ class Rebuild:
         k['decrypt'] = sha256_text('decrypt', k['game'], rap, self.decrypt_with, *fw)
         port = [f + h(os.path.join(PORT_SRC, f)) for f in PORT_FILES]
         for f in sorted(os.listdir(HERE)):
-            if f.endswith(('.py', '.sh')):
+            if is_tool(f):
                 port.append(f + h(os.path.join(HERE, f)))
         k['port'] = sha256_text('port', *port)
         elf = h(self.elf)
@@ -1044,7 +1050,7 @@ class Rebuild:
         os.makedirs(os.path.join(self.port, 'tools'), exist_ok=True)
         pairs = [(os.path.join(PORT_SRC, f), os.path.join(self.port, f)) for f in PORT_FILES]
         pairs += [(os.path.join(HERE, f), os.path.join(self.port, 'tools', f))
-                  for f in sorted(os.listdir(HERE)) if f.endswith(('.py', '.sh'))]
+                  for f in sorted(os.listdir(HERE)) if is_tool(f)]
         n = 0
         for s, d in pairs:
             if not os.path.isfile(s):
