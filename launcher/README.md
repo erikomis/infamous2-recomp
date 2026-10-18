@@ -41,7 +41,8 @@ roadmap).
 
 - **Home / Início**: cover and title from the installed copy, version and
   build date, **Play/Jogar** (and Stop), the most recent save (title, progress,
-  date), shortcuts to the saves folder and the game log.
+  date), shortcuts to the Saves screen, the saves folder and the game log.
+  Play first backs up the saves (see Saves).
 - **Install / Instalar**, three steps: the machine's requirements (with the
   installs above), the game folder (licence found automatically; PKGs, the
   `.rap`, the install folder and the DLC key under "More options"), and the
@@ -60,6 +61,13 @@ roadmap).
   Play passes as `PS3_INPUT_MAP` (format: the main README, "Playing"). Below
   it, the mouse options: camera on/off, sensitivity, vertical and horizontal
   inversion, dead zone, cursor capture (`PS3_MOUSE*`).
+- **Saves**: the game's save slots (`BCUS98125*`, `NPUA80638*`) in the port
+  and in RPCS3 side by side (RPCS3 user picker when there are several), each
+  with its icon, title, progress, date, size and whether its STATE matches
+  the other side's. Back up one slot or everything, copy a slot RPCS3 -> port
+  or port -> RPCS3, export the port's slots to a `.zip` or import one, delete
+  a slot, and a list of backups to restore or delete. Every destructive
+  action asks first. Details below ("Saves").
 - **Settings / Configurações**: game language (`PS3_LANG`), light pass and
   SSAO on the GPU, the occlusion-volume skip, a gamma override, the window
   mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the Dock icon
@@ -97,6 +105,46 @@ launcher (Rust, src-tauri/src/lib.rs)
   `PS3_RAP_KEY` for that run and never stored.
 - A GUI app on macOS starts with a minimal `PATH`; the launcher puts
   `/opt/homebrew/bin` and `/usr/local/bin` in front for the rebuild and the game.
+
+## Saves
+
+`src-tauri/src/saves.rs` (and `zipfile.rs`, a small zip reader/writer on the
+`flate2`/`crc32fast` already in the tree). The port's saves are in
+`<gamedata>/dev_hdd0/home/00000001/savedata` (`PS3_GAMEDATA_ROOT` from the
+extra variables, else `…/infamous2-recomp/gamedata`, as `run.sh` sets it);
+RPCS3's in `~/Library/Application Support/rpcs3/dev_hdd0/home/<user>/savedata`
+(a custom `dev_hdd0` in RPCS3's `vfs.yml` is not followed yet).
+
+- **Backups** go to `…/infamous2-recomp/save-backups/<UTC time>-<port|rpcs3>-<reason>/`
+  (`savedata/<slot>/…`, `trophies/…` for a full port backup, `backup.json`
+  with the date, reason, source, RPCS3 user and each slot's title). A backup
+  is written to a hidden folder and renamed when complete.
+- **Automatic backups**: before every Play (the port's slots and trophies;
+  skipped when nothing changed since the last one; the newest N are kept,
+  setting `saveBackupsKeep`, default 10, 0 = off), and before every restore,
+  copy, `.zip` import and delete (those are never pruned). A delete without a
+  successful backup does not happen.
+- **Replacing a slot** builds the new one next to it and swaps it in by
+  renaming; a failed copy leaves the old slot as it was. A restore puts a
+  backup back where it came from (the port, or that RPCS3 user).
+- **RPCS3 -> port**: the game's files byte for byte; RPCS3's binary PARAM.SFO
+  becomes the `KEY=VALUE` text the port's cellSaveData reads (TITLE,
+  SUB_TITLE, DETAIL, ATTRIBUTE, LIST_PARAM) and its `*<file>=1` keys become
+  the port's PARAM.PFD (the files the game wrote as SECUREFILE, here STATE).
+- **Port -> RPCS3**: the game's files byte for byte; when RPCS3 already has
+  the slot its own PARAM.SFO is kept whole (only TITLE/SUB_TITLE/DETAIL follow
+  the copied save) and any PARAM.PFD of its own stays; otherwise a new
+  PARAM.SFO with the 14 keys RPCS3 writes for this game's saves. The port's
+  PARAM.PFD is not copied.
+- **.zip**: `<slot>/<file>` plus `infamous2-saves.json`. An import finds the
+  slot folders anywhere in the archive (a zipped RPCS3 `savedata` works),
+  skips other games, `__MACOSX` and paths that would leave the slot, converts
+  an RPCS3 PARAM.SFO as above, and has size limits (64 MB a file, 256 MB in
+  all, 4096 entries); no ZIP64 or encryption.
+- **The game running**: every saves command refuses while the game the
+  launcher started is running, or an `Infamous2Recomp` process started from a
+  terminal; Play waits for a saves operation to finish. The screen warns when
+  RPCS3 is open before a copy to it.
 
 ## Development
 
