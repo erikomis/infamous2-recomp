@@ -98,7 +98,20 @@ PUP_EXTRACT = os.path.join(HERE, 'pup_extract.py')
 # Port files copied into <out>/infamous2-lle (the build's sources and tools).
 PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
               'ssao_gpu.c', 'ssao_gpu.h', 'edge_watch.c', 'run.sh', 'config.toml',
+              'macos_host.m',      # App Nap off, thread QoS (macOS)
+              'Info.plist.in',     # the macOS app bundle's Info.plist (Game Mode)
               'window_icon.png')   # the Dock icon run.sh points the game at
+
+
+def game_executable(port):
+    """The built game: on macOS the binary inside build/Infamous2Recomp.app
+    (CMakeLists.txt; the bundle is what makes Game Mode turn on), elsewhere --
+    or in a build from before the bundle -- build/Infamous2Recomp."""
+    build = os.path.join(port, 'build')
+    app = os.path.join(build, 'Infamous2Recomp.app', 'Contents', 'MacOS', 'Infamous2Recomp')
+    if sys.platform == 'darwin' and os.path.isfile(app):
+        return app
+    return os.path.join(build, 'Infamous2Recomp' + ('.exe' if os.name == 'nt' else ''))
 
 # Extra lifted entry points beyond the README recipe, found at run time and
 # present in the build the port is tested with (an interrupted SPU job that
@@ -813,7 +826,7 @@ class Rebuild:
         k['finish'] = 'always'
 
     def outputs_present(self, step):
-        exe = os.path.join(self.port, 'build', 'Infamous2Recomp' + ('.exe' if os.name == 'nt' else ''))
+        exe = game_executable(self.port)
         probe = {
             'toolkit': os.path.join(self.toolkit, 'CMakeLists.txt'),
             'venv': self.py,
@@ -1169,7 +1182,7 @@ class Rebuild:
         self.run('compile', ['cmake', '--build', build, '-j', str(self.jobs)], ninja=True)
 
     def step_finish(self):
-        exe = os.path.join(self.port, 'build', 'Infamous2Recomp' + ('.exe' if os.name == 'nt' else ''))
+        exe = game_executable(self.port)
         if not os.path.isfile(exe):
             raise StepError('no executable at %s' % exe)
         sfo = self.sfo

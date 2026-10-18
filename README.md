@@ -272,6 +272,16 @@ when the window has another one.
 | Cmd+Ctrl+F | macOS fullscreen on/off |
 | Esc / Cmd | release the mouse |
 
+**Game Mode.** On macOS the build makes an app bundle,
+`build/Infamous2Recomp.app` (`build/Infamous2Recomp` links to its executable,
+and `run.sh` starts it directly, so the environment and the log work as
+before). Its Info.plist marks it as a game, so macOS 14+ turns on Game Mode
+while the game is fullscreen and in front: first call on the CPU and GPU, half
+the Bluetooth latency for controllers and AirPods. macOS fullscreen turns it on;
+borderless may not. The game also keeps macOS from App-Napping it and runs its
+PPU, SPU and RSX threads at the top QoS class (`PS3_QOS=0` leaves them at the
+system default).
+
 | Variable | What it does |
 | --- | --- |
 | `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | how the game opens: a window (default), macOS fullscreen (a Space of its own) or borderless fullscreen (covers the screen in place, menu bar and Dock hidden, instant app switching) |
