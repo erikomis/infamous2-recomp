@@ -59,6 +59,18 @@ pub struct Settings {
     /// PS3_WINDOW_ICON=game: the player's own ICON0.PNG in the Dock instead
     /// of the placeholder.
     pub game_icon: bool,
+    /// PS3_DISPLAY: the screen's name (or its 1-based number when two share
+    /// a name); empty = the main screen.
+    pub display: String,
+    /// PS3_VSYNC=0 when off.
+    pub vsync: bool,
+    /// PS3_AUDIO_VOLUME: master volume, 0-100.
+    pub audio_volume: u32,
+    /// PS3_AUDIO_DEVICE: output device name; empty = the system default.
+    pub audio_device: String,
+    /// PS3_RUMBLE=0 when off; PS3_RUMBLE_STRENGTH in percent (0-200).
+    pub rumble: bool,
+    pub rumble_strength: u32,
     /// Extra KEY=VALUE lines (diagnostics), one per line; '#' starts a comment.
     pub extra_env: String,
     /// Remembered inputs of the install screen.
@@ -86,6 +98,12 @@ impl Default for Settings {
             window_mode: "windowed".into(),
             window_size: String::new(),
             game_icon: false,
+            display: String::new(),
+            vsync: true,
+            audio_volume: 100,
+            audio_device: String::new(),
+            rumble: true,
+            rumble_strength: 100,
             extra_env: String::new(),
             game_paths: Vec::new(),
             rap_path: String::new(),
@@ -572,6 +590,23 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     if s.game_icon {
         set("PS3_WINDOW_ICON", "game".into());
     }
+    if !s.display.trim().is_empty() {
+        set("PS3_DISPLAY", s.display.trim().to_string());
+    }
+    if !s.vsync {
+        set("PS3_VSYNC", "0".into());
+    }
+    if s.audio_volume < 100 {
+        set("PS3_AUDIO_VOLUME", s.audio_volume.to_string());
+    }
+    if !s.audio_device.trim().is_empty() {
+        set("PS3_AUDIO_DEVICE", s.audio_device.trim().to_string());
+    }
+    if !s.rumble {
+        set("PS3_RUMBLE", "0".into());
+    } else if s.rumble_strength != 100 {
+        set("PS3_RUMBLE_STRENGTH", s.rumble_strength.min(200).to_string());
+    }
     env.extend(parse_env_lines(&s.extra_env));
     env
 }
@@ -591,9 +626,83 @@ fn shell_quote(v: &str) -> String {
     }
 }
 
+/// The screens and audio outputs the Settings screen offers.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Outputs {
+    /// Screen names in the system's order (NSScreen.screens: the first has
+    /// the menu bar), as the game's PS3_DISPLAY matches them.
+    screens: Vec<String>,
+    /// Output device names (CoreAudio's, which SDL uses for PS3_AUDIO_DEVICE).
+    audio_outputs: Vec<String>,
+}
+
+/// The output devices in `system_profiler SPAudioDataType -json`: the items
+/// that have output channels.
+fn parse_audio_outputs(json: &str) -> Vec<String> {
+    let v: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for group in v["SPAudioDataType"].as_array().into_iter().flatten() {
+        for item in group["_items"].as_array().into_iter().flatten() {
+            if item.get("coreaudio_device_output").is_some() {
+                if let Some(n) = item["_name"].as_str() {
+                    if !out.iter().any(|o| o == n) {
+                        out.push(n.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The names in the JSON array the screen probe prints.
+fn parse_screens(json: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(json.trim()).unwrap_or_default()
+}
+
+fn command_stdout(cmd: &mut Command) -> Option<String> {
+    let out = cmd.stderr(Stdio::null()).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn list_outputs_host() -> Outputs {
+    // AppKit's own names, the ones the Metal window matches (JXA needs no
+    // extra dependency in the app).
+    let screens = command_stdout(Command::new("/usr/bin/osascript").args([
+        "-l",
+        "JavaScript",
+        "-e",
+        "ObjC.import('AppKit'); JSON.stringify($.NSScreen.screens.js.map(s => s.localizedName.js))",
+    ]))
+    .map(|s| parse_screens(&s))
+    .unwrap_or_default();
+    let audio_outputs = command_stdout(Command::new("/usr/sbin/system_profiler").args(["SPAudioDataType", "-json"]))
+        .map(|s| parse_audio_outputs(&s))
+        .unwrap_or_default();
+    Outputs { screens, audio_outputs }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn list_outputs_host() -> Outputs {
+    Outputs::default()
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_outputs() -> Outputs {
+    tauri::async_runtime::spawn_blocking(list_outputs_host).await.unwrap_or_default()
+}
 
 #[tauri::command]
 fn get_settings() -> Settings {
@@ -1263,7 +1372,8 @@ pub fn run() {
             play,
             stop_game,
             reveal,
-            log_paths
+            log_paths,
+            list_outputs
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");
@@ -1339,6 +1449,63 @@ mod tests {
         assert!(!env.contains_key("PS3_WINDOW_SIZE"));
         assert!(!env.contains_key("PS3_INPUT_MAP")); // no controls file yet
         assert!(!env.contains_key("PS3_MOUSE_SENS"));
+    }
+
+    #[test]
+    fn env_display_audio_rumble() {
+        let inst = InstallInfo {
+            layout: "install".into(),
+            title: String::new(),
+            app_ver: String::new(),
+            port_dir: "/p".into(),
+            run_sh: "/p/run.sh".into(),
+            executable: "/p/build/x".into(),
+            vfs: "/v".into(),
+            dev_flash: String::new(),
+            icon: String::new(),
+            background: String::new(),
+            built_at: String::new(),
+            port_commit: String::new(),
+            toolkit_commit: String::new(),
+        };
+        let none = InputEnv::default();
+        let mut s = Settings::default();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        for k in ["PS3_DISPLAY", "PS3_VSYNC", "PS3_AUDIO_VOLUME", "PS3_AUDIO_DEVICE", "PS3_RUMBLE", "PS3_RUMBLE_STRENGTH"] {
+            assert!(!env.contains_key(k), "{k} is a default and must stay out");
+        }
+        s.display = "DELL U2720Q".into();
+        s.vsync = false;
+        s.audio_volume = 40;
+        s.audio_device = " Erik's AirPods ".into();
+        s.rumble_strength = 150;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_DISPLAY").map(String::as_str), Some("DELL U2720Q"));
+        assert_eq!(env.get("PS3_VSYNC").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("40"));
+        assert_eq!(env.get("PS3_AUDIO_DEVICE").map(String::as_str), Some("Erik's AirPods"));
+        assert_eq!(env.get("PS3_RUMBLE_STRENGTH").map(String::as_str), Some("150"));
+        assert!(!env.contains_key("PS3_RUMBLE"));
+        s.rumble = false;
+        s.audio_volume = 0;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_RUMBLE").map(String::as_str), Some("0"));
+        assert!(!env.contains_key("PS3_RUMBLE_STRENGTH")); // off: the strength is moot
+        assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("0"));
+    }
+
+    #[test]
+    fn audio_outputs_from_system_profiler() {
+        let json = r#"{"SPAudioDataType":[{"_items":[
+            {"_name":"Microfone (MacBook Pro)","coreaudio_device_input":1},
+            {"_name":"Alto-falantes (MacBook Pro)","coreaudio_device_output":2,
+             "coreaudio_default_audio_output_device":"spaudio_yes"},
+            {"_name":"Erik's AirPods Pro","coreaudio_device_input":1,"coreaudio_device_output":2}
+        ],"_name":"coreaudio_device"}]}"#;
+        assert_eq!(parse_audio_outputs(json), vec!["Alto-falantes (MacBook Pro)", "Erik's AirPods Pro"]);
+        assert!(parse_audio_outputs("not json").is_empty());
+        assert_eq!(parse_screens("[\"Built-in Retina Display\",\"DELL U2720Q\"]\n"), vec!["Built-in Retina Display", "DELL U2720Q"]);
+        assert!(parse_screens("").is_empty());
     }
 
     #[test]
