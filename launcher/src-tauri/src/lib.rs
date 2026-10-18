@@ -15,7 +15,7 @@ use saves::{read_sfo, BackupMeta, Side, Slot};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -809,8 +809,15 @@ async fn get_status(app: AppHandle, state: State<'_, AppState>) -> Result<Status
         Ok(i) => (Some(i), None),
         Err(e) => (None, Some(e)),
     };
-    let icon = install.as_ref().and_then(|i| data_url(&i.icon, "image/png"));
-    let background = install.as_ref().and_then(|i| data_url(&i.background, "image/png"));
+    // The art is the player's own (PS3_GAME/ICON0.PNG, PIC1.PNG), read here
+    // at runtime: from the install, else from the game folder chosen on the
+    // Install screen (before the first rebuild). Nothing ships with the app.
+    let (icon_path, background_path) = match &install {
+        Some(i) => (i.icon.clone(), i.background.clone()),
+        None => copy_art(&s.game_paths),
+    };
+    let icon = data_url(&icon_path, "image/png");
+    let background = data_url(&background_path, "image/png");
     Ok(Status {
         install_dir: s.install_dir.clone(),
         install,
@@ -833,6 +840,21 @@ async fn get_status(app: AppHandle, state: State<'_, AppState>) -> Result<Status
 // ---------------------------------------------------------------------------
 
 const TITLE_ID: &str = "NPUA80638";
+
+/// ICON0.PNG and PIC1.PNG of the first chosen game folder that is one (RPCS3's
+/// NPUA80638 keeps them at its top; an extracted disc under PS3_GAME/).
+fn copy_art(paths: &[String]) -> (String, String) {
+    for p in paths.iter().map(|p| PathBuf::from(p.trim())).filter(|p| p.is_dir()) {
+        let Some(g) = resolve_game_dir(&p) else { continue };
+        for d in [g.clone(), g.join("PS3_GAME")] {
+            if d.join("ICON0.PNG").is_file() {
+                let s = |n: &str| d.join(n).to_string_lossy().into_owned();
+                return (s("ICON0.PNG"), s("PIC1.PNG"));
+            }
+        }
+    }
+    (String::new(), String::new())
+}
 
 /// The NPUA80638 folder from whatever the player pointed at (the folder
 /// itself, or RPCS3's data folder above it), as rebuild.py resolves it.
@@ -1564,10 +1586,64 @@ fn reveal(path: String) -> Result<(), String> {
     Command::new(program).arg(&target).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// The game's log: the one the last game this launcher started writes to (a
+/// report folder's in diagnostic mode), else the usual logs/game.log.
+fn game_log_path(state: &State<'_, AppState>) -> PathBuf {
+    state.last_log.lock().unwrap().clone().unwrap_or_else(|| data_root().join("logs/game.log"))
+}
+
+/// The end of a log for the viewer: at most `max` bytes, starting at a line
+/// boundary when it had to cut, invalid UTF-8 replaced.
+fn tail_text(data: &[u8], cut: bool) -> String {
+    let start = if cut { data.iter().position(|&b| b == b'\n').map_or(0, |i| i + 1) } else { 0 };
+    String::from_utf8_lossy(&data[start..]).into_owned()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameLog {
+    path: String,
+    exists: bool,
+    size: u64,
+    /// Seconds since the epoch.
+    modified: u64,
+    text: String,
+    /// Only the end of the file is in `text`.
+    truncated: bool,
+}
+
+/// Advanced > Game log: the tail of the game's log.
+#[tauri::command]
+fn read_game_log(state: State<'_, AppState>, max_bytes: Option<u64>) -> Result<GameLog, String> {
+    let path = game_log_path(&state);
+    let max = max_bytes.unwrap_or(512 * 1024).clamp(4 * 1024, 8 * 1024 * 1024);
+    let mut out = GameLog {
+        path: path.to_string_lossy().into_owned(),
+        exists: false,
+        size: 0,
+        modified: 0,
+        text: String::new(),
+        truncated: false,
+    };
+    let Ok(mut f) = fs::File::open(&path) else { return Ok(out) };
+    let meta = f.metadata().map_err(|e| e.to_string())?;
+    out.exists = true;
+    out.size = meta.len();
+    out.modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    out.truncated = meta.len() > max;
+    if out.truncated {
+        f.seek(SeekFrom::Start(meta.len() - max)).map_err(|e| e.to_string())?;
+    }
+    let mut buf = Vec::with_capacity(max.min(meta.len()) as usize);
+    f.take(max).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    out.text = tail_text(&buf, out.truncated);
+    Ok(out)
+}
+
 #[tauri::command]
 fn log_paths(state: State<'_, AppState>) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
-    let log = state.last_log.lock().unwrap().clone().unwrap_or_else(|| data_root().join("logs/game.log"));
+    let log = game_log_path(&state);
     m.insert("game".into(), log.to_string_lossy().into_owned());
     m.insert("saves".into(), gamedata_root(&load_settings_file().extra_env).to_string_lossy().into_owned());
     m
@@ -1716,6 +1792,7 @@ pub fn run() {
             stop_game,
             reveal,
             log_paths,
+            read_game_log,
             saves_overview,
             saves_backup,
             saves_restore,
@@ -2013,6 +2090,28 @@ mod tests {
             assert!(BREW_ALLOWED.contains(&brew_formula(c).unwrap()));
         }
         assert!(brew_formula("rpcs3").is_none());
+    }
+
+    #[test]
+    fn log_tail_starts_at_a_line() {
+        assert_eq!(tail_text(b"whole\nfile\n", false), "whole\nfile\n");
+        assert_eq!(tail_text(b"rtial line\nnext\nlast", true), "next\nlast");
+        assert_eq!(tail_text(b"no newline at all", true), "no newline at all");
+        assert_eq!(tail_text(b"x\n\xff\xfeok\n", true), "\u{fffd}\u{fffd}ok\n");
+    }
+
+    #[test]
+    fn art_from_the_chosen_game_folder() {
+        let root = std::env::temp_dir().join(format!("i2l-art-{}", std::process::id()));
+        let game = root.join("dev_hdd0/game/NPUA80638");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("PARAM.SFO"), "TITLE=inFAMOUS 2\n").unwrap();
+        assert_eq!(copy_art(&[root.to_string_lossy().into_owned()]), (String::new(), String::new()));
+        fs::write(game.join("ICON0.PNG"), b"png").unwrap();
+        let (icon, pic) = copy_art(&["/nonexistent".into(), root.to_string_lossy().into_owned()]);
+        assert!(icon.ends_with("NPUA80638/ICON0.PNG"), "{icon}");
+        assert!(pic.ends_with("NPUA80638/PIC1.PNG"), "{pic}");
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

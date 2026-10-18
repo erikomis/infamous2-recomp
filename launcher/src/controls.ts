@@ -5,6 +5,7 @@
 // button test.
 import { invoke } from "@tauri-apps/api/core";
 import { Key, t } from "./i18n";
+import { flashSaved } from "./ui";
 
 export type Device = "keyboard" | "mouseButtons" | "controller";
 export type Bindings = Record<Device, Record<string, string[]>>;
@@ -161,9 +162,7 @@ function merged(file: Bindings): Bindings {
 async function save() {
   try {
     mapPath = await invoke<string>("save_input_map", { bindings });
-    const s = $("controls-saved");
-    s.classList.remove("hidden");
-    window.setTimeout(() => s.classList.add("hidden"), 1200);
+    flashSaved();
   } catch (e) {
     note(String(e));
   }
