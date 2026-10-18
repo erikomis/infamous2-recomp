@@ -23,6 +23,7 @@ result. CI (.github/workflows/launcher.yml) and local packaging share this.
 from __future__ import annotations
 
 import argparse
+import re
 import importlib.util
 import json
 import os
@@ -75,6 +76,15 @@ def main(argv=None):
 
     rb = load_rebuild()
     want = wanted_files(rb)
+    # Every plain source the game's add_executable() names must ship, or the
+    # player's rebuild stops at cmake (edge_watch.c once went missing that way).
+    cm = open(os.path.join(REPO, 'infamous2-lle', 'CMakeLists.txt')).read()
+    m = re.search(r'add_executable\(\$\{PROJECT_NAME\}(.*?)\)', cm, re.S)
+    srcs = [w for w in (m.group(1).split() if m else []) if not w.startswith('$')]
+    unshipped = [s for s in srcs if s not in rb.PORT_FILES]
+    if not m or unshipped:
+        sys.exit('stage_port: CMakeLists.txt add_executable() sources missing from rebuild.PORT_FILES: %s'
+                 % (', '.join(unshipped) or '(add_executable not found)'))
     have = set(tracked(want))
     missing = [p for p in want if p not in have]
     if missing:
