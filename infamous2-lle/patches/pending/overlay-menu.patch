@@ -336,7 +336,7 @@ diff -ruN a/libs/video/ps3_overlay.h b/libs/video/ps3_overlay.h
 +#endif
 diff -ruN a/libs/video/ps3_overlay.mm b/libs/video/ps3_overlay.mm
 --- a/libs/video/ps3_overlay.mm	1969-12-31 21:00:00
-+++ b/libs/video/ps3_overlay.mm	2026-10-18 12:35:11
++++ b/libs/video/ps3_overlay.mm	2026-10-18 13:09:21
 @@ -0,0 +1,950 @@
 +/*
 + * ps3_overlay -- the in-game menu and performance HUD (see ps3_overlay.h).
@@ -919,7 +919,7 @@ diff -ruN a/libs/video/ps3_overlay.mm b/libs/video/ps3_overlay.mm
 +
 +static void tab_image(void)
 +{
-+    section(L("Picture", "Imagem"));
++    section(L("Picture", "Ajustes da imagem"));
 +    if (ImGui::Checkbox(L("Override the game's brightness", "Substituir o brilho do jogo"), &s_ui.gamma_on)) {
 +        cellAvconfExt_set_display_gamma_override(s_ui.gamma_on ? s_ui.gamma : 0.0f);
 +        if (s_ui.gamma_on) set_value(V_GAMMA, "%.2f", s_ui.gamma); else set_value(V_GAMMA, "0");
@@ -1099,7 +1099,7 @@ diff -ruN a/libs/video/ps3_overlay.mm b/libs/video/ps3_overlay.mm
 +static void draw_menu(void)
 +{
 +    const ImGuiIO& io = ImGui::GetIO();
-+    const ImVec2 size(680.0f, 560.0f);
++    const ImVec2 size(700.0f, 660.0f);
 +    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 +    ImGui::SetNextWindowSize(ImVec2(size.x < io.DisplaySize.x - 20 ? size.x : io.DisplaySize.x - 20,
 +                                    size.y < io.DisplaySize.y - 20 ? size.y : io.DisplaySize.y - 20), ImGuiCond_Always);
