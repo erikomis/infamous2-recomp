@@ -282,6 +282,16 @@ faixas pretas quando a janela tem outro formato.
 | Cmd+Ctrl+F | liga/desliga a tela cheia do macOS |
 | Esc / Cmd | solta o mouse |
 
+**Modo Jogo.** No macOS a compilação gera um app,
+`build/Infamous2Recomp.app` (`build/Infamous2Recomp` é um link para o
+executável dele, e o `run.sh` o abre direto, então as variáveis e o log
+funcionam como antes). O Info.plist dele diz que é um jogo, e assim o macOS 14+
+liga o Modo Jogo enquanto o jogo está em tela cheia e na frente: prioridade na
+CPU e na GPU, metade da latência Bluetooth para controles e AirPods. A tela
+cheia do macOS liga o Modo Jogo; a sem bordas pode não ligar. O jogo também
+impede o macOS de colocá-lo em App Nap e roda as threads de PPU, SPU e RSX na
+classe de QoS mais alta (`PS3_QOS=0` as deixa no padrão do sistema).
+
 | Variável | O que faz |
 | --- | --- |
 | `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | como o jogo abre: em janela (padrão), na tela cheia do macOS (um Space só dele) ou em tela cheia sem bordas (cobre a tela no lugar, sem barra de menus nem Dock, troca de app na hora) |

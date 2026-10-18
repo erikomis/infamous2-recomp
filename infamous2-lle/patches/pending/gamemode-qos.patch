@@ -1,0 +1,155 @@
+Toolkit half of feat/game-mode (2026-10-18), not yet folded into
+../ps3recomp-fork-770660a-with-upstream-prs.patch.
+
+PS3_QOS: guest PPU threads, SPU group threads (lifted and fallback), SPU
+async jobs and interpreted SPU tasks ask for QOS_CLASS_USER_INTERACTIVE at
+their own entry (runtime/platform/host_qos.h). A pthread on macOS starts at
+QOS_CLASS_DEFAULT, not at its creator's class, so nothing else gets them
+there. PPU threads of guest priority >= 1500 (sound-bank loading, motion
+controller, install copy) get USER_INITIATED. PS3_QOS=0 turns it off.
+No-op off Apple.
+
+Apply to a ps3recomp-fork that already has the main patch:
+    patch -p1 -d ps3recomp-fork < infamous2-lle/patches/pending/gamemode-qos.patch
+
+--- a/runtime/platform/host_qos.h
++++ b/runtime/platform/host_qos.h
+@@ -0,0 +1,57 @@
++/*
++ * Host thread QoS for the threads that set the frame rate.
++ *
++ * On Apple silicon the scheduler picks P-cores vs E-cores, and how readily it
++ * preempts, from a thread's QoS class -- and a pthread does NOT inherit its
++ * creator's class: it starts at QOS_CLASS_DEFAULT whatever the parent runs at
++ * (measured on macOS 27: main 0x21 USER_INTERACTIVE, every child 0x15
++ * DEFAULT, also after the parent raised itself). So each guest PPU thread and
++ * each SPU host thread asks for its class itself, at its own entry, through
++ * ps3_host_qos_self().
++ *
++ *   interactive != 0  QOS_CLASS_USER_INTERACTIVE  frame-critical work
++ *   interactive == 0  QOS_CLASS_USER_INITIATED    the title's background work
++ *
++ * PS3_QOS=0 turns it off: every thread keeps the class it started with, as
++ * before this existed. PS3_HOT_QOS=1 (SetThreadPriority ABOVE_NORMAL on the
++ * SPU threads and the frame clock) is separate and still works on top.
++ *
++ * A no-op off Apple: Windows has thread priorities (SetThreadPriority, used
++ * where it matters) and Linux has nothing QoS-like to ask for.
++ */
++#ifndef PS3RECOMP_HOST_QOS_H
++#define PS3RECOMP_HOST_QOS_H
++
++#if defined(__APPLE__)
++#include <pthread.h>
++#include <pthread/qos.h>
++#include <stdlib.h>
++
++static inline int ps3_host_qos_enabled(void)
++{
++    static int on = -1;          /* per TU; every copy reads the same variable */
++    if (on < 0) {
++        const char* e = getenv("PS3_QOS");
++        on = !(e && e[0] == '0');
++    }
++    return on;
++}
++
++static inline void ps3_host_qos_self(int interactive)
++{
++    if (ps3_host_qos_enabled())
++        pthread_set_qos_class_self_np(interactive ? QOS_CLASS_USER_INTERACTIVE
++                                                  : QOS_CLASS_USER_INITIATED, 0);
++}
++#else
++static inline int  ps3_host_qos_enabled(void) { return 0; }
++static inline void ps3_host_qos_self(int interactive) { (void)interactive; }
++#endif
++
++/* Guest PPU priorities run 0 (highest) .. 3071. inFAMOUS 2's frame, SPURS
++ * handler, streaming (fios), audio-event and kicker threads sit at 99..1001;
++ * what is above that (sound-bank loading 1600, motion controller 2001, an
++ * install copy 3001) can wait. */
++#define PS3_HOST_QOS_PPU_INTERACTIVE_BELOW 1500
++
++#endif /* PS3RECOMP_HOST_QOS_H */
+--- a/runtime/syscalls/sys_ppu_thread.c
++++ b/runtime/syscalls/sys_ppu_thread.c
+@@ -26,6 +26,7 @@
+ #include <stddef.h>
+ #include "sys_ppu_thread.h"
+ #include "../platform/win32_compat.h"   /* GetCurrentThreadId on POSIX */
++#include "../platform/host_qos.h"       /* PS3_QOS: guest threads at USER_INTERACTIVE */
+ #include "ps3emu/ps3_ftrace.h"           /* PS3_FTRACE: thread names for the report */
+ #include <string.h>
+ #include <stdio.h>
+@@ -131,6 +132,12 @@
+ {
+     ppu_thread_info* info = (ppu_thread_info*)param;
+ 
++    /* PS3_QOS (host_qos.h): a new pthread starts at QOS_CLASS_DEFAULT on
++     * macOS, where the game's own frame, SPURS and streaming threads can land
++     * on the efficiency cores. Its low-priority background threads get
++     * USER_INITIATED. */
++    ps3_host_qos_self(info->priority < PS3_HOST_QOS_PPU_INTERACTIVE_BELOW);
++
+ #ifdef _WIN32
+     /* Reserve stack for the STACK_OVERFLOW handler, same as main() does for the
+      * main thread. Deep recompiled call chains DO overflow even a 256 MB stack
+--- a/runtime/syscalls/lv2_register.c
++++ b/runtime/syscalls/lv2_register.c
+@@ -50,6 +50,7 @@
+ #include <string.h>
+ 
+ #include "../platform/win32_compat.h"   /* QueryPerformanceCounter shim for the SPU_SPEED timing */
++#include "../platform/host_qos.h"       /* PS3_QOS: SPU threads at USER_INTERACTIVE */
+ 
+ /* ---------------------------------------------------------------------------
+  * TTY syscalls (used by PS3 CRT for debug output)
+@@ -1052,6 +1053,7 @@
+     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }  /* let SO reach the reporter */
+ #endif
+     spu_thread_t* t = (spu_thread_t*)arg;
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h): the SPUs set the frame rate */
+     /* PS3_HOT_QOS=1: on an SPU-bound title these threads are the frame-rate
+      * ceiling, and at the default QoS macOS is free to run them on the
+      * efficiency cores. Above-normal maps to QOS_CLASS_USER_INTERACTIVE on
+@@ -1091,6 +1093,7 @@
+     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }  /* let SO reach the reporter */
+ #endif
+     spu_thread_t* t = (spu_thread_t*)arg;
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h) */
+     int32_t rc = 0;
+     if (t->fb_handler) {
+         rc = t->fb_handler(t->tid, t->args_ea, t->args_size, t->fb_user);
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -10,6 +10,7 @@
+ #include "spu_workload.h"
+ #include "spu_lifted_job.h"   /* spu_run_lifted_job */
+ #include "../ps3_log.h"      /* ps3_log_verbose */
++#include "../platform/host_qos.h"   /* PS3_QOS: SPU job threads at USER_INTERACTIVE */
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -778,7 +779,12 @@
+     return 0;
+ }
+ #else
+-static void* spu_async_thread(void* p) { spu_async_run((spu_async_job*)p); return NULL; }
++static void* spu_async_thread(void* p)
++{
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h) */
++    spu_async_run((spu_async_job*)p);
++    return NULL;
++}
+ #endif
+ 
+ int spu_workload_dispatch_job(const uint8_t* image, uint32_t image_size,
+@@ -1347,6 +1353,7 @@
+ #endif
+ {
+     spu_task_interp_job* j = (spu_task_interp_job*)p;
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h) */
+     spu_task_interp_run(j);
+     free(j);
+     return 0;
