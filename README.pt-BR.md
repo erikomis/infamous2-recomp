@@ -373,6 +373,23 @@ para a frente a partir dos 640 s ("Head towards the disturbance") e L1
 segurado com toques de R1 (`0x0800`) no portão do píer ("Hold L1 to aim").
 `tools/play_prologue.sh [nome] [segundos]` faz tudo isso num comando só.
 
+Trocar opções com o jogo rodando: `PS3_TOGGLE_FILE=<arquivo>` indica um
+arquivo de texto que o jogo relê a cada 250 ms quando ele muda, um
+`NOME=valor` por linha (`#` começa um comentário), sendo NOME a variável de
+ambiente. Uma linha sobrepõe a variável, uma linha apagada volta a ela, e cada
+mudança aparece no log como `[toggle] NOME antigo -> novo`. Ao vivo:
+`PS3RECOMP_ENG_VCACHE`, `PS3RECOMP_ENG_TEXHASH_FULL`, `PS3RECOMP_ENG_SKIP_FP`
+(a lista inteira), `PS3_SPU_FASTJOB`, `PS3_SPU_STUB_MICRO`,
+`PS3_SPU_STACK_HINT`, `PS3_SPU_DRAIN_INLINE` (a checagem de lançamento inline
+do dreno), `PS3_DISPLAY_GAMMA`, `PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO` e
+`PS3RECOMP_METAL_FPS`; o resto (entre elas as passadas de luz/SSAO na GPU)
+continua lido uma vez na partida. Sem a variável nada muda.
+`tools/ab_live.sh <nome> <OPÇÃO> [B] [A]` usa isso para um A/B de fps dentro
+de uma só execução sem janela: alterna a opção a cada 20 s a partir dos 200 s
+da receita de New Marais, e `tools/ftrace_report.py --phases` mostra os tempos
+de frame de cada valor; assim os dois lados veem a mesma cena no mesmo
+momento, em vez de duas execuções que se afastam uma da outra.
+
 ## Correções feitas aqui
 
 No toolkit (em `infamous2-lle/patches/`, aplicadas pelo `setup_toolkit.sh`):
