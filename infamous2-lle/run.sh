@@ -51,6 +51,18 @@ if [ -z "$HEADLESS" ] && [ -z "${PS3_INPUT_MAP+set}" ]; then
         [ -f "$f" ] && { export PS3_INPUT_MAP="$f"; break; }
     done
 fi
+# The in-game menu (F1 / Cmd+, / L3+R3; the toolkit's libs/video/ps3_overlay.h)
+# saves what it changes to overlay.ini in the same folder; a variable set here
+# or by the launcher wins over the file's line. Windowed runs only (a headless
+# run never reads it); PS3_OVERLAY_INI= (empty) keeps the menu's changes to
+# the session, PS3_OVERLAY=0 turns the menu off.
+if [ -z "$HEADLESS" ] && [ -z "${PS3_OVERLAY_INI+set}" ]; then
+    case $(uname) in
+        Darwin) cfg="$HOME/Library/Application Support/infamous2-recomp" ;;
+        *)      cfg="${XDG_DATA_HOME:-$HOME/.local/share}/infamous2-recomp" ;;
+    esac
+    export PS3_OVERLAY_INI="$cfg/overlay.ini"
+fi
 # The RSX must block on its semaphore ACQUIREs: each frame the FIFO acquires
 # the label the SPU light task writes when it has turned the normals/depth
 # copies in XDR into the light buffers, and only then composites. With the
