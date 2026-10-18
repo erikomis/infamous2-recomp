@@ -16,8 +16,9 @@ bytes; a hit on any of these fails the check:
     (recompiled/, lle/, lle_spu/, jobmods/)
   - by content: SCE (SELF/SPRX/PUP), PKG, PSF, PSAR, NPD headers and
     big-endian PowerPC or SPU ELF files
-  - inside the bundled port/ folder: any file over 4 MB (the largest real one,
-    the toolkit patch, is ~0.6 MB)
+  - inside the bundled port/ folder: any file over 4 MB, except a text
+    patch (*.patch starting with "diff --git"), allowed up to 16 MB: the
+    toolkit patch carries the vendored Dear ImGui and is ~4 MB
 
 It also checks that the port sources the launcher needs are there
 (port/infamous2-lle/tools/rebuild.py), unless --no-expect-port.
@@ -40,6 +41,7 @@ BAD_DIRS = ('dev_hdd0', 'dev_hdd1', 'dev_flash', 'ps3_game', 'usrdir', 'recompil
 MAGIC = ((b'SCE\0', 'SCE header (SELF/SPRX)'), (b'SCEUF', 'PUP firmware'), (b'\x7fPKG', 'PS3 PKG'),
          (b'\0PSF', 'PARAM.SFO'), (b'PSAR', 'psarc archive'), (b'NPD\0', 'NPD (EDAT/SDAT)'))
 PORT_MAX_FILE = 4 * 1024 * 1024
+PORT_MAX_PATCH = 16 * 1024 * 1024
 EXPECT = ('port', 'infamous2-lle', 'tools', 'rebuild.py')
 
 
@@ -80,7 +82,8 @@ def scan(root, label):
                     problems.append('%s: %s (%s)' % (label, rel, what))
             if ps3_elf(head):
                 problems.append('%s: %s (PowerPC/SPU ELF)' % (label, rel))
-            if in_port and size > PORT_MAX_FILE:
+            is_patch = f.endswith('.patch') and head.startswith(b'diff --git')
+            if in_port and size > (PORT_MAX_PATCH if is_patch else PORT_MAX_FILE):
                 problems.append('%s: %s is %d MB, too big for a port source' % (label, rel, size >> 20))
             if tuple(parts[-3:]) + (f,) == EXPECT:
                 found_port = True
