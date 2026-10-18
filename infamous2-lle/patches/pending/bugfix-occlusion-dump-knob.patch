@@ -1,0 +1,246 @@
+diff -ru a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+--- a/libs/video/rsx_draw_engine.c	2026-10-18 15:03:13
++++ b/libs/video/rsx_draw_engine.c	2026-10-18 15:03:13
+@@ -1,3 +1,4 @@
++#include <sys/stat.h>   /* mkdir: PS3RECOMP_ENG_OCCDUMP_TRIGGER */
+ #include "../../include/ps3emu/log_first.h"   /* PS3_LOG_FIRST */
+ #if defined(__APPLE__)
+ #include <mach/mach.h>
+@@ -29,15 +30,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include "../../include/ps3emu/ps3_toggles.h"   /* PS3_TOGGLE_FILE: live knobs */
+ 
+-/* Knobs PS3_TOGGLE_FILE can change while the game runs (their watchers only
+- * store; the RSX thread reads). */
+-static int s_texhash_full = -1;   /* PS3RECOMP_ENG_TEXHASH_FULL */
+-static void eng_texhash_full_set(int id, int on) { (void)id; __atomic_store_n(&s_texhash_full, on != 0, __ATOMIC_RELAXED); }
+-static int s_skip_fp_dirty;       /* PS3RECOMP_ENG_SKIP_FP changed: re-read the list */
+-static void eng_skip_fp_set(int id, int v) { (void)id; (void)v; __atomic_store_n(&s_skip_fp_dirty, 1, __ATOMIC_RELAXED); }
+-
+ /* Guest memory and the RSX offset resolvers, declared the way every backend
+  * that reads guest data declares them (rsx_vertex_fetch.h). */
+ extern u8* vm_base;
+@@ -131,7 +124,6 @@
+     u64 content_hash;
+     u64 sparse_hash;            /* eng_texture_sparse_hash, the per-frame check */
+     u32 last_hash_frame;
+-    u32 last_full_frame;        /* the last full content hash (eng_texture_get) */
+     u64 last_use_serial;
+     u32 levels, span;           /* eng_texture_span for these levels */
+     u32 depth;                  /* slices of a 3D texture, else 1 */
+@@ -877,17 +869,9 @@
+  * full hash, which each texture still gets every eighth frame. */
+ static u64 eng_texture_sparse_hash(u32 location, u32 offset, u32 span, int* readable)
+ {
+-    const u8* src = span ? eng_guest_ptr(NULL, location, offset, span) : NULL;
++    const u8* src = span >= 64 ? eng_guest_ptr(NULL, location, offset, span) : NULL;
+     if (!src) { *readable = 0; return 0; }
+     u64 h = 1469598103934665603ull;
+-    /* Under 64 bytes there is no 64-byte block to sample: all of it, bytewise.
+-     * (This used to report "unreadable", and a tiny texture was then never
+-     * hashed again after its first upload.) */
+-    if (span < 64) {
+-        for (u32 i = 0; i < span; i++) { h ^= src[i]; h *= 1099511628211ull; }
+-        *readable = 1;
+-        return h;
+-    }
+     for (u32 i = 0; i + 64 <= span; i += 2048) {
+         u64 w[8]; memcpy(w, src + i, sizeof w);
+         for (int k = 0; k < 8; k++) h = (h ^ w[k]) * 1099511628211ull;
+@@ -1078,20 +1062,16 @@
+              * Marais, for 4 that changed. Now a sparse check every frame and
+              * the full hash every eighth (staggered by slot), or always for
+              * a small texture. PS3RECOMP_ENG_TEXHASH_FULL=1: full every frame. */
+-            if (__builtin_expect(s_texhash_full < 0, 0))
+-                ps3_toggle_watch(PS3T_ENG_TEXHASH_FULL, eng_texhash_full_set);
+-            const int full_always = __atomic_load_n(&s_texhash_full, __ATOMIC_RELAXED);
+-            /* Due by age, not by (frame + slot) & 7: a texture sampled only on
+-             * alternate frames could miss its turn for ever. */
+-            const int full = full_always || span <= 16384u || g.frames - e->last_full_frame >= 8u;
++            static int full_always = -1;
++            if (full_always < 0) full_always = getenv("PS3RECOMP_ENG_TEXHASH_FULL") ? 1 : 0;
++            const u32 slot_ix = (u32)(e - g.textures);
++            const int full = full_always || span <= 16384u || ((g.frames + slot_ix) & 7u) == 0;
+             int readable = 0;
+             const u64 th0 = eng_ds_enabled() ? eng_ds_now() : 0;
+             const u64 sparse = eng_texture_sparse_hash(location, offset, span, &readable);
+             u64 hash = e->content_hash;
+-            if (readable && (full || sparse != e->sparse_hash)) {
++            if (readable && (full || sparse != e->sparse_hash))
+                 hash = eng_texture_content_hash(location, offset, span, &readable);
+-                e->last_full_frame = g.frames;
+-            }
+             if (th0) { ds_th_ns += eng_ds_now() - th0; ds_th_count++;
+                        ds_th_bytes += (full || sparse != e->sparse_hash) ? span : span / 32u;
+                        ds_th_changed += readable && hash != e->content_hash; }
+@@ -1134,7 +1114,6 @@
+     e.remap = remap; e.cubemap = (u32)(cube != 0); e.depth = depth;
+     e.levels = levels; e.span = span;
+     e.last_hash_frame = g.frames;
+-    e.last_full_frame = g.frames - (index & 7u);   /* staggered: not all due on one frame */
+     e.last_use_serial = ++g.texture_use_serial;
+     { int readable = 0;
+       e.content_hash = eng_texture_content_hash(location, offset, span, &readable);
+@@ -1946,28 +1925,10 @@
+ static eng_vc_entry s_vc[ENG_VC_SIZE];
+ static u32 s_vc_cursor;
+ 
+-/* PS3_TOGGLE_FILE can switch it live: the watcher only records the wish, and
+- * the RSX thread (the cache's only user) acts on it at its next draw. Off
+- * drops every persistent buffer (the backend retires them once the GPU is past
+- * them, as the "full: start over" path does); on starts from an empty cache. */
+-static int s_vc_want = -1, s_vc_applied = -2;   /* -2: not used yet */
+-static void eng_vc_set(int id, int on) { (void)id; __atomic_store_n(&s_vc_want, on != 0, __ATOMIC_RELAXED); }
+-static void eng_vc_drop(eng_vc_entry* e);
+-static __attribute__((noinline)) int eng_vc_switch(void)
+-{
+-    if (__atomic_load_n(&s_vc_want, __ATOMIC_RELAXED) < 0) ps3_toggle_watch(PS3T_ENG_VCACHE, eng_vc_set);
+-    const int want = __atomic_load_n(&s_vc_want, __ATOMIC_RELAXED);
+-    if (s_vc_applied >= 0) {   /* a change, not the first use */
+-        for (u32 i = 0; i < ENG_VC_SIZE; i++) eng_vc_drop(&s_vc[i]);
+-        memset(s_vc, 0, sizeof s_vc); s_vc_used = 0;
+-    }
+-    s_vc_applied = want;
+-    return want;
+-}
+ static int eng_vc_on(void)
+ {
+-    int on = s_vc_applied;
+-    if (__builtin_expect(on != __atomic_load_n(&s_vc_want, __ATOMIC_RELAXED), 0)) on = eng_vc_switch();
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_VCACHE"); on = e ? atoi(e) != 0 : 1; }
+     return on && g.be->vbuf_create && g.be->draw_vbuf && g.be->vbuf_release;
+ }
+ 
+@@ -2844,12 +2805,7 @@
+      * program has that structural hash (TEXSTATE's fp=). Pipeline numbers
+      * drift between runs with asset streaming; the hash does not. */
+     { static u64 skipfp[8]; static int nskip = -1;
+-      /* Re-read when PS3_TOGGLE_FILE changes the list (eng_skip_fp_set). */
+-      if (__builtin_expect(nskip < 0 || __atomic_load_n(&s_skip_fp_dirty, __ATOMIC_RELAXED), 0)) {
+-          if (nskip < 0) ps3_toggle_watch(PS3T_ENG_SKIP_FP, eng_skip_fp_set);
+-          __atomic_store_n(&s_skip_fp_dirty, 0, __ATOMIC_RELAXED);
+-          char buf[PS3_TOGGLE_STR]; const char* e = ps3_toggle_str(PS3T_ENG_SKIP_FP, buf, sizeof buf);
+-          nskip = 0;
++      if (nskip < 0) { nskip = 0; const char* e = getenv("PS3RECOMP_ENG_SKIP_FP");
+           while (e && *e && nskip < 8) { skipfp[nskip++] = strtoull(e, (char**)&e, 16); if (*e == ',') e++; else break; } }
+       if (nskip) { const eng_fp_memo* fpm = NULL;
+           const u64 fk = eng_guest_programs(NULL, &fpm) && fpm ? fpm->structural : 0;
+@@ -3137,6 +3093,115 @@
+       alpha[1] = bottom ? -1.0f : 1.0f;
+       alpha[2] = bottom ? (float)(win & 0xFFFu) : 0.0f;
+       alpha[3] = 0.0f; }
++
++    /* PS3RECOMP_ENG_OCCDUMP=<sec>:<dir>[:<hex>,<hex>..]: DIAGNOSTIC for the
++     * occlusion volumes (default programs 5f740845528b0e62 props and
++     * 7875289ea6b856a6 characters). In one frame, <sec> seconds after their
++     * first draw: the render target's bytes before every volume draw and
++     * after the last one (rt_NNN.rgba), the depth snapshot and normals they
++     * sample (unit0.rgba / unit1.rgba), each cone LUT raw (lut_<off>.bin) and
++     * every draw's constants and state (draws.txt) -- so the per-draw alpha
++     * the GPU produced can be checked against the program's math offline.
++     * Every dump flushes and waits: one frame, debugging only.
++     * PS3RECOMP_ENG_OCCDUMP_TRIGGER=<file>: instead of the timer, dump the next
++     * frame each time <file> appears (it is removed), into <dir>/dNN -- for a
++     * windowed session at the spot that looks wrong (tools/play_dump.sh). */
++    { static int oinit; static u64 ofp[4] = { 0x5f740845528b0e62ull, 0x7875289ea6b856a6ull }; static int nofp = 2;
++      static long osec = -1; static char odir[400]; static unsigned long long ot0;
++      static u32 oframe = ~0u, on_draw, olast_h, olast_w, olast_hh; static int ostate; /* 0 wait, 1 capturing, 2 done */
++      static u32 oluts[64], nluts; static int odone_u[2]; static char ocur[460]; static u32 ondump;
++      static const char* otrig;
++      if (!oinit) { oinit = 1; const char* e = getenv("PS3RECOMP_ENG_OCCDUMP");
++          otrig = getenv("PS3RECOMP_ENG_OCCDUMP_TRIGGER");
++          if (e) { char* d; osec = strtol(e, &d, 10);
++                   if (*d == ':') { const char* p = d + 1; const char* c = strchr(p, ':');
++                       size_t n = c ? (size_t)(c - p) : strlen(p); if (n >= sizeof odir) n = sizeof odir - 1;
++                       memcpy(odir, p, n); odir[n] = 0;
++                       if (c) { nofp = 0; c++; while (*c && nofp < 4) { ofp[nofp++] = strtoull(c, (char**)&c, 16); if (*c == ',') c++; else break; } } } } }
++      if (!ocur[0] && odir[0]) snprintf(ocur, sizeof ocur, "%s", odir);
++      if ((osec >= 0 || otrig) && odir[0] && (ostate < 2 || otrig) && g.be->readback && g.be->submit_and_wait) {
++          if (otrig && ostate == 2) ostate = 0;   /* ready for the next trigger */
++          const u64 fk = eng_current_fp_structural();
++          int vol = 0; for (int k = 0; k < nofp; k++) if (fk && fk == ofp[k]) vol = 1;
++          extern unsigned long long ps3_ms_now(void);
++          if (vol && !ot0) ot0 = ps3_ms_now();
++          char path[512];
++          /* the frame ended, or a non-volume draw follows the volumes: final dump */
++          if (ostate == 1 && (!vol || g.frames != oframe) && olast_h) {
++              u8* px = (u8*)malloc((size_t)olast_w * olast_hh * 4);
++              if (px) { g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
++                  g.be->readback(g.be->user, olast_h, 0, 0, olast_w, olast_hh, px, olast_w * 4);
++                  snprintf(path, sizeof path, "%s/rt_%03u.rgba", ocur, on_draw);
++                  FILE* f = fopen(path, "wb"); if (f) { fwrite(px, 1, (size_t)olast_w * olast_hh * 4, f); fclose(f); }
++                  free(px); }
++              fprintf(stderr, "[occdump] frame %u: %u volume draws dumped to %s\n", oframe, on_draw, ocur);
++              ostate = 2;
++          }
++          int arm = 0;
++          static u32 ochk = ~0u;   /* the trigger file is looked for once a frame */
++          if (otrig) { FILE* tf = (ostate == 0 && g.frames != ochk) ? fopen(otrig, "r") : NULL; ochk = g.frames;
++              if (tf) { fclose(tf); remove(otrig); arm = 1;
++                  snprintf(ocur, sizeof ocur, "%s/d%02u", odir, ++ondump); mkdir(ocur, 0755); } }
++          else arm = vol && ps3_ms_now() - ot0 >= (unsigned long long)osec * 1000ull;
++          if (ostate == 0 && arm) { ostate = 3; on_draw = 0; olast_h = 0; nluts = 0; odone_u[0] = odone_u[1] = 0; }
++          if (vol && ostate == 3) { ostate = 1; oframe = g.frames; }
++          if (vol && ostate == 1 && g.frames == oframe && n_targets) {
++              const eng_surface* es = &g.surfaces[targets[0]];
++              g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
++              u8* px = (u8*)malloc((size_t)es->w * es->h * 4);
++              if (px) { g.be->readback(g.be->user, es->handle, 0, 0, es->w, es->h, px, es->w * 4);
++                  snprintf(path, sizeof path, "%s/rt_%03u.rgba", ocur, on_draw);
++                  FILE* f = fopen(path, "wb"); if (f) { fwrite(px, 1, (size_t)es->w * es->h * 4, f); fclose(f); }
++                  free(px); }
++              olast_h = es->handle; olast_w = es->w; olast_hh = es->h;
++              for (u32 u = 0; u < 2; u++) {
++                  rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
++                  snprintf(path, sizeof path, "%s/unit%u.rgba", ocur, u);
++                  if (!t.enabled || !textures[u] || !t.width || !t.height || odone_u[u]) continue; odone_u[u] = 1;
++                  u8* tp = (u8*)malloc((size_t)t.width * t.height * 4);
++                  if (!tp) continue;
++                  g.be->readback(g.be->user, textures[u], 0, 0, t.width, t.height, tp, t.width * 4);
++                  FILE* f = fopen(path, "wb"); if (f) { fwrite(tp, 1, (size_t)t.width * t.height * 4, f); fclose(f); }
++                  free(tp);
++              }
++              rsx_dsp_texture lt; rsx_dsp_get_texture(&g.rsx, 2, &lt);
++              if (lt.enabled && lt.width) {
++                  const u32 key = lt.offset ^ (lt.location << 31);
++                  u32 k = 0; while (k < nluts && oluts[k] != key) k++;
++                  if (k == nluts && nluts < 64) { oluts[nluts++] = key;
++                      const u32 depth = (lt.dimension == 3 && !lt.cubemap && lt.depth) ? lt.depth : 1u;
++                      const u32 span = depth > 1 ? eng_texture_span_3d(lt.format, lt.width, lt.height, depth, lt.mipmaps, lt.pitch)
++                                                 : eng_texture_span(lt.format, lt.width, lt.height, lt.mipmaps, lt.pitch, (int)lt.cubemap);
++                      const u8* src = span ? eng_guest_ptr(NULL, lt.location, lt.offset, span) : NULL;
++                      snprintf(path, sizeof path, "%s/lut_%u_%08X.bin", ocur, lt.location, lt.offset);
++                      FILE* f = src ? fopen(path, "wb") : NULL; if (f) { fwrite(src, 1, span, f); fclose(f); } } }
++              snprintf(path, sizeof path, "%s/draws.txt", ocur);
++              FILE* f = fopen(path, "a");
++              if (f) {
++                  fprintf(f, "draw %u frame %u fp %016llx p %u n %u rt h%u off 0x%08X %ux%u ztest %u zfunc 0x%X zwrite %u cull %u/0x%X front 0x%X stencil %u func 0x%X ref 0x%02X mask 0x%02X blend 0x%08X cmask 0x%08X\n",
++                          on_draw, g.frames, (unsigned long long)fk, pipeline, n_draw, es->handle, es->offset, es->w, es->h,
++                          rs.depth_test, rs.depth_func, rs.depth_write, rs.cull_enable, rs.cull_face, rs.front_face,
++                          rs.stencil_enable, rs.s_func, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_REF) & 0xFFu,
++                          rsx_dsp_reg(&g.rsx, 0x0330) & 0xFFu, rsx_dsp_reg(&g.rsx, 0x0314), rsx_dsp_reg(&g.rsx, 0x0324));
++                  for (u32 u = 0; u < 3; u++) { rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
++                      fprintf(f, "tex %u en %u h%u loc %u off 0x%08X fmt 0x%02X %ux%u depth %u dim %u remap 0x%08X filter 0x%08X addr 0x%08X\n",
++                              u, t.enabled, textures[u], t.location, t.offset, t.format, t.width, t.height, t.depth, t.dimension,
++                              t.remap, t.filter, t.wrap); }
++                  fprintf(f, "xf %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", xf[0], xf[1], xf[2], xf[3], xf[4], xf[5], xf[6], xf[7]);
++                  const float* k = (const float*)g.fp_cb;
++                  for (u32 q = 0; q < g.fp_constants->count; q++)
++                      fprintf(f, "k %u %.9g %.9g %.9g %.9g\n", q, k[q * 4], k[q * 4 + 1], k[q * 4 + 2], k[q * 4 + 3]);
++                  for (u32 c = 0; c < RSX_DSP_NUM_CONSTANTS; c++) {
++                      float v[4]; memcpy(v, g.rsx.constants[c], sizeof v);
++                      if (!(v[0] != 0.0f || v[1] != 0.0f || v[2] != 0.0f || v[3] != 0.0f)) continue;
++                      if (!(c >= 256 && c <= 272) && c != 466 && c != 467) continue;
++                      fprintf(f, "c %u %.9g %.9g %.9g %.9g\n", c, v[0], v[1], v[2], v[3]);
++                  }
++                  fclose(f);
++              }
++              on_draw++;
++          }
++      } }
+ 
+     /* The depth attachment is cleared the first time it is bound, so a title
+      * that never clears its shadow zeta still tests against something. */
