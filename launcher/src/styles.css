@@ -160,3 +160,28 @@ button.unbind { padding: 2px 7px; margin-left: 4px; background: none; border-col
 .bindings td:hover button.unbind { visibility: visible; }
 select.pad-pick { min-width: 0; width: auto; margin-left: 6px; padding: 3px 6px; }
 #controls-path { margin-top: 8px; }
+
+/* saves */
+.saves-cols { margin-top: 8px; align-items: start; }
+.col-head { justify-content: space-between; }
+.col-head h3 { margin: 12px 0 8px; flex: 1; }
+.slots { display: grid; gap: 10px; }
+.slot { display: flex; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.slot-icon { width: 96px; height: auto; align-self: flex-start; border-radius: 6px; flex: none; }
+.slot-body { min-width: 0; display: grid; gap: 4px; align-content: start; }
+.slot-body strong { overflow-wrap: anywhere; }
+.slot-body .pill { justify-self: start; }
+.slot-actions { gap: 6px; margin-top: 6px; }
+.slot-actions button:not(.link) { padding: 4px 10px; font-size: 12px; }
+.pill.accent { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.pill.muted-pill { background: var(--panel-2); color: var(--muted); }
+button.danger-link { color: var(--bad); }
+.small-select { min-width: 0; width: auto; padding: 3px 6px; font-size: 12px; }
+.hint-warn { color: var(--warn); margin: 0 0 8px; }
+input.num { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; width: 90px; }
+.backups li { align-items: center; justify-content: space-between; }
+.backups .what { flex: 1; min-width: 0; }
+.backups .what b { display: block; font-weight: 600; }
+.backups .msg { word-break: normal; overflow-wrap: anywhere; font-size: 12px; }
+.backups button:not(.link) { padding: 4px 10px; font-size: 12px; }
+@media (max-width: 960px) { .saves-cols { grid-template-columns: 1fr; } }

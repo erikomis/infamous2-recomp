@@ -4,6 +4,7 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { GAME_LANGS, Key, Lang, lang, setLang, t, translateDom } from "./i18n";
 import { initControls, renderControls, showControls } from "./controls";
 import { RebuildProgress } from "./progress";
+import { initSaves, refresh as refreshSaves, render as renderSaves } from "./saves";
 
 // ---- types shared with src-tauri/src/lib.rs (camelCase) ----------------------
 interface Settings {
@@ -27,6 +28,7 @@ interface Settings {
   extraEnv: string;
   gamePaths: string[];
   rapPath: string;
+  saveBackupsKeep: number;
 }
 interface InstallInfo {
   layout: "install" | "dev";
@@ -104,6 +106,7 @@ function showView(name: string) {
   if (name === "home") refreshStatus();
   if (name === "settings") updatePreview();
   if (name === "controls") showControls();
+  if (name === "saves") refreshSaves();
 }
 document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view!)));
 
@@ -113,7 +116,7 @@ function persist() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(async () => {
     await invoke("save_settings", { settings });
-    for (const s of [$("saved"), $("controls-saved")]) {
+    for (const s of [$("saved"), $("controls-saved"), $("saves-saved")]) {
       show(s, true);
       window.setTimeout(() => show(s, false), 1200);
     }
@@ -146,6 +149,7 @@ function applyLang(l: Lang) {
   renderPrereqs();
   renderGame(lastSearch);
   renderControls();
+  renderSaves();
 }
 
 function bindSettings() {
@@ -302,7 +306,7 @@ function renderHome() {
     const b = document.createElement("strong");
     b.textContent = s.subtitle || s.title;
     const d = document.createElement("div");
-    d.textContent = s.detail.split("\n").join(" · ");
+    d.textContent = s.detail.split("\n").filter(Boolean).join(" · ");
     const w = document.createElement("div");
     w.className = "small";
     w.textContent = s.modified ? new Date(s.modified * 1000).toLocaleString(lang()) : "";
@@ -317,15 +321,19 @@ $("play").addEventListener("click", async () => {
       await invoke("stop_game");
       return;
     }
-    const log = await invoke<string>("play");
+    const r = await invoke<{ log: string; backup: string | null; backupError: string | null }>("play");
     gameRunning = true;
-    msg.textContent = t("home.started", { log });
+    msg.textContent =
+      t("home.started", { log: r.log }) +
+      (r.backup ? t("home.backedUp", { id: r.backup }) : "") +
+      (r.backupError ? t("home.backupFailed", { e: r.backupError }) : "");
   } catch (e) {
     msg.textContent = String(e);
   }
   renderHome();
 });
 $("go-install").addEventListener("click", () => showView("install"));
+$("go-saves").addEventListener("click", () => showView("saves"));
 $("open-saves").addEventListener("click", async () => {
   const p = await invoke<Record<string, string>>("log_paths");
   invoke("reveal", { path: status?.lastSave?.folder ?? p.saves });
@@ -708,6 +716,13 @@ async function main() {
   setLang(settings.uiLang as Lang);
   bindSettings();
   initControls();
+  initSaves({
+    keep: () => settings.saveBackupsKeep ?? 10,
+    setKeep: (n) => {
+      settings.saveBackupsKeep = n;
+      persist();
+    },
+  });
   gamePaths.value = settings.gamePaths.join("\n");
   rapPath.value = settings.rapPath;
   outDir.value = settings.installDir;
