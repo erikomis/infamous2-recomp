@@ -1,0 +1,86 @@
+# Quick checks on the port's own scripts, no game data needed: every Python
+# file compiles, every shell script parses, and the decryption tools pass
+# their synthetic round trips (made-up keys, nothing real):
+#   decrypt_self.py --selftest   SELF -> ELF (APP with a compressed segment, NPDRM)
+#   pup_extract.py --selftest    PUP -> update PKG -> dev_flash tar -> SELF
+# The launcher workflow already runs rebuild.py --check-json/--dry-run on the
+# staged port; this one also runs on changes that do not touch the launcher.
+name: tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.py'
+      - '**.sh'
+      - '.github/workflows/tools.yml'
+  pull_request:
+    paths:
+      - '**.py'
+      - '**.sh'
+      - '.github/workflows/tools.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tools-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # The toolkit's requirements pin it too; the self-tests only need AES.
+      - name: pycryptodome
+        run: python -m pip install --disable-pip-version-check pycryptodome
+
+      - name: Python files compile
+        run: |
+          git ls-files -z '*.py' > "$RUNNER_TEMP/py.lst"
+          python - "$RUNNER_TEMP/py.lst" <<'EOF'
+          import sys
+          files = [f for f in open(sys.argv[1], 'rb').read().decode().split('\0') if f]
+          bad = 0
+          for f in files:
+              try:
+                  compile(open(f, 'rb').read(), f, 'exec')
+              except SyntaxError as e:
+                  print(f'::error file={f},line={e.lineno}::{e.msg}')
+                  bad += 1
+          print(f'{len(files)} files, {bad} with syntax errors')
+          sys.exit(1 if bad else 0)
+          EOF
+
+      - name: Shell scripts parse
+        run: |
+          bad=0
+          while IFS= read -r -d '' f; do
+            case $(head -n1 "$f") in
+              *bash*) bash -n "$f" ;;
+              *)      sh -n "$f" ;;
+            esac || { echo "::error file=$f::does not parse"; bad=1; }
+          done < <(git ls-files -z '*.sh')
+          exit $bad
+
+      - name: decrypt_self.py self-test
+        run: python -I infamous2-lle/tools/decrypt_self.py --selftest
+
+      - name: pup_extract.py self-test
+        run: python -I infamous2-lle/tools/pup_extract.py --selftest
+
+      - name: rebuild.py and rap2rifkey.py start
+        run: |
+          python -I infamous2-lle/tools/rebuild.py --help > /dev/null
+          python -I infamous2-lle/tools/rap2rifkey.py --help > /dev/null

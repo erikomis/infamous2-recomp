@@ -43,6 +43,17 @@ roadmap).
   date), shortcuts to the Saves screen, the saves folder and the game log.
   Play first backs up the saves (see Saves). Below it, **Report a problem**
   (see below): Play in diagnostic mode, Capture this frame, Create .zip.
+  An **Updates** card says when
+  the installed game was built from other port sources than the app carries
+  (install.json's `port_commit` against the bundled `BUILD_INFO.json`, or the
+  checkout's `git` HEAD in development) and offers **Rebuild the game**, which
+  runs the Install screen's rebuild (only the steps whose inputs changed run
+  again); and, from GitHub's latest published release
+  (`api.github.com/repos/erikomis/infamous2-recomp/releases/latest`, once per
+  session through `curl`, again on "Check again"; drafts and pre-releases are
+  skipped), when a newer app version is out, with a link to it.
+  `INFAMOUS2_NO_UPDATE_CHECK=1` turns the online check off
+  (`src-tauri/src/update.rs`).
 - **Install / Instalar**, three steps: the machine's requirements (with the
   installs above), the game folder (licence found automatically; PKGs, the
   `.rap`, the install folder, the decryption and the DLC key under "More
@@ -60,7 +71,9 @@ roadmap).
   once to `~/Library/Application Support/infamous2-recomp/input.toml`, which
   Play passes as `PS3_INPUT_MAP` (format: the main README, "Playing"). Below
   it, the mouse options: camera on/off, sensitivity, vertical and horizontal
-  inversion, dead zone, cursor capture (`PS3_MOUSE*`).
+  inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
+  and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
+  rumbles the controller through the Gamepad API.
 - **Saves**: the game's save slots (`BCUS98125*`, `NPUA80638*`) in the port
   and in RPCS3 side by side (RPCS3 user picker when there are several), each
   with its icon, title, progress, date, size and whether its STATE matches
@@ -68,9 +81,6 @@ roadmap).
   or port -> RPCS3, export the port's slots to a `.zip` or import one, delete
   a slot, and a list of backups to restore or delete. Every destructive
   action asks first. Details below ("Saves").
-  inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
-  and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
-  rumbles the controller through the Gamepad API.
 - **Settings / Configurações**: game language (`PS3_LANG`), light pass and
   SSAO on the GPU, the occlusion-volume skip, a gamma override, anisotropic
   filtering, FXAA, sharpening and MetalFX upscaling (`PS3_ANISO`, `PS3_AA`,
@@ -316,8 +326,8 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
 
 ## Not done yet
 
-- Fullscreen/borderless and resolution: the runtime has no switch for them
-  yet (the macOS window's green button gives fullscreen).
+- Internal resolution: the game renders at 720p (window modes, size, screen
+  and vsync are in Settings).
 - The game still reads its options from environment variables; the plan is a
   `config.toml` the launcher writes and the game reads (see the roadmap).
 - Signing: no certificates are configured yet, so macOS builds are ad-hoc
