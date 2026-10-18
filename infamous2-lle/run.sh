@@ -95,6 +95,10 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 # PS3RECOMP_ENG_SKIP_FP= (empty) draws them again.
 export PS3RECOMP_ENG_SKIP_FP="${PS3RECOMP_ENG_SKIP_FP-5f740845528b0e62,7875289ea6b856a6}"
 
+# Priority (macos_host.m, the toolkit's host_qos.h): the game keeps macOS from
+# App-Napping or timer-throttling it. PS3_QOS=1 also runs its PPU, SPU and RSX
+# threads at USER_INTERACTIVE QoS; off by default (no frame-time gain in a
+# headless A/B, and two of three runs with it hung on the frame fence).
 # The window (Metal backend; rsx_metal_backend.h has the details):
 #   PS3_WINDOW_MODE=windowed|fullscreen|borderless   how it opens (windowed)
 #   PS3_WINDOW_SIZE=1920x1080   windowed size in points (1280x720 by default)
@@ -116,4 +120,13 @@ export PS3RECOMP_ENG_SKIP_FP="${PS3RECOMP_ENG_SKIP_FP-5f740845528b0e62,7875289ea
 # =<file> any image, =none the system's generic icon.
 export PS3_WINDOW_ICON="${PS3_WINDOW_ICON-$here/window_icon.png}"
 
-exec "$here/build/Infamous2Recomp" "$vfs/PS3_GAME/USRDIR/EBOOT.elf" "$@"
+# macOS builds an app bundle (CMakeLists.txt): run the executable inside it,
+# directly, so the process has the bundle's identity -- that is what makes
+# Game Mode turn on once the window is fullscreen -- and still gets this
+# environment and this stdout/stderr. build/Infamous2Recomp is a symlink to it
+# (or, in a build from before the bundle, the executable itself).
+# INFAMOUS2_EXE=<file> runs another build.
+exe="$here/build/Infamous2Recomp.app/Contents/MacOS/Infamous2Recomp"
+[ -x "$exe" ] || exe="$here/build/Infamous2Recomp"
+exe="${INFAMOUS2_EXE:-$exe}"
+exec "$exe" "$vfs/PS3_GAME/USRDIR/EBOOT.elf" "$@"

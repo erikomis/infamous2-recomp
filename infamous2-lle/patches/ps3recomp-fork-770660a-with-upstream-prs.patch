@@ -13336,6 +13336,72 @@ index ae3043b..56e6d52 100644
      if (ok_runs < PLANS / 4 || fail_runs < 50 || inline_runs < 200) {
          printf("FAIL: too few cases exercised a path\n");
          return 1;
+diff --git a/runtime/platform/host_qos.h b/runtime/platform/host_qos.h
+new file mode 100644
+index 0000000..fbaf44d
+--- /dev/null
++++ b/runtime/platform/host_qos.h
+@@ -0,0 +1,60 @@
++/*
++ * Host thread QoS for the threads that set the frame rate.
++ *
++ * On Apple silicon the scheduler picks P-cores vs E-cores, and how readily it
++ * preempts, from a thread's QoS class -- and a pthread does NOT inherit its
++ * creator's class: it starts at QOS_CLASS_DEFAULT whatever the parent runs at
++ * (measured on macOS 27: main 0x21 USER_INTERACTIVE, every child 0x15
++ * DEFAULT, also after the parent raised itself). So each guest PPU thread and
++ * each SPU host thread asks for its class itself, at its own entry, through
++ * ps3_host_qos_self().
++ *
++ *   interactive != 0  QOS_CLASS_USER_INTERACTIVE  frame-critical work
++ *   interactive == 0  QOS_CLASS_USER_INITIATED    the title's background work
++ *
++ * Opt-in, PS3_QOS=1: without it every thread keeps the class it started
++ * with. In a headless New Marais A/B (2026-10-18, 3 runs per side) it did not
++ * move the frame time (31.0 vs 31.4 ms at 270 s), and two of the three runs
++ * with it hung on the frame fence with get == put (the flip-race signature),
++ * which none of the runs without it did. PS3_HOT_QOS=1 (SetThreadPriority
++ * ABOVE_NORMAL on the SPU threads and the frame clock) is separate.
++ *
++ * A no-op off Apple: Windows has thread priorities (SetThreadPriority, used
++ * where it matters) and Linux has nothing QoS-like to ask for.
++ */
++#ifndef PS3RECOMP_HOST_QOS_H
++#define PS3RECOMP_HOST_QOS_H
++
++#if defined(__APPLE__)
++#include <pthread.h>
++#include <pthread/qos.h>
++#include <stdlib.h>
++
++static inline int ps3_host_qos_enabled(void)
++{
++    static int on = -1;          /* per TU; every copy reads the same variable */
++    if (on < 0) {
++        const char* e = getenv("PS3_QOS");
++        on = e && e[0] == '1';
++    }
++    return on;
++}
++
++static inline void ps3_host_qos_self(int interactive)
++{
++    if (ps3_host_qos_enabled())
++        pthread_set_qos_class_self_np(interactive ? QOS_CLASS_USER_INTERACTIVE
++                                                  : QOS_CLASS_USER_INITIATED, 0);
++}
++#else
++static inline int  ps3_host_qos_enabled(void) { return 0; }
++static inline void ps3_host_qos_self(int interactive) { (void)interactive; }
++#endif
++
++/* Guest PPU priorities run 0 (highest) .. 3071. inFAMOUS 2's frame, SPURS
++ * handler, streaming (fios), audio-event and kicker threads sit at 99..1001;
++ * what is above that (sound-bank loading 1600, motion controller 2001, an
++ * install copy 3001) can wait. */
++#define PS3_HOST_QOS_PPU_INTERACTIVE_BELOW 1500
++
++#endif /* PS3RECOMP_HOST_QOS_H */
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
 index 4c03372..b7c11a5 100644
 --- a/runtime/ppu/ppu_fs.cpp
@@ -16185,10 +16251,10 @@ index 0000000..911c009
 +}
 +#endif
 diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
-index fdf901f..13bdaa3 100644
+index fdf901f..ebf2525 100644
 --- a/runtime/spu/spu_workload.c
 +++ b/runtime/spu/spu_workload.c
-@@ -6,6 +6,7 @@
+@@ -6,9 +6,11 @@
   * spu_workload_dispatch(); the registry is populated by the title's lifted set.
   */
  #include "../memory/guest_mem_atomic.h"
@@ -16196,7 +16262,11 @@ index fdf901f..13bdaa3 100644
  #include "spu_workload.h"
  #include "spu_lifted_job.h"   /* spu_run_lifted_job */
  #include "../ps3_log.h"      /* ps3_log_verbose */
-@@ -461,7 +462,7 @@ static void spu_async_run(spu_async_job* j)
++#include "../platform/host_qos.h"   /* PS3_QOS: SPU job threads at USER_INTERACTIVE */
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -461,7 +463,7 @@ static void spu_async_run(spu_async_job* j)
  #endif
          if (!ts_slot->ls) ts_slot->ls = (uint8_t*)calloc(1, SPU_LS_SIZE);
          ls = ts_slot->ls;
@@ -16205,7 +16275,21 @@ index fdf901f..13bdaa3 100644
              fprintf(stderr, "[persist-ls] taskset=0x%08X task=%u image=%d %s\n",
                      j->taskset_ea, j->taskid, j->image_id,
                      ts_slot->loaded ? "REUSE (state retained)" : "first load"); fflush(stderr); }
-@@ -976,22 +977,50 @@ int spu_taskset_signal_parked_obj(uint32_t taskset_ea, uint32_t wait_obj)
+@@ -777,7 +779,12 @@ static DWORD WINAPI spu_async_thread(LPVOID p) {
+     return 0;
+ }
+ #else
+-static void* spu_async_thread(void* p) { spu_async_run((spu_async_job*)p); return NULL; }
++static void* spu_async_thread(void* p)
++{
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h) */
++    spu_async_run((spu_async_job*)p);
++    return NULL;
++}
+ #endif
+ 
+ int spu_workload_dispatch_job(const uint8_t* image, uint32_t image_size,
+@@ -976,22 +983,50 @@ int spu_taskset_signal_parked_obj(uint32_t taskset_ea, uint32_t wait_obj)
      return n;
  }
  
@@ -16259,7 +16343,7 @@ index fdf901f..13bdaa3 100644
          fprintf(stderr, "[spu_workload] signal task %u (taskset 0x%08X)\n",
                  taskId, taskset_ea); fflush(stderr); }
      /* SPU_SIG_STATS=1: signals per second per (taskset, task, caller). */
-@@ -1030,8 +1059,9 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1030,8 +1065,9 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
      static _Thread_local unsigned long long s_wait_exit_ms;
      { extern unsigned long long ps3_ms_now(void);
        unsigned long long _now = ps3_ms_now();
@@ -16271,7 +16355,7 @@ index fdf901f..13bdaa3 100644
                  _n, taskId, taskset_ea,
                  s_wait_exit_ms ? (_now - s_wait_exit_ms) : 0ull); }
      /* LBP_SYNC_ACK: taskset sync-lane bookkeeping. On real SPURS the taskset
-@@ -1058,7 +1088,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1058,7 +1094,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
                      }
                  }
              }
@@ -16280,7 +16364,7 @@ index fdf901f..13bdaa3 100644
                  fprintf(stderr, "[sync-ack] lanes advanced to tickets (sync=0x%08X)\n", b); }
          }
      }
-@@ -1087,7 +1117,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1087,7 +1123,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
              if (drain && secs >= drain) { drained = 1; break; }
          }
      }
@@ -16289,7 +16373,7 @@ index fdf901f..13bdaa3 100644
      ReleaseSRWLockExclusive(&s_sig_lock);
  #else
      pthread_mutex_lock(&s_sig_lock);
-@@ -1101,10 +1131,10 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1101,10 +1137,10 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
              if (drain && secs >= drain) { drained = 1; break; }
          }
      }
@@ -16302,7 +16386,7 @@ index fdf901f..13bdaa3 100644
          fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) WS_DRAIN resume "
                  "after %us (no signal)\n", taskId, taskset_ea, secs); fflush(stderr); }
      spu_serial_acquire();       /* resume: re-take the serial lock */
-@@ -1178,7 +1208,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1178,7 +1214,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
          "[spu_workload] dispatch HIT (async) fp=0x%016llX args=0x%08X image=%d -> spawning thread\n",
          (unsigned long long)fp, args_ea, image_id);
      if (args_ea) { extern uint8_t* vm_base; const uint8_t* c = vm_base + args_ea;
@@ -16311,7 +16395,7 @@ index fdf901f..13bdaa3 100644
              /* Dump a larger window of the task context buffer + scan for any word
               * that looks like the LS[0xBEC0] target (i.e. a small LS-range value),
               * to see if the kernel-restored LS data lives here (real game data). */
-@@ -1292,7 +1322,7 @@ static void spu_task_interp_run(spu_task_interp_job* j)
+@@ -1292,7 +1328,7 @@ static void spu_task_interp_run(spu_task_interp_job* j)
                  if (sc == 0) break;                            /* CELL_SPURS_TASK_SYSCALL_EXIT */
                  if (sc != 1) {                                 /* yield is a no-op here */
                      static int n = 0;
@@ -16320,6 +16404,14 @@ index fdf901f..13bdaa3 100644
                          fprintf(stderr, "[spurs-task] task syscall %u not modelled (returning 0)\n", sc);
                  }
                  ctx->gpr[3] = spu_make_preferred_u32(0);
+@@ -1317,6 +1353,7 @@ static void* spu_task_interp_thread(void* p)
+ #endif
+ {
+     spu_task_interp_job* j = (spu_task_interp_job*)p;
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h) */
+     spu_task_interp_run(j);
+     free(j);
+     return 0;
 diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
 index 8af915e..1ca4fef 100644
 --- a/runtime/spu/spurs_job.c
@@ -16498,7 +16590,7 @@ index cb91558..339423c 100644
  }
  
 diff --git a/runtime/syscalls/lv2_register.c b/runtime/syscalls/lv2_register.c
-index d756b8d..49fbb38 100644
+index d756b8d..44bd1fd 100644
 --- a/runtime/syscalls/lv2_register.c
 +++ b/runtime/syscalls/lv2_register.c
 @@ -11,6 +11,7 @@
@@ -16509,7 +16601,7 @@ index d756b8d..49fbb38 100644
  #include <stdlib.h>   /* calloc, free */
  #include "ps3emu/nid.h"   /* ps3_compute_nid (static inline) */
  #include "lv2_syscall_table.h"
-@@ -45,6 +46,7 @@ extern void spu_raw_note_image(uint32_t src_ea, uint32_t entry);
+@@ -45,9 +46,11 @@ extern void spu_raw_note_image(uint32_t src_ea, uint32_t entry);
  #include "sys_event.h"
  
  #include <stdio.h>
@@ -16517,7 +16609,11 @@ index d756b8d..49fbb38 100644
  #include <string.h>
  
  #include "../platform/win32_compat.h"   /* QueryPerformanceCounter shim for the SPU_SPEED timing */
-@@ -90,7 +92,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
++#include "../platform/host_qos.h"       /* PS3_QOS: SPU threads at USER_INTERACTIVE */
+ 
+ /* ---------------------------------------------------------------------------
+  * TTY syscalls (used by PS3 CRT for debug output)
+@@ -90,7 +93,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
                memcpy(tmp, vm_base + buf_ea, n); tmp[n] = 0;
                if (strstr(tmp, pat)) {
                    static int _n = 0;
@@ -16526,7 +16622,7 @@ index d756b8d..49fbb38 100644
                        uint32_t sp = (uint32_t)ctx->gpr[1];
                        fprintf(stderr, "[TTY_BT] \"%.70s\" tid=%llu cia=0x%08X lr=0x%08X chain:",
                                tmp, (unsigned long long)ctx->thread_id,
-@@ -114,7 +116,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
+@@ -114,7 +117,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
              char tmp[256]; uint32_t n = len < 255 ? len : 255;
              memcpy(tmp, vm_base + buf_ea, n); tmp[n] = 0;
              if (strstr(tmp, "NULL pointer") || strstr(tmp, "E2004090") || strstr(tmp, "CRICRS")) {
@@ -16535,7 +16631,7 @@ index d756b8d..49fbb38 100644
                      uint32_t sp = (uint32_t)ctx->gpr[1];
                      fprintf(stderr, "[CRIBT] \"%.60s\" cia=0x%08X lr=0x%08X chain:", tmp,
                              (uint32_t)ctx->cia, (uint32_t)ctx->lr);
-@@ -138,7 +140,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
+@@ -138,7 +141,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
              memcpy(tmp, vm_base + buf_ea, n); tmp[n] = 0;
              if (strstr(tmp, "ASSERT") || strstr(tmp, "Tuner") || strstr(tmp, "usertrace") ||
                  strstr(tmp, "libspurs")) {
@@ -16544,7 +16640,7 @@ index d756b8d..49fbb38 100644
                      uint32_t sp = (uint32_t)ctx->gpr[1];
                      fprintf(stderr, "\n[ASSERTBT] \"%.70s\" cia=0x%08X lr=0x%08X chain:", tmp,
                              (uint32_t)ctx->cia, (uint32_t)ctx->lr);
-@@ -165,7 +167,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
+@@ -165,7 +168,7 @@ static int64_t sys_tty_write(ppu_context* ctx)
                  strstr(ptmp, "out of memory on request")) {
                  extern void ppu_log_host_chain(const char*);
                  static int _pn = 0;
@@ -16553,7 +16649,7 @@ index d756b8d..49fbb38 100644
              }
          }
          /* DIAGNOSTIC (FLOW_PSSGTRACE=1): when the title logs a PhyreEngine
-@@ -390,6 +392,12 @@ typedef struct {
+@@ -390,6 +393,12 @@ typedef struct {
      uint32_t waiter_cause;
      int32_t  waiter_status;
      int      has_sched;          /* context-switched (not NON_CONTEXT) */
@@ -16566,7 +16662,7 @@ index d756b8d..49fbb38 100644
  } spu_group_t;
  
  static spu_group_t  s_spu_groups[MAX_SPU_GROUPS];
-@@ -642,6 +650,27 @@ static int64_t sys_spu_thread_group_create_handler(ppu_context* ctx)
+@@ -642,6 +651,27 @@ static int64_t sys_spu_thread_group_create_handler(ppu_context* ctx)
              g->name[i] = src[i];
          g->name[i] = 0;
      }
@@ -16594,7 +16690,7 @@ index d756b8d..49fbb38 100644
  
      vm_write_be32(out_ea, g->id);
  
-@@ -821,6 +850,32 @@ static int64_t sys_spu_thread_initialize_handler(ppu_context* ctx)
+@@ -821,6 +851,32 @@ static int64_t sys_spu_thread_initialize_handler(ppu_context* ctx)
  #endif
      g->thread_indices[thread_num] = (uint32_t)(t - s_spu_threads);
      g->init_mask |= 1u << thread_num;
@@ -16627,10 +16723,11 @@ index d756b8d..49fbb38 100644
      if ((uint32_t)__builtin_popcount(g->init_mask) == g->num_threads)
          g->state = SPU_GROUP_STATE_INITIALIZED;
      vm_write_be32(out_tid_ea, t->tid);
-@@ -997,6 +1052,13 @@ static void* spu_exec_thread_proc(void* arg)
+@@ -997,6 +1053,14 @@ static void* spu_exec_thread_proc(void* arg)
      { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }  /* let SO reach the reporter */
  #endif
      spu_thread_t* t = (spu_thread_t*)arg;
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h): the SPUs set the frame rate */
 +    /* PS3_HOT_QOS=1: on an SPU-bound title these threads are the frame-rate
 +     * ceiling, and at the default QoS macOS is free to run them on the
 +     * efficiency cores. Above-normal maps to QOS_CLASS_USER_INTERACTIVE on
@@ -16641,7 +16738,15 @@ index d756b8d..49fbb38 100644
      spu_lifted_thread_result r;
      spu_lifted_thread_run(t->sctx, &r);
      t->exit_status = r.exit_status;
-@@ -1169,7 +1231,7 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
+@@ -1029,6 +1093,7 @@ static void* spu_fallback_thread_proc(void* arg)
+     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }  /* let SO reach the reporter */
+ #endif
+     spu_thread_t* t = (spu_thread_t*)arg;
++    ps3_host_qos_self(1);   /* PS3_QOS (host_qos.h) */
+     int32_t rc = 0;
+     if (t->fb_handler) {
+         rc = t->fb_handler(t->tid, t->args_ea, t->args_size, t->fb_user);
+@@ -1169,7 +1234,7 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
           * only scratch is either reading the wrong descriptor or the descriptor
           * does not name the buffer we expect. */
          { static _Atomic int _wd = -1; if (_wd < 0) _wd = getenv("SPU_WORKDESC_DUMP") ? 1 : 0;
@@ -16650,7 +16755,7 @@ index d756b8d..49fbb38 100644
                fprintf(stderr, "[WORKDESC] tid=0x%X ea=0x%08X:%c", t->tid, work_ea, 10);
                for (int r = 0; r < 16; r++) {
                    fprintf(stderr, "  +0x%03X:", r * 16);
-@@ -1178,13 +1240,13 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
+@@ -1178,13 +1243,13 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
                    fprintf(stderr, "%c", 10);
                } } } }
          { static _Atomic int _wh = -1; if (_wh < 0) _wh = getenv("SPU_WORKDESC_HDR") ? 1 : 0;
@@ -16666,7 +16771,7 @@ index d756b8d..49fbb38 100644
                fprintf(stderr, "[SPU-SEED] tid=0x%X entry=0x%05X args=0x%08X seed=0x%08X%c",
                        t->tid, entry, t->args_ea, work_ea, 10); } }
          /* Do NOT seed the inbound mailbox. It is the reply channel for the
-@@ -1198,7 +1260,7 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
+@@ -1198,7 +1263,7 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
            if (_sp) { QueryPerformanceCounter(&_t1); QueryPerformanceFrequency(&_fq);
                extern SPU_THREAD_LOCAL uint64_t g_spu_interp_steps;
                double sec = (double)(_t1.QuadPart - _t0.QuadPart) / (double)_fq.QuadPart;
@@ -16675,7 +16780,7 @@ index d756b8d..49fbb38 100644
                    fprintf(stderr, "[spu-speed] tid=0x%X %llu insns in %.3f s = %.1f M/s%c",
                            t->tid, (unsigned long long)g_spu_interp_steps, sec,
                            sec > 0 ? g_spu_interp_steps / sec / 1e6 : 0.0, 10); } }
-@@ -1212,12 +1274,40 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
+@@ -1212,12 +1277,40 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
  
  /* sys_spu_thread_group_start(id) */
  extern int sys_event_queue_push_by_id(uint32_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -16716,7 +16821,7 @@ index d756b8d..49fbb38 100644
      AcquireSRWLockExclusive(&s_grp_lock);
      if (g->state != SPU_GROUP_STATE_INITIALIZED) {
          ReleaseSRWLockExclusive(&s_grp_lock);
-@@ -1796,7 +1886,7 @@ static int64_t sys_spu_thread_write_spu_mb_handler(ppu_context* ctx)
+@@ -1796,7 +1889,7 @@ static int64_t sys_spu_thread_write_spu_mb_handler(ppu_context* ctx)
           * real fix is resident SPU threads, or a printf port that resolves
           * to its thread; this is the floor until one of those exists. */
          static int warned = 0;
@@ -16725,7 +16830,7 @@ index d756b8d..49fbb38 100644
              fprintf(stderr, "[SPU] write_spu_mb: thread 0x%X not found -- "
                              "dropping the word and reporting CELL_OK, as the "
                              "unimplemented stub did\n", tid);
-@@ -1821,7 +1911,7 @@ static int64_t sys_spu_thread_write_spu_mb_handler(ppu_context* ctx)
+@@ -1821,7 +1914,7 @@ static int64_t sys_spu_thread_write_spu_mb_handler(ppu_context* ctx)
           * CELL_EBUSY -- a title that writes a multi-word command in one go
           * saw its second word refused. */
          { static int _n = 0;
@@ -16734,7 +16839,7 @@ index d756b8d..49fbb38 100644
                fprintf(stderr, "[SPU] write_spu_mb tid=0x%X val=0x%08X -> live worker\n",
                        tid, val); }
          spu_channel_push_inmbox(&c->ch_in_mbox, val);
-@@ -1923,7 +2013,7 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
+@@ -1923,7 +2016,7 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
       * the ports cellSpursAttachLv2EventQueue bound; the rest stays as it was. */
      extern uint32_t spurs_port_queue(uint32_t port);
      if (!spu->spu_group_id && (code >= 128 || !spurs_port_queue(code & 63))) {
@@ -16743,7 +16848,7 @@ index d756b8d..49fbb38 100644
              fprintf(stderr, "[spu-evt] SPURS user event on unbound port %u dropped (img=%d value=0x%08X)\n",
                      code & 63, spu->image_id, value); }
          return 0;
-@@ -1970,6 +2060,28 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
+@@ -1970,6 +2063,28 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
          if (queue) {
              int rc = sys_event_queue_push_by_id(queue, 0xFFFFFFFF53505501ull,
                  spu->spu_id, ((uint64_t)port << 32) | (value & 0xFFFFFFu), data);
@@ -16772,7 +16877,7 @@ index d756b8d..49fbb38 100644
              result = rc == 0 ? CELL_OK : CELL_EBUSY;
          }
      }
-@@ -2094,7 +2206,7 @@ static int spu_lv2_stop_service(spu_context* spu)
+@@ -2094,7 +2209,7 @@ static int spu_lv2_stop_service(spu_context* spu)
          spu->rcv_evt_n = 1;
      }
      spu->rcv_evt_i = 0;
@@ -16781,7 +16886,7 @@ index d756b8d..49fbb38 100644
          fprintf(stderr, "[SPU] tid=0x%X receive_event spuq=0x%X q=%u -> d1=0x%llX d2=0x%llX d3=0x%llX\n",
                  spu->spu_id, num, queue, (unsigned long long)ev.data1,
                  (unsigned long long)ev.data2, (unsigned long long)ev.data3); }
-@@ -2130,7 +2242,7 @@ static void ydkj_spu_out_mbox_deliver(uint32_t group_id, uint32_t spu_id,
+@@ -2130,7 +2245,7 @@ static void ydkj_spu_out_mbox_deliver(uint32_t group_id, uint32_t spu_id,
      }
      if (!q && t && t->connected_queue) q = t->connected_queue;
      if (!q) { spu_group_t* g = spu_find_group(group_id); if (g) q = g->event_queue_id; }
@@ -16790,7 +16895,7 @@ index d756b8d..49fbb38 100644
          fprintf(stderr, "[SPU->PPU] deliver? spu=0x%X intr=%d val=0x%08X q=%u (thread %s)\n",
                  spu_id, is_intr, value, q, t ? "found" : "MISSING"); }
      if (!q) return;
-@@ -2139,7 +2251,7 @@ static void ydkj_spu_out_mbox_deliver(uint32_t group_id, uint32_t spu_id,
+@@ -2139,7 +2254,7 @@ static void ydkj_spu_out_mbox_deliver(uint32_t group_id, uint32_t spu_id,
      sys_event_queue_push_by_id(q,
          ((uint64_t)spu_id << 32) | (is_intr ? 0x2u : 0x1u),
          (uint64_t)value, 0, 0);
@@ -16799,7 +16904,7 @@ index d756b8d..49fbb38 100644
          fprintf(stderr, "[SPU->PPU] mbox deliver spu=0x%X intr=%d val=0x%08X -> q=%u\n",
                  spu_id, is_intr, value, q); }
  }
-@@ -2216,7 +2328,7 @@ static int64_t sys_spu_thread_read_ls_handler(ppu_context* ctx)
+@@ -2216,7 +2331,7 @@ static int64_t sys_spu_thread_read_ls_handler(ppu_context* ctx)
      uint32_t type      = (uint32_t)ctx->gpr[6];
      { static _Atomic int s_t = -1; if (s_t < 0) s_t = getenv("SPU_LSREAD_TRACE") ? 1 : 0;
        static int n = 0;
@@ -16808,7 +16913,7 @@ index d756b8d..49fbb38 100644
            { extern void ppu_guest_caller(char*, size_t);
              char who[64]; ppu_guest_caller(who, sizeof who);
              fprintf(stderr, "[spu-readls] tid=0x%08X off=0x%05X size=%u from %s\n",
-@@ -2236,7 +2348,7 @@ static int64_t sys_spu_thread_read_ls_handler(ppu_context* ctx)
+@@ -2236,7 +2351,7 @@ static int64_t sys_spu_thread_read_ls_handler(ppu_context* ctx)
            gm_store64(vm_base + value_ea, __builtin_bswap64(v));
            { static _Atomic int s_t = -1; if (s_t < 0) s_t = getenv("SPU_LSREAD_TRACE") ? 1 : 0;
              static int n = 0;
@@ -16817,7 +16922,7 @@ index d756b8d..49fbb38 100644
                  fprintf(stderr, "[spu-readls] chain 0x%08X off=0x%05X -> 0x%llX\n",
                          tid, ls_offset, (unsigned long long)v); }
            ctx->gpr[3] = 0;
-@@ -2572,6 +2684,17 @@ static int64_t sys_process_is_spu_lock_line_reservation_address(ppu_context* ctx
+@@ -2572,6 +2687,17 @@ static int64_t sys_process_is_spu_lock_line_reservation_address(ppu_context* ctx
   * In OR mode (spu_cfg bit 0/1) the value is ORed into the pending register;
   * in overwrite mode (default) it replaces it. The SPU reads via RdSigNotify1/2
   * (read-and-clear; channel count = 1 while a value is pending). */
@@ -16835,7 +16940,7 @@ index d756b8d..49fbb38 100644
  static int64_t sys_spu_thread_write_snr_handler(ppu_context* ctx)
  {
      uint32_t tid = (uint32_t)ctx->gpr[3];
-@@ -2587,18 +2710,25 @@ static int64_t sys_spu_thread_write_snr_handler(ppu_context* ctx)
+@@ -2587,18 +2713,25 @@ static int64_t sys_spu_thread_write_snr_handler(ppu_context* ctx)
          return -1;
      }
      AcquireSRWLockShared(&s_live_ctx_lock);
@@ -17092,7 +17197,7 @@ index 44d51d6..d282836 100644
                  size, addr); }
  
 diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
-index ee91099..2eb6c2a 100644
+index ee91099..f6f32e2 100644
 --- a/runtime/syscalls/sys_ppu_thread.c
 +++ b/runtime/syscalls/sys_ppu_thread.c
 @@ -3,6 +3,7 @@
@@ -17103,15 +17208,29 @@ index ee91099..2eb6c2a 100644
  
  /* sys_ppu_thread_exit never returns on hardware. Returning CELL_OK to the
   * guest lets it run on past the call: Twisted Metal has a thread that exits
-@@ -25,6 +26,7 @@ static PPU_TLS int     s_exit_done = 0;
+@@ -25,6 +26,8 @@ static PPU_TLS int     s_exit_done = 0;
  #include <stddef.h>
  #include "sys_ppu_thread.h"
  #include "../platform/win32_compat.h"   /* GetCurrentThreadId on POSIX */
++#include "../platform/host_qos.h"       /* PS3_QOS: guest threads at USER_INTERACTIVE */
 +#include "ps3emu/ps3_ftrace.h"           /* PS3_FTRACE: thread names for the report */
  #include <string.h>
  #include <stdio.h>
  #include <stdlib.h>   /* getenv (else return value truncated to int on x64) */
-@@ -281,6 +283,7 @@ uint64_t ppu_thread_register_main(void)
+@@ -129,6 +132,12 @@ static void* ppu_host_thread_proc(void* param)
+ {
+     ppu_thread_info* info = (ppu_thread_info*)param;
+ 
++    /* PS3_QOS (host_qos.h): a new pthread starts at QOS_CLASS_DEFAULT on
++     * macOS, where the game's own frame, SPURS and streaming threads can land
++     * on the efficiency cores. Its low-priority background threads get
++     * USER_INITIATED. */
++    ps3_host_qos_self(info->priority < PS3_HOST_QOS_PPU_INTERACTIVE_BELOW);
++
+ #ifdef _WIN32
+     /* Reserve stack for the STACK_OVERFLOW handler, same as main() does for the
+      * main thread. Deep recompiled call chains DO overflow even a 256 MB stack
+@@ -281,6 +290,7 @@ uint64_t ppu_thread_register_main(void)
          t->joinable = 0;                    /* nobody joins the main thread */
          t->priority = g_ppu_primary_prio;
          strncpy(t->name, "main", sizeof(t->name) - 1);
@@ -17119,7 +17238,7 @@ index ee91099..2eb6c2a 100644
  #ifdef _WIN32
          t->finish_event = CreateEventA(NULL, TRUE, FALSE, NULL);
  #else
-@@ -430,6 +433,7 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -430,6 +440,7 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
          const char* name = (const char*)vm_to_host(name_addr);
          strncpy(t->name, name, sizeof(t->name) - 1);
          t->name[sizeof(t->name) - 1] = '\0';
@@ -17127,7 +17246,7 @@ index ee91099..2eb6c2a 100644
      }
  
      /* Create synchronization for join */
-@@ -654,7 +658,7 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
+@@ -654,7 +665,7 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
  {
      uint64_t tid          = LV2_ARG_U64(ctx, 0);
      uint32_t status_addr  = LV2_ARG_PTR(ctx, 1);
@@ -17136,7 +17255,7 @@ index ee91099..2eb6c2a 100644
  
      table_lock();
      ppu_thread_info* t = find_thread(tid);
-@@ -1280,6 +1284,7 @@ int64_t sys_ppu_thread_rename(ppu_context* ctx)
+@@ -1280,6 +1291,7 @@ int64_t sys_ppu_thread_rename(ppu_context* ctx)
          const char* name = (const char*)vm_to_host(name_addr);
          strncpy(t->name, name, sizeof(t->name) - 1);
          t->name[sizeof(t->name) - 1] = '\0';

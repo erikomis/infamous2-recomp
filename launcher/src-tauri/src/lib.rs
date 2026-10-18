@@ -267,6 +267,19 @@ fn exe_name() -> &'static str {
     }
 }
 
+/// The game a development checkout built. On macOS that is the binary inside
+/// build/Infamous2Recomp.app (the bundle is what lets Game Mode turn on;
+/// run.sh starts it directly), with build/Infamous2Recomp a symlink to it;
+/// a build from before the bundle has only the plain executable.
+fn dev_executable(build: &Path) -> PathBuf {
+    let app = build.join("Infamous2Recomp.app/Contents/MacOS").join(exe_name());
+    if cfg!(target_os = "macos") && app.is_file() {
+        app
+    } else {
+        build.join(exe_name())
+    }
+}
+
 /// Read install.json, or recognise a development checkout (repo root or its
 /// infamous2-lle folder) so a tree built by hand can be played too.
 fn resolve_install(dir: &Path) -> Result<InstallInfo, String> {
@@ -300,7 +313,7 @@ fn resolve_install(dir: &Path) -> Result<InstallInfo, String> {
         return Err(format!("{}: no install.json", dir.display()));
     };
     let port = root.join("infamous2-lle");
-    let exe = port.join("build").join(exe_name());
+    let exe = dev_executable(&port.join("build"));
     if !exe.is_file() {
         return Err(format!("{}: not built yet", exe.display()));
     }
@@ -2097,6 +2110,25 @@ mod tests {
         assert_eq!(base64(b"f"), "Zg==");
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn dev_executable_prefers_the_bundle() {
+        let build = std::env::temp_dir().join(format!("i2l-devexe-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&build);
+        fs::create_dir_all(&build).unwrap();
+        // A build from before the bundle: only the plain executable.
+        assert_eq!(dev_executable(&build), build.join(exe_name()));
+        let macos = build.join("Infamous2Recomp.app/Contents/MacOS");
+        fs::create_dir_all(&macos).unwrap();
+        fs::write(macos.join(exe_name()), b"").unwrap();
+        let want = if cfg!(target_os = "macos") {
+            macos.join(exe_name())
+        } else {
+            build.join(exe_name())
+        };
+        assert_eq!(dev_executable(&build), want);
+        let _ = fs::remove_dir_all(&build);
     }
 
     #[test]

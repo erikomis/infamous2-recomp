@@ -330,6 +330,17 @@ não desenham nada; `PS3_OVERLAY_FORCE_OPEN=1` / `PS3_OVERLAY_HUD=1` desenham o
 menu / o painel lá também, nos quadros que o `tools/capture.sh` guarda (um
 interruptor de teste).
 
+**Modo Jogo.** No macOS a compilação gera um app,
+`build/Infamous2Recomp.app` (`build/Infamous2Recomp` é um link para o
+executável dele, e o `run.sh` o abre direto, então as variáveis e o log
+funcionam como antes). O Info.plist dele diz que é um jogo, e assim o macOS 14+
+liga o Modo Jogo enquanto o jogo está em tela cheia e na frente: prioridade na
+CPU e na GPU, metade da latência Bluetooth para controles e AirPods. A tela
+cheia do macOS liga o Modo Jogo; a sem bordas pode não ligar. O jogo também
+impede o macOS de colocá-lo em App Nap. `PS3_QOS=1` (experimental) põe as
+threads de PPU, SPU e RSX na classe de QoS mais alta; nos testes não aumentou o
+fps e coincidiu com travamentos.
+
 | Variável | O que faz |
 | --- | --- |
 | `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | como o jogo abre: em janela (padrão), na tela cheia do macOS (um Space só dele) ou em tela cheia sem bordas (cobre a tela no lugar, sem barra de menus nem Dock, troca de app na hora) |
