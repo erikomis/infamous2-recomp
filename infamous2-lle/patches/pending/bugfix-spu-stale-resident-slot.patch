@@ -1,7 +1,11 @@
-diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
---- a/runtime/spu/spu_channels.c	2026-10-18 14:24:32
-+++ b/runtime/spu/spu_channels.c	2026-10-18 14:24:32
-@@ -20,7 +20,6 @@
+diff -ruN a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+--- a/runtime/spu/spu_channels.c	2026-10-18 15:03:13
++++ b/runtime/spu/spu_channels.c	2026-10-18 15:03:13
+@@ -17,10 +17,10 @@
+ #include "../memory/guest_mem_atomic.h"
+ #include "spu_coherency.h" /* lock-line lock + PPU-write coherence bitmap */
+ #include "spu_helpers.h"   /* spu_splat_u32 / spu_ls_read128 (SMC microstep) */
++#include "spu_slot_verify.h" /* resident code slot word check (dispatch) */
  #include "spu_lockstep.h"
  #include "spu_interp.h"    /* spu_lifted_fn / spu_lifted_lookup -- defined below */
  #include "ps3emu/ps3_ftrace.h"
@@ -9,7 +13,7 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
  #include <stdint.h>
  #include <stdio.h>
  #include <stdlib.h>
-@@ -1796,21 +1795,58 @@
+@@ -1796,21 +1796,63 @@
   * (spu_interp.c, rejoin path). It IS the registry lookup, so overlay eviction and
   * self-modifying-code invalidation are honored automatically. Lived in
   * spu_fn_registry.c before the registry was consolidated into this TU. */
@@ -25,11 +29,16 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 + * address: another slot whose bytes are there (the code that was streamed in)
 + * or the resident overlay may, the base image may not, and with none of them
 + * the code is interpreted as before. PS3_SPU_SLOT_VERIFY=0 turns it off. */
++int g_spu_slot_verify = 1;
++__attribute__((constructor)) static void spu_slot_verify_init(void)
++{
++    const char* e = getenv("PS3_SPU_SLOT_VERIFY");
++    if (e) g_spu_slot_verify = atoi(e);
++}
++
 +int spu_resident_slot_stale(spu_context* ctx, unsigned slot, uint32_t pc)
 +{
-+    static _Atomic int on = -1;
-+    if (on < 0) { const char* e = getenv("PS3_SPU_SLOT_VERIFY"); on = e ? atoi(e) : 1; }
-+    if (!on) return 0;
++    if (!g_spu_slot_verify) return 0;
 +    const uint32_t lsa = ctx->resident_code[slot].lsa;
 +    const uint32_t at = (pc & SPU_LS_MASK) & ~3u;
 +    if (at < lsa || at + 4 > lsa + ctx->resident_code[slot].size) return 0;
@@ -56,7 +65,7 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
          for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
              int img = ctx->resident_code[slot].image_id;
              if (img && lsa - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
-+                if (spu_resident_slot_stale((spu_context*)ctx, slot, lsa)) { stale = 1; continue; }
++                if (spu_slot_word_stale((spu_context*)ctx, slot, lsa)) { stale = 1; continue; }
                  if (!ctx->resident_code[slot].reloc) return (spu_lifted_fn)spu_lookup(lsa, img);
                  spu_lifted_fn rf = (spu_lifted_fn)spu_lookup(lsa - ctx->resident_code[slot].lsa, img);
                  if (rf) ((spu_context*)ctx)->code_base = ctx->resident_code[slot].lsa;
@@ -68,7 +77,7 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
      }
      spu_lifted_fn f = (spu_lifted_fn)spu_lookup(lsa, ctx ? ctx->image_id : 0);
      if (ctx)   /* a resident module's code outside its image (see spu_indirect_branch) */
-@@ -1906,27 +1942,16 @@
+@@ -1906,27 +1948,16 @@
   * single hottest SPU leaf in a New Marais profile (~6% of SPU samples) for a
   * check that almost never matches. */
  uint8_t g_spu_stack_reset_hint[1024];
@@ -100,7 +109,7 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
      }
  }
  
-@@ -2608,11 +2633,6 @@
+@@ -2608,11 +2639,6 @@
      return 0;
  }
  
@@ -112,15 +121,15 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
  /* The full resolver. spu_indirect_branch (below) takes the common case itself
   * and comes here for everything else. */
  static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
-@@ -2797,6 +2817,7 @@
+@@ -2797,6 +2823,7 @@
      for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
          if (ctx->resident_code[slot].image_id && ctx->pc >= ctx->resident_code[slot].lsa &&
              ctx->pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
-+            if (spu_resident_slot_stale(ctx, slot, ctx->pc)) { code_owner = -1; continue; }
++            if (spu_slot_word_stale(ctx, slot, ctx->pc)) { code_owner = -1; continue; }
              code_owner = ctx->resident_code[slot].image_id;
              if (!ctx->resident_code[slot].reloc) fn = spu_lookup(ctx->pc, code_owner);
              else if ((fn = spu_lookup(ctx->pc - ctx->resident_code[slot].lsa, code_owner)))
-@@ -2804,6 +2825,9 @@
+@@ -2804,6 +2831,9 @@
              break;
          }
      }
@@ -130,7 +139,7 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
      if (!code_owner && ctx->resident_task)
          fn = spu_lookup(ctx->pc, ctx->resident_task);
      /* Resident overlay next: streamed code overwrote that LS range, so its lift
-@@ -2814,7 +2838,7 @@
+@@ -2814,7 +2844,7 @@
      /* A resident module's code outside its own image: the save/restore stub the
       * WWS policy module writes at the top of local store (LS 0x3FEC0) and calls
       * from its interrupt path. Its lift belongs to the module's image. */
@@ -139,7 +148,7 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
          if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc)
              fn = spu_lookup(ctx->pc, ctx->resident_code[slot].image_id);
      /* The job returned through the link register we planted: it is finished.
-@@ -2946,9 +2970,9 @@
+@@ -2946,9 +2976,9 @@
                 * costs far less per instruction than the full interpreter's
                 * per-step bookkeeping and hands anything else to it.
                 * PS3_SPU_STUB_MICRO=0: the full interpreter as before. */
@@ -152,7 +161,7 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
                    /* It ran (and possibly handed off to the interpreter) either
                     * way: a 0 is a stop or a runaway, not "try again". */
                    const int ran = spu_smc_microstep(ctx);
-@@ -3407,20 +3431,15 @@
+@@ -3407,20 +3437,15 @@
   * LBP_HLE_JOBDONE diagnostics (the overlay itself is switched by the GET hook,
   * or on a lookup miss, which still goes slow). PS3_SPU_FASTJOB=0 restores the
   * old routing. */
@@ -180,15 +189,15 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
  }
  
  void spu_indirect_branch(spu_context* ctx)
-@@ -3449,6 +3468,7 @@
+@@ -3449,6 +3474,7 @@
          for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
              if (ctx->resident_code[slot].image_id && pc >= ctx->resident_code[slot].lsa &&
                  pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
-+                if (spu_resident_slot_stale(ctx, slot, pc)) { code_owner = -1; continue; }
++                if (spu_slot_word_stale(ctx, slot, pc)) { code_owner = -1; continue; }
                  code_owner = ctx->resident_code[slot].image_id;
                  if (!ctx->resident_code[slot].reloc) fn = spu_lookup(pc, code_owner);
                  else if ((fn = spu_lookup(pc - ctx->resident_code[slot].lsa, code_owner)))
-@@ -3456,10 +3476,11 @@
+@@ -3456,10 +3482,11 @@
                  break;
              }
          }
@@ -201,15 +210,23 @@ diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
              if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc)
                  fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
          if (!fn) goto slow;
-diff -ru a/runtime/spu/spu_dispatch_mt.c b/runtime/spu/spu_dispatch_mt.c
---- a/runtime/spu/spu_dispatch_mt.c	2026-10-18 14:24:32
-+++ b/runtime/spu/spu_dispatch_mt.c	2026-10-18 14:24:32
-@@ -63,14 +63,16 @@
+diff -ruN a/runtime/spu/spu_dispatch_mt.c b/runtime/spu/spu_dispatch_mt.c
+--- a/runtime/spu/spu_dispatch_mt.c	2026-10-18 15:03:13
++++ b/runtime/spu/spu_dispatch_mt.c	2026-10-18 15:03:13
+@@ -14,6 +14,7 @@
+  * image-23 cri hack, lookup miss diagnostics) falls back to the full resolver.
+  */
+ #include "spu_context.h"
++#include "spu_slot_verify.h"
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
+@@ -63,14 +64,16 @@
          for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
              if (ctx->resident_code[slot].image_id &&
                  pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
-+                { extern int spu_resident_slot_stale(spu_context*, unsigned, uint32_t);
-+                  if (spu_resident_slot_stale(ctx, slot, pc)) { owned = -1; continue; } }   /* not this slot's code */
++                {
++                  if (spu_slot_word_stale(ctx, slot, pc)) { owned = -1; continue; } }   /* not this slot's code */
                  if (!ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
                  else if ((fn = spu_lookup(pc - ctx->resident_code[slot].lsa, ctx->resident_code[slot].image_id)))
                      ctx->code_base = ctx->resident_code[slot].lsa;
@@ -223,18 +240,20 @@ diff -ru a/runtime/spu/spu_dispatch_mt.c b/runtime/spu/spu_dispatch_mt.c
              if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
          if (fn) {
              ctx->pc = pc;
-diff -ru a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
---- a/runtime/spu/spu_drain.c	2026-10-18 14:24:32
-+++ b/runtime/spu/spu_drain.c	2026-10-18 14:24:32
-@@ -7,7 +7,6 @@
+diff -ruN a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+--- a/runtime/spu/spu_drain.c	2026-10-18 15:03:13
++++ b/runtime/spu/spu_drain.c	2026-10-18 15:03:13
+@@ -6,8 +6,8 @@
+  * functions (not macros) means the SPU_DRAIN/SPU_RET call sites are already in
   * place -- later milestones only replace the bodies. */
  #include "spu_context.h"
++#include "spu_slot_verify.h"
  #include "../../include/ps3emu/log_first.h"   /* PS3_LOG_FIRST */
 -#include "../../include/ps3emu/ps3_toggles.h" /* PS3_TOGGLE_FILE: live knobs */
  #include <setjmp.h>
  #include <pthread.h>   /* SPU_IRQSTAT counters */
  #include <time.h>
-@@ -53,22 +52,12 @@
+@@ -53,22 +53,12 @@
  /* For the drain's inline copy of the plain path below. */
  extern uint8_t g_spu_stack_reset_hint[1024];   /* spu_channels.c */
  extern void spu_check_stack_reset(spu_context*, void (*)(spu_context*));
@@ -261,7 +280,7 @@ diff -ru a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
  static __attribute__((noinline)) void spu_task_launch_check_job_end(spu_context* ctx)
  {
      static int _n = 0;
-@@ -553,14 +542,14 @@
+@@ -553,14 +543,14 @@
              if (g_yz_lockstep_on) yz_lockstep_tick(ctx);   /* 0 = off: skip the call per step */
              /* spu_task_launch_check's no-diagnostics path, inline: the call on
               * every drain step was ~2% of SPU samples on its own. */
@@ -278,12 +297,12 @@ diff -ru a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
                  spu_task_launch_check(ctx, (void*)fn);
              }
              if (ctx->int_enable && !ctx->irq_saved && (spu_ev_get(ctx) & ctx->event_mask)) {
-@@ -599,14 +588,16 @@
+@@ -599,14 +589,16 @@
              for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
                  if (ctx->resident_code[slot].image_id &&
                      pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
-+                    { extern int spu_resident_slot_stale(spu_context*, unsigned, uint32_t);
-+                      if (spu_resident_slot_stale(ctx, slot, pc)) { owned = -1; continue; } }   /* not this slot's code */
++                    {
++                      if (spu_slot_word_stale(ctx, slot, pc)) { owned = -1; continue; } }   /* not this slot's code */
                      if (!ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
                      else if ((fn = spu_lookup(pc - ctx->resident_code[slot].lsa, ctx->resident_code[slot].image_id)))
                          ctx->code_base = ctx->resident_code[slot].lsa;
@@ -297,9 +316,39 @@ diff -ru a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
                  if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
              if (fn) {
                  { static int _n = 0; if (PS3_LOG_FIRST(_n, 8))
-diff -ru a/runtime/spu/tests/test_spu_lifted_start.c b/runtime/spu/tests/test_spu_lifted_start.c
---- a/runtime/spu/tests/test_spu_lifted_start.c	2026-10-18 14:24:32
-+++ b/runtime/spu/tests/test_spu_lifted_start.c	2026-10-18 14:24:32
+diff -ruN a/runtime/spu/spu_slot_verify.h b/runtime/spu/spu_slot_verify.h
+--- a/runtime/spu/spu_slot_verify.h	1969-12-31 21:00:00
++++ b/runtime/spu/spu_slot_verify.h	2026-10-18 15:03:13
+@@ -0,0 +1,26 @@
++/* Resident code slot check on the dispatch path (see spu_resident_slot_stale
++ * in spu_channels.c): the word at pc is compared with the slot module's own
++ * byte image inline, and only a mismatch takes the out-of-line call that
++ * decides (PS3_SPU_SLOT_VERIFY) and reports. */
++#ifndef SPU_SLOT_VERIFY_H
++#define SPU_SLOT_VERIFY_H
++#include <stdint.h>
++#include <string.h>
++#include "spu_context.h"
++
++extern uint8_t* vm_base;
++extern int g_spu_slot_verify;   /* PS3_SPU_SLOT_VERIFY, default 1 */
++int spu_resident_slot_stale(spu_context* ctx, unsigned slot, uint32_t pc);
++
++/* Caller has checked pc - lsa < size for this slot. */
++static inline int spu_slot_word_stale(spu_context* ctx, unsigned slot, uint32_t pc)
++{
++    if (!g_spu_slot_verify) return 0;
++    const uint32_t at = pc & 0x3FFFCu;
++    const uint32_t off = at - ctx->resident_code[slot].lsa;
++    uint32_t have, want;
++    memcpy(&have, ctx->ls + at, 4);
++    memcpy(&want, vm_base + ctx->resident_code[slot].source_ea + off, 4);
++    return have != want && spu_resident_slot_stale(ctx, slot, pc);
++}
++#endif
+diff -ruN a/runtime/spu/tests/test_spu_lifted_start.c b/runtime/spu/tests/test_spu_lifted_start.c
+--- a/runtime/spu/tests/test_spu_lifted_start.c	2026-10-18 15:03:13
++++ b/runtime/spu/tests/test_spu_lifted_start.c	2026-10-18 15:03:13
 @@ -383,7 +383,17 @@
      spu_context* ctx = (spu_context*)calloc(1, sizeof *ctx);
      if (!ctx) { check(0, "allocate streamed code context"); return; }
