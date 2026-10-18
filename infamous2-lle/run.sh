@@ -87,6 +87,10 @@ export PS3RECOMP_ENG_SKIP_FP="${PS3RECOMP_ENG_SKIP_FP-5f740845528b0e62,7875289ea
 #   PS3_WINDOW_MODE=windowed|fullscreen|borderless   how it opens (windowed)
 #   PS3_WINDOW_SIZE=1920x1080   windowed size in points (1280x720 by default)
 #   PS3_MOUSE_CAPTURE=0         the mouse camera without capturing the cursor
+#   PS3_DISPLAY=2|<name>        the screen it opens on (1 = the menu bar's)
+#   PS3_VSYNC=0                 present without waiting for the refresh
+# Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
+# PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200.
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or
 # Option+Return toggles fullscreen, Cmd+Ctrl+F macOS fullscreen; a click in
 # the game captures the mouse, Esc or Cmd releases it.

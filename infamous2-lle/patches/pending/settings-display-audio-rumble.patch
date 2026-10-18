@@ -1,0 +1,611 @@
+Toolkit change for feat/settings-display-audio: screen choice and vsync for
+the macOS Metal window, master volume and output device for the SDL audio
+backend, and controller rumble from cellPadSetActDirect.
+
+A diff against the ps3recomp-fork/ working tree as of 2026-10-17 (fork
+770660a + ps3recomp-fork-770660a-with-upstream-prs.patch + that day's
+uncommitted work). Touches libs/video/rsx_metal_backend.{m,h},
+libs/audio/cellAudio.c, libs/input/cellPad.c and adds two unit tests
+(libs/audio/tests/test_audio_settings.c, libs/input/tests/test_pad_rumble.c).
+New variables: PS3_DISPLAY, PS3_VSYNC, PS3_AUDIO_VOLUME, PS3_AUDIO_DEVICE,
+PS3_RUMBLE, PS3_RUMBLE_STRENGTH, PS3_RUMBLE_LOG. Unset, every one of them
+leaves today's behaviour, except that rumble now reaches the controller at
+the strength the title asks for (the small motor used to get 1/255 of full
+and every request stopped after 100 ms).
+
+Apply from the repo root, rebuild, then fold it into
+ps3recomp-fork-770660a-with-upstream-prs.patch as usual and delete this file:
+    git -C ps3recomp-fork apply --check ../infamous2-lle/patches/pending/settings-display-audio-rumble.patch
+    git -C ps3recomp-fork apply ../infamous2-lle/patches/pending/settings-display-audio-rumble.patch
+
+diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
+index d2f8c67..cbcd738 100644
+--- a/libs/audio/cellAudio.c
++++ b/libs/audio/cellAudio.c
+@@ -20,6 +20,7 @@
+ #include <stdlib.h>
+ #include <stdint.h>
+ #include <math.h>
++#include <ctype.h>
+ 
+ /* Event-queue push/lookup (runtime/syscalls/sys_event.c). Forward-declared
+  * rather than including sys_event.h to avoid pulling PPU context/syscall
+@@ -160,10 +161,75 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+  * Host audio output backend
+  * -----------------------------------------------------------------------*/
+ 
++/* PS3_AUDIO_VOLUME=0..100: the host's master volume in percent (100 = the
++ * title's own mix, unchanged). Applied to the final mix just before the
++ * device, on a squared curve so the slider sounds even (50 is about -12 dB,
++ * 25 about -24 dB); 0 is silence. Like PS3_AUDIO_MUTE it only touches what the
++ * host plays, never what the title sees. */
++static float audio_volume_gain(const char* e)
++{
++    if (!e || !*e) return 1.0f;
++    char* end = NULL;
++    double v = strtod(e, &end);
++    if (end == e || v != v) return 1.0f;
++    if (v < 0) v = 0;
++    if (v > 100) v = 100;
++    return (float)((v / 100.0) * (v / 100.0));
++}
++
+ #if AUDIO_BACKEND_SDL2
+ 
+ static SDL_AudioDeviceID s_sdl_audio_dev = 0;
+ 
++/* Case-insensitive strstr (ASCII), for audio_match_device. */
++static const char* audio_find_nocase(const char* hay, const char* needle)
++{
++    for (; *hay; hay++) {
++        size_t k = 0;
++        while (needle[k] && hay[k] &&
++               tolower((unsigned char)hay[k]) == tolower((unsigned char)needle[k])) k++;
++        if (!needle[k]) return hay;
++    }
++    return NULL;
++}
++
++/* PS3_AUDIO_DEVICE=<name>: which output device the host plays to. The name
++ * is matched exactly first, then ignoring case, then as a part of a device's
++ * name ("AirPods" finds "Erik's AirPods Pro"); unset or no match = the
++ * system default output (which SDL follows when it changes). SDL backend
++ * only; WASAPI keeps the default endpoint. Returns the index of the device
++ * in names[], or -1. */
++static int audio_match_device(const char* want, const char* const* names, int n)
++{
++    if (!want || !*want) return -1;
++    for (int i = 0; i < n; i++) if (names[i] && !strcmp(names[i], want)) return i;
++    for (int i = 0; i < n; i++)
++        if (names[i] && strlen(names[i]) == strlen(want) && audio_find_nocase(names[i], want) == names[i])
++            return i;
++    for (int i = 0; i < n; i++) if (names[i] && audio_find_nocase(names[i], want)) return i;
++    return -1;
++}
++
++/* The SDL output device PS3_AUDIO_DEVICE names, or NULL for the default. */
++static const char* audio_sdl_pick_device(void)
++{
++    static char picked[256];
++    const char* want = getenv("PS3_AUDIO_DEVICE");
++    if (!want || !*want) return NULL;
++    const char* names[32];
++    int n = SDL_GetNumAudioDevices(0);
++    if (n > 32) n = 32;
++    for (int i = 0; i < n; i++) names[i] = SDL_GetAudioDeviceName(i, 0);
++    const int k = audio_match_device(want, names, n < 0 ? 0 : n);
++    if (k < 0) {
++        printf("[cellAudio] PS3_AUDIO_DEVICE=%s: no such output, using the default. Outputs:\n", want);
++        for (int i = 0; i < n; i++) printf("[cellAudio]   %s\n", names[i] ? names[i] : "?");
++        return NULL;
++    }
++    snprintf(picked, sizeof picked, "%s", names[k]);
++    return picked;
++}
++
+ static int audio_backend_init(void)
+ {
+     if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
+@@ -181,11 +247,18 @@ static int audio_backend_init(void)
+     want.samples  = CELL_AUDIO_BLOCK_SAMPLES;
+     want.callback = NULL; /* We'll use SDL_QueueAudio */
+ 
+-    s_sdl_audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
++    const char* dev = audio_sdl_pick_device();
++    s_sdl_audio_dev = SDL_OpenAudioDevice(dev, 0, &want, &have, 0);
++    if (s_sdl_audio_dev == 0 && dev) {
++        printf("[cellAudio] cannot open \"%s\" (%s), using the default output\n", dev, SDL_GetError());
++        dev = NULL;
++        s_sdl_audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
++    }
+     if (s_sdl_audio_dev == 0) {
+         printf("[cellAudio] SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+         return -1;
+     }
++    printf("[cellAudio] output: %s\n", dev ? dev : "system default");
+ 
+     SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */
+     return 0;
+@@ -416,7 +489,9 @@ static inline float ld_be_f32(const float* p)
+  *   PS3_AUDIO_MUTE=1  silence the HOST output only; the title still sees a
+  *                     working device and every mix/pacing path runs as normal
+  *                     (unlike PS3_NO_AUDIO, which changes what the guest does).
+- *                     AUDIO_WAV still records the real mix. */
++ *                     AUDIO_WAV still records the real mix.
++ *   PS3_AUDIO_VOLUME  0..100, the host's master volume (audio_volume_gain);
++ *                     AUDIO_WAV records the mix before it too. */
+ static void audio_submit_mix(void)
+ {
+     { static FILE* _wf = (FILE*)-1;
+@@ -424,6 +499,13 @@ static void audio_submit_mix(void)
+       if (_wf) { fwrite(s_mix_buffer, sizeof(float), CELL_AUDIO_BLOCK_SAMPLES * 2, _wf); fflush(_wf); } }
+     { static int mute = -1; if (mute < 0) mute = getenv("PS3_AUDIO_MUTE") ? 1 : 0;
+       if (mute) memset(s_mix_buffer, 0, sizeof(s_mix_buffer)); }
++    { static float gain = -1.0f;
++      if (gain < 0) {
++          gain = audio_volume_gain(getenv("PS3_AUDIO_VOLUME"));
++          if (gain != 1.0f) printf("[cellAudio] PS3_AUDIO_VOLUME=%s: gain %.3f\n", getenv("PS3_AUDIO_VOLUME"), gain);
++      }
++      if (gain != 1.0f)
++          for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) s_mix_buffer[i] *= gain; }
+     audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
+ }
+ 
+diff --git a/libs/audio/tests/test_audio_settings.c b/libs/audio/tests/test_audio_settings.c
+new file mode 100644
+index 0000000..41bae2d
+--- /dev/null
++++ b/libs/audio/tests/test_audio_settings.c
+@@ -0,0 +1,44 @@
++/* PS3_AUDIO_VOLUME's gain curve and PS3_AUDIO_DEVICE's name matching.
++ * macOS: clang -std=gnu17 -I include -I /opt/homebrew/include
++ *   libs/audio/tests/test_audio_settings.c -L /opt/homebrew/lib -lSDL2
++ *   -Wl,-dead_strip -o /tmp/test_audio_settings && /tmp/test_audio_settings
++ */
++#include "../cellAudio.c"
++#include <assert.h>
++
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++
++int main(void)
++{
++    assert(audio_volume_gain(NULL) == 1.0f);
++    assert(audio_volume_gain("") == 1.0f);
++    assert(audio_volume_gain("loud") == 1.0f);
++    assert(audio_volume_gain("100") == 1.0f);
++    assert(audio_volume_gain("150") == 1.0f);
++    assert(audio_volume_gain("0") == 0.0f);
++    assert(audio_volume_gain("-5") == 0.0f);
++    assert(fabsf(audio_volume_gain("50") - 0.25f) < 1e-6f);
++    assert(fabsf(audio_volume_gain("25") - 0.0625f) < 1e-6f);
++
++    const char* names[] = { "MacBook Pro Speakers", "Erik's AirPods Pro", "External Headphones", "DELL U2720Q" };
++    assert(audio_match_device(NULL, names, 4) == -1);
++    assert(audio_match_device("", names, 4) == -1);
++    assert(audio_match_device("External Headphones", names, 4) == 2);
++    assert(audio_match_device("dell u2720q", names, 4) == 3);
++    assert(audio_match_device("airpods", names, 4) == 1);
++    assert(audio_match_device("Speakers", names, 4) == 0);
++    assert(audio_match_device("HDMI", names, 4) == -1);
++    const char* dup[] = { "Headphones 2", "Headphones" };
++    assert(audio_match_device("headphones", dup, 2) == 1);   /* a whole name beats a part */
++    printf("test_audio_settings: ok\n");
++    return 0;
++}
+diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
+index bfaacb3..21772cb 100644
+--- a/libs/input/cellPad.c
++++ b/libs/input/cellPad.c
+@@ -128,6 +128,68 @@ static SDL_GameController* s_sdl_controllers[PAD_MAX_HOST_PORTS];
+ static int s_sdl_inited = 0;
+ #endif
+ 
++/* ---------------------------------------------------------------------------
++ * Rumble (cellPadSetActDirect)
++ *
++ * A DualShock 3 has two motors: the small one (motor[0]) is on or off, the
++ * large one (motor[1]) takes 0-255. A title sets them and they stay that way
++ * until it sets them again -- inFAMOUS 2 only calls when the value changes.
++ * SDL's rumble runs for a duration instead, so the last request per port is
++ * kept and renewed from the pad poll while it is non-zero; if the title stops
++ * polling (a hang, a closed window), the motors stop within PAD_RUMBLE_HOLD_MS.
++ * Large -> SDL's low-frequency motor, small -> the high-frequency one, which
++ * is how DualShock 4/DualSense and Xbox pads are laid out too.
++ *
++ *   PS3_RUMBLE=0                 no vibration at all
++ *   PS3_RUMBLE_STRENGTH=0..200   percent applied to both motors (100); above
++ *                                100 boosts a weak large-motor value, capped
++ *                                at the motor's maximum
++ *   PS3_RUMBLE_LOG=1             print every request the title makes
++ * -------------------------------------------------------------------------*/
++
++#define PAD_RUMBLE_HOLD_MS     1000   /* one SDL request lasts this long ... */
++#define PAD_RUMBLE_RENEW_MS     400   /* ... and is renewed this often */
++
++typedef struct {
++    u16 lo, hi;        /* what the host motors were last asked for */
++    u64 sent_ms;       /* when (GetTickCount64), 0 = nothing pending */
++} PadRumble;
++static PadRumble s_rumble[PAD_MAX_HOST_PORTS];
++
++/* Strength in percent from PS3_RUMBLE / PS3_RUMBLE_STRENGTH: 0 = off. */
++static int pad_rumble_strength_from(const char* on, const char* strength)
++{
++    if (on && on[0] == '0' && on[1] == 0) return 0;
++    if (!strength || !*strength) return 100;
++    char* end = NULL;
++    long v = strtol(strength, &end, 10);
++    if (end == strength) return 100;
++    if (v < 0) v = 0;
++    if (v > 200) v = 200;
++    return (int)v;
++}
++
++static int pad_rumble_strength(void)
++{
++    static int s = -1;
++    if (s < 0) {
++        s = pad_rumble_strength_from(getenv("PS3_RUMBLE"), getenv("PS3_RUMBLE_STRENGTH"));
++        fprintf(stderr, "[cellPad] rumble %s", s ? "on" : "off (PS3_RUMBLE=0)");
++        if (s && s != 100) fprintf(stderr, ", strength %d%%", s);
++        fputc('\n', stderr);
++    }
++    return s;
++}
++
++/* The two host motor levels (0-65535) for a PS3 actuator request. */
++static void pad_rumble_levels(u8 small_on, u8 large, int pct, u16* lo, u16* hi)
++{
++    unsigned long l = (unsigned long)large * 257ul * (unsigned long)pct / 100ul;
++    unsigned long h = small_on ? 65535ul * (unsigned long)pct / 100ul : 0;
++    *lo = (u16)(l > 65535ul ? 65535ul : l);
++    *hi = (u16)(h > 65535ul ? 65535ul : h);
++}
++
+ /* ---------------------------------------------------------------------------
+  * XInput backend
+  * -----------------------------------------------------------------------*/
+@@ -348,6 +410,17 @@ static u8 pad_sdl_analog(uint32_t bound, uint32_t in, u8 lt, u8 rt)
+     return v;
+ }
+ 
++/* Send port i's rumble state to its controller (with a fresh duration). */
++static void pad_sdl_rumble_send(int i)
++{
++    SDL_GameController* gc = s_sdl_controllers[i];
++    if (!gc) return;
++    PadRumble* r = &s_rumble[i];
++    const int on = r->lo || r->hi;
++    SDL_GameControllerRumble(gc, r->lo, r->hi, on ? PAD_RUMBLE_HOLD_MS : 0);
++    r->sent_ms = on ? GetTickCount64() : 0;
++}
++
+ static void pad_poll_sdl2(void)
+ {
+     if (pad_sdl_off()) {
+@@ -361,8 +434,10 @@ static void pad_poll_sdl2(void)
+             /* Try to open newly connected controllers */
+             if (SDL_IsGameController(i)) {
+                 s_sdl_controllers[i] = SDL_GameControllerOpen(i);
+-                fprintf(stderr, "[cellPad] SDL controller %d connected: %s\n", i,
+-                        s_sdl_controllers[i] ? SDL_GameControllerName(s_sdl_controllers[i]) : "(open failed)");
++                fprintf(stderr, "[cellPad] SDL controller %d connected: %s%s\n", i,
++                        s_sdl_controllers[i] ? SDL_GameControllerName(s_sdl_controllers[i]) : "(open failed)",
++                        s_sdl_controllers[i] && !SDL_GameControllerHasRumble(s_sdl_controllers[i])
++                            ? " (no rumble)" : "");
+             }
+         }
+ 
+@@ -373,11 +448,16 @@ static void pad_poll_sdl2(void)
+                 SDL_GameControllerClose(gc);
+                 s_sdl_controllers[i] = NULL;
+             }
++            memset(&s_rumble[i], 0, sizeof s_rumble[i]);
+             continue;
+         }
+ 
+         s_host_state[i].connected = 1;
+ 
++        /* Keep a rumble the title set going (see PAD_RUMBLE_HOLD_MS). */
++        if (s_rumble[i].sent_ms && GetTickCount64() - s_rumble[i].sent_ms >= PAD_RUMBLE_RENEW_MS)
++            pad_sdl_rumble_send(i);
++
+         /* Every SDL input, then the PS3 controls bound to them ([controller]
+          * in PS3_INPUT_MAP; by default each button is its PS3 namesake and
+          * the triggers are L2/R2, pressed past 3000). */
+@@ -453,10 +533,12 @@ static void pad_shutdown_backend(void)
+ {
+     for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
+         if (s_sdl_controllers[i]) {
++            SDL_GameControllerRumble(s_sdl_controllers[i], 0, 0, 0);
+             SDL_GameControllerClose(s_sdl_controllers[i]);
+             s_sdl_controllers[i] = NULL;
+         }
+     }
++    memset(s_rumble, 0, sizeof s_rumble);
+ }
+ 
+ #endif /* PAD_BACKEND_SDL2 */
+@@ -1436,27 +1518,35 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+ 
+     param = GUEST_PTR(param, CellPadActParam*);
+ 
++    const u8 small_on = param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL];
++    const u8 large    = param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE];
++    { static int log = -1; if (log < 0) log = getenv("PS3_RUMBLE_LOG") ? 1 : 0;
++      if (log) fprintf(stderr, "[cellPad] SetActDirect port %u: small %u, large %u\n",
++                       port_no, small_on, large); }
++    if (port_no >= PAD_MAX_HOST_PORTS)
++        return CELL_OK;
++
++    u16 lo, hi;
++    pad_rumble_levels(small_on, large, pad_rumble_strength(), &lo, &hi);
++    PadRumble* r = &s_rumble[port_no];
++    const int changed = r->lo != lo || r->hi != hi;
++    r->lo = lo;
++    r->hi = hi;
++
+ #if PAD_BACKEND_XINPUT
+-    /* Map to XInput vibration */
+-    if (port_no < PAD_MAX_HOST_PORTS && s_host_state[port_no].connected) {
++    /* XInput keeps the motors at what they were last set to: no renewal. */
++    if (changed && s_host_state[port_no].connected) {
+         XINPUT_VIBRATION vib;
+-        vib.wLeftMotorSpeed  = (WORD)(param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] * 257);
+-        vib.wRightMotorSpeed = (WORD)(param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] * 257);
++        vib.wLeftMotorSpeed  = (WORD)lo;
++        vib.wRightMotorSpeed = (WORD)hi;
+         XInputSetState((DWORD)port_no, &vib);
+     }
+ #endif
+ 
+ #if PAD_BACKEND_SDL2
+-    if (port_no < PAD_MAX_HOST_PORTS && s_sdl_controllers[port_no]) {
+-        SDL_GameControllerRumble(
+-            s_sdl_controllers[port_no],
+-            (Uint16)(param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] * 257),
+-            (Uint16)(param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] * 257),
+-            100 /* duration ms */
+-        );
+-    }
++    if (changed) pad_sdl_rumble_send((int)port_no);
+ #endif
+-
++    (void)changed;
+     return CELL_OK;
+ }
+ 
+diff --git a/libs/input/tests/test_pad_rumble.c b/libs/input/tests/test_pad_rumble.c
+new file mode 100644
+index 0000000..9ebcfd9
+--- /dev/null
++++ b/libs/input/tests/test_pad_rumble.c
+@@ -0,0 +1,85 @@
++/* cellPadSetActDirect -> host rumble: PS3_RUMBLE / PS3_RUMBLE_STRENGTH, the
++ * motor levels, and the per-port state the pad poll renews.
++ *
++ *   cc -std=gnu17 -I include -isystem /opt/homebrew/include \
++ *      -isystem /opt/homebrew/include/SDL2 libs/input/tests/test_pad_rumble.c \
++ *      -L /opt/homebrew/lib -lSDL2 -o /tmp/test_pad_rumble && /tmp/test_pad_rumble
++ * (No controller is opened: the state is checked, nothing vibrates.)
++ */
++#include "../cellPad.c"
++#include <assert.h>
++#include <sys/mman.h>
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++
++static void test_strength(void)
++{
++    assert(pad_rumble_strength_from(NULL, NULL) == 100);
++    assert(pad_rumble_strength_from("1", NULL) == 100);
++    assert(pad_rumble_strength_from("0", NULL) == 0);
++    assert(pad_rumble_strength_from("0", "80") == 0);    /* off wins */
++    assert(pad_rumble_strength_from(NULL, "50") == 50);
++    assert(pad_rumble_strength_from(NULL, "0") == 0);
++    assert(pad_rumble_strength_from(NULL, "250") == 200);
++    assert(pad_rumble_strength_from(NULL, "-3") == 0);
++    assert(pad_rumble_strength_from(NULL, "abc") == 100);
++    assert(pad_rumble_strength_from(NULL, "") == 100);
++}
++
++static void test_levels(void)
++{
++    u16 lo, hi;
++    pad_rumble_levels(0, 0, 100, &lo, &hi);   assert(lo == 0 && hi == 0);
++    pad_rumble_levels(1, 255, 100, &lo, &hi); assert(lo == 65535 && hi == 65535);
++    pad_rumble_levels(1, 0, 100, &lo, &hi);   assert(lo == 0 && hi == 65535);  /* small motor is on/off */
++    pad_rumble_levels(255, 0, 100, &lo, &hi); assert(hi == 65535);            /* any non-zero is on */
++    pad_rumble_levels(1, 128, 50, &lo, &hi);  assert(lo == 16448 && hi == 32767);
++    pad_rumble_levels(0, 100, 200, &lo, &hi); assert(lo == 51400 && hi == 0);
++    pad_rumble_levels(1, 255, 200, &lo, &hi); assert(lo == 65535 && hi == 65535); /* capped */
++    pad_rumble_levels(1, 255, 0, &lo, &hi);   assert(lo == 0 && hi == 0);
++}
++
++static void test_set_act_direct(void)
++{
++    vm_base = mmap(NULL, 0x10000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    assert(vm_base != MAP_FAILED);
++    s_pad_initialized = 1;
++    CellPadActParam* p = (CellPadActParam*)(vm_base + 0x100);
++    const uintptr_t ea = 0x100;
++
++    p->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = 1;
++    p->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = 200;
++    assert(cellPadSetActDirect(0, (CellPadActParam*)ea) == CELL_OK);
++    assert(s_rumble[0].lo == 200 * 257 && s_rumble[0].hi == 65535);
++    assert(s_rumble[0].sent_ms == 0);     /* no controller open: nothing sent, nothing to renew */
++
++    p->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = 0;
++    p->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = 0;
++    assert(cellPadSetActDirect(0, (CellPadActParam*)ea) == CELL_OK);
++    assert(s_rumble[0].lo == 0 && s_rumble[0].hi == 0);
++
++    assert(cellPadSetActDirect(5, (CellPadActParam*)ea) == CELL_OK);   /* a port with no host pad */
++    assert(cellPadSetActDirect(CELL_PAD_MAX_PORT_NUM, (CellPadActParam*)ea) == (s32)CELL_PAD_ERROR_INVALID_PARAMETER);
++    assert(cellPadSetActDirect(0, NULL) == (s32)CELL_PAD_ERROR_INVALID_PARAMETER);
++    s_pad_initialized = 0;
++    assert(cellPadSetActDirect(0, (CellPadActParam*)ea) == (s32)CELL_PAD_ERROR_NOT_OPENED);
++}
++
++int main(void)
++{
++    unsetenv("PS3_RUMBLE");
++    unsetenv("PS3_RUMBLE_STRENGTH");
++    test_strength();
++    test_levels();
++    test_set_act_direct();
++    printf("test_pad_rumble: ok\n");
++    return 0;
++}
+diff --git a/libs/video/rsx_metal_backend.h b/libs/video/rsx_metal_backend.h
+index 2d8b1f9..5845a3f 100644
+--- a/libs/video/rsx_metal_backend.h
++++ b/libs/video/rsx_metal_backend.h
+@@ -51,6 +51,13 @@ void rsx_metal_backend_note_guest_frame(void);
+  *       resolution by default), shrunk to fit the screen.
+  *   PS3_WINDOW_ICON=<file>|game|none   the Dock / app switcher icon: an image
+  *       file, or "game" for $PS3_VFS_ROOT/PS3_GAME/ICON0.PNG (none by default).
++ *   PS3_DISPLAY=<n>|<name>    the screen it opens on (and fullscreen or
++ *       borderless covers): 1 = the one with the menu bar, 2 = the next in the
++ *       system's order, or a screen's name (exact, any case, or a part of
++ *       it). The main screen when unset or not found.
++ *   PS3_VSYNC=0               present without waiting for the screen's
++ *       refresh (CAMetalLayer displaySyncEnabled off); the game's frame pacing
++ *       comes from the host's vblank clock and does not change.
+  *   PS3_MOUSE_CAPTURE=0       the mouse camera works without capturing the
+  *       cursor (the old behaviour); there is no capture with PS3_MOUSE=0.
+  *       [mouse] capture / camera in PS3_INPUT_MAP do the same when the
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+index 6795151..37a8f7c 100644
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -725,6 +725,58 @@ static void apply_icon(void)
+     [NSApp setApplicationIconImage:img];
+ }
+ 
++/* PS3_DISPLAY=<n>|<name>: the screen the window opens on, and so the one
++ * fullscreen and borderless cover. <n> counts from 1 in the system's order
++ * (1 = the screen with the menu bar); a name is matched against the screens'
++ * names as System Settings shows them ("Built-in Retina Display", "DELL
++ * U2720Q"): exactly, then ignoring case, then as a part of one. Unset, or a
++ * screen that is not there: the main screen, as before. */
++static NSScreen* wm_pick_screen(const char** why)
++{
++    NSArray<NSScreen*>* screens = [NSScreen screens];
++    NSScreen* fallback = [NSScreen mainScreen];
++    const char* e = getenv("PS3_DISPLAY");
++    *why = "main screen";
++    if (!e || !*e || !screens.count) return fallback;
++    char* end = NULL;
++    const long k = strtol(e, &end, 10);
++    if (end != e && *end == 0) {
++        if (k >= 1 && k <= (long)screens.count) { *why = "PS3_DISPLAY"; return screens[(NSUInteger)(k - 1)]; }
++        fprintf(stderr, "[RSX metal] PS3_DISPLAY=%s: there are %lu screen(s), using the main one\n",
++                e, (unsigned long)screens.count);
++        return fallback;
++    }
++    if (@available(macOS 10.15, *)) {
++        NSString* want = [NSString stringWithUTF8String:e];
++        for (int pass = 0; want && pass < 3; pass++)
++            for (NSScreen* sc in screens) {
++                NSString* n = sc.localizedName;
++                if (!n) continue;
++                if ((pass == 0 && [n isEqualToString:want]) ||
++                    (pass == 1 && [n caseInsensitiveCompare:want] == NSOrderedSame) ||
++                    (pass == 2 && [n rangeOfString:want options:NSCaseInsensitiveSearch].location != NSNotFound)) {
++                    *why = "PS3_DISPLAY";
++                    return sc;
++                }
++            }
++        fprintf(stderr, "[RSX metal] PS3_DISPLAY=%s: no such screen, using the main one. Screens:\n", e);
++        int i = 1;
++        for (NSScreen* sc in screens)
++            fprintf(stderr, "[RSX metal]   %d: %s\n", i++, sc.localizedName ? [sc.localizedName UTF8String] : "?");
++    } else {
++        fprintf(stderr, "[RSX metal] PS3_DISPLAY=%s: names need macOS 10.15; give a number\n", e);
++    }
++    return fallback;
++}
++
++static const char* wm_screen_name(NSScreen* scr)
++{
++    if (@available(macOS 10.15, *)) {
++        if (scr && scr.localizedName) return [scr.localizedName UTF8String];
++    }
++    return "?";
++}
++
+ static int create_window_impl(const char* title)
+ {
+     [NSApplication sharedApplication];
+@@ -759,7 +811,8 @@ static int create_window_impl(const char* title)
+               fprintf(stderr, "[RSX metal] PS3_WINDOW_SIZE=%s: expected <width>x<height>\n", e);
+           }
+       } }
+-    NSScreen* scr = [NSScreen mainScreen];
++    const char* scr_why = "";
++    NSScreen* scr = wm_pick_screen(&scr_why);
+     if (scr) {
+         const NSRect vis = [NSWindow contentRectForFrameRect:[scr visibleFrame]
+                                                    styleMask:NSWindowStyleMaskTitled];
+@@ -783,6 +836,13 @@ static int create_window_impl(const char* title)
+     [s_window setContentMinSize:NSMakeSize(320, 180)];
+     [s_window setBackgroundColor:[NSColor blackColor]];
+     [s_window center];
++    /* center goes by the main screen; put it in the middle of the chosen one
++     * (fullscreen and borderless then cover that screen). */
++    if (scr && scr != [s_window screen]) {
++        const NSRect vf = [scr visibleFrame], wf = [s_window frame];
++        [s_window setFrameOrigin:NSMakePoint(floor(NSMidX(vf) - wf.size.width / 2),
++                                             floor(NSMidY(vf) - wf.size.height / 2))];
++    }
+     s_win_delegate = [PS3RecompWindowDelegate new];
+     [s_window setDelegate:s_win_delegate];
+ 
+@@ -793,6 +853,15 @@ static int create_window_impl(const char* title)
+     s_layer.drawableSize    = CGSizeMake((CGFloat)s_width, (CGFloat)s_height);
+     s_layer.contentsGravity = kCAGravityResizeAspect;
+     s_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
++    /* PS3_VSYNC=0: present as soon as a frame is ready instead of at the
++     * screen's next refresh (lower latency; may tear in fullscreen). The
++     * game's own 30/60 fps pacing does not depend on this: it runs off the
++     * host's vblank clock (frame_clock in the port's main.cpp), never off
++     * when a drawable reaches the screen. */
++    int vsync = 1;
++    { const char* e = getenv("PS3_VSYNC");
++      if (e && *e) vsync = !(e[0] == '0' && e[1] == 0); }
++    if (@available(macOS 10.13, *)) s_layer.displaySyncEnabled = vsync ? YES : NO;
+ 
+     NSView* view = [s_window contentView];
+     [view setWantsLayer:YES];
+@@ -809,9 +878,10 @@ static int create_window_impl(const char* title)
+         dispatch_async(dispatch_get_main_queue(), ^{
+             if (s_window && !wm_native_fullscreen()) [s_window toggleFullScreen:nil];
+         });
+-    fprintf(stderr, "[RSX metal] window %.0fx%.0f, %s; Cmd+F / Option+Return: fullscreen, "
+-                    "Cmd+Ctrl+F: macOS fullscreen%s\n", cw, ch,
++    fprintf(stderr, "[RSX metal] window %.0fx%.0f, %s on \"%s\" (%s), vsync %s; Cmd+F / Option+Return: "
++                    "fullscreen, Cmd+Ctrl+F: macOS fullscreen%s\n", cw, ch,
+             mode == WM_FULLSCREEN ? "fullscreen" : mode == WM_BORDERLESS ? "borderless" : "windowed",
++            wm_screen_name(scr), scr_why, vsync ? "on" : "off",
+             s_cap_on ? "; click captures the mouse, Esc or Cmd releases it" : "");
+     fps_start();
+     return 0;
