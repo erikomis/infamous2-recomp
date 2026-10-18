@@ -1,0 +1,195 @@
+diff -ru a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+--- a/runtime/spu/spu_channels.c	2026-10-18 14:04:14
++++ b/runtime/spu/spu_channels.c	2026-10-18 14:04:14
+@@ -1795,6 +1795,38 @@
+  * (spu_interp.c, rejoin path). It IS the registry lookup, so overlay eviction and
+  * self-modifying-code invalidation are honored automatically. Lived in
+  * spu_fn_registry.c before the registry was consolidated into this TU. */
++/* Does the word at `pc` still hold the resident code slot's own instruction?
++ * A slot is dropped when a GET writes other content over it, except where the
++ * module's image had zeros (a buffer it fills itself) -- so code streamed into
++ * such a hole kept the old slot claiming that address, and dispatch there ran
++ * the module's lift for that offset or, with none, interpreted the new code
++ * instead of running the lift of whoever loaded it (suspected in the rare Edge
++ * geometry fault: its allocator loop at LS 0x53A0 ran without its lift).
++ * A stale word does not evict the slot -- the module's own code elsewhere in
++ * its span is still resident -- it only stops the slot answering for this
++ * address: the resident overlay may, the base image may not, and with neither
++ * the code is interpreted as before. PS3_SPU_SLOT_VERIFY=0 turns it off. */
++int spu_resident_slot_stale(spu_context* ctx, unsigned slot, uint32_t pc)
++{
++    static _Atomic int on = -1;
++    if (on < 0) { const char* e = getenv("PS3_SPU_SLOT_VERIFY"); on = e ? atoi(e) : 1; }
++    if (!on) return 0;
++    const uint32_t lsa = ctx->resident_code[slot].lsa;
++    const uint32_t at = (pc & SPU_LS_MASK) & ~3u;
++    if (at < lsa || at + 4 > lsa + ctx->resident_code[slot].size) return 0;
++    const uint8_t* orig = vm_base + ctx->resident_code[slot].source_ea + (at - lsa);
++    if (!memcmp(ctx->ls + at, orig, 4)) return 0;
++    { static _Atomic int n = 0;
++      if (n < 16) { n++;
++          fprintf(stderr, "[spu-ovl] img=%d resident code slot %u (image %d LS 0x%05X+0x%X) is stale at pc 0x%05X: "
++                  "LS %02X%02X%02X%02X, module %02X%02X%02X%02X -> resident overlay %d%s\n",
++                  ctx->image_id, slot, ctx->resident_code[slot].image_id, lsa, ctx->resident_code[slot].size, at,
++                  ctx->ls[at], ctx->ls[at + 1], ctx->ls[at + 2], ctx->ls[at + 3],
++                  orig[0], orig[1], orig[2], orig[3], ctx->resident_ovl,
++                  ctx->resident_ovl && spu_lookup(at, ctx->resident_ovl) ? " (lifted)" : " (none: interpreter)"); } }
++    return 1;
++}
++
+ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
+ {
+     /* Streamed code that is resident at this address owns it (same rule as
+@@ -1804,6 +1836,8 @@
+         for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
+             int img = ctx->resident_code[slot].image_id;
+             if (img && lsa - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
++                if (spu_resident_slot_stale((spu_context*)ctx, slot, lsa))
++                    return ctx->resident_ovl ? (spu_lifted_fn)spu_lookup(lsa, ctx->resident_ovl) : NULL;
+                 if (!ctx->resident_code[slot].reloc) return (spu_lifted_fn)spu_lookup(lsa, img);
+                 spu_lifted_fn rf = (spu_lifted_fn)spu_lookup(lsa - ctx->resident_code[slot].lsa, img);
+                 if (rf) ((spu_context*)ctx)->code_base = ctx->resident_code[slot].lsa;
+@@ -2780,6 +2814,11 @@
+     for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
+         if (ctx->resident_code[slot].image_id && ctx->pc >= ctx->resident_code[slot].lsa &&
+             ctx->pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
++            if (spu_resident_slot_stale(ctx, slot, ctx->pc)) {
++                code_owner = -1;   /* not the slot's code: only the overlay may answer */
++                if (ctx->resident_ovl) fn = spu_lookup(ctx->pc, ctx->resident_ovl);
++                break;
++            }
+             code_owner = ctx->resident_code[slot].image_id;
+             if (!ctx->resident_code[slot].reloc) fn = spu_lookup(ctx->pc, code_owner);
+             else if ((fn = spu_lookup(ctx->pc - ctx->resident_code[slot].lsa, code_owner)))
+@@ -2797,7 +2836,7 @@
+     /* A resident module's code outside its own image: the save/restore stub the
+      * WWS policy module writes at the top of local store (LS 0x3FEC0) and calls
+      * from its interrupt path. Its lift belongs to the module's image. */
+-    for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn; ++slot)
++    for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn && code_owner >= 0; ++slot)
+         if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc)
+             fn = spu_lookup(ctx->pc, ctx->resident_code[slot].image_id);
+     /* The job returned through the link register we planted: it is finished.
+@@ -3427,6 +3466,11 @@
+         for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
+             if (ctx->resident_code[slot].image_id && pc >= ctx->resident_code[slot].lsa &&
+                 pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
++                if (spu_resident_slot_stale(ctx, slot, pc)) {
++                    code_owner = -1;   /* see spu_resident_slot_stale */
++                    if (ctx->resident_ovl) fn = spu_lookup(pc, ctx->resident_ovl);
++                    break;
++                }
+                 code_owner = ctx->resident_code[slot].image_id;
+                 if (!ctx->resident_code[slot].reloc) fn = spu_lookup(pc, code_owner);
+                 else if ((fn = spu_lookup(pc - ctx->resident_code[slot].lsa, code_owner)))
+@@ -3437,7 +3481,7 @@
+         if (!code_owner && rt) fn = spu_lookup(pc, rt);
+         if (!code_owner && !fn && ctx->resident_ovl) fn = spu_lookup(pc, ctx->resident_ovl);
+         if (!code_owner && !fn) fn = spu_lookup(pc, ctx->image_id);
+-        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn; ++slot)
++        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn && code_owner >= 0; ++slot)
+             if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc)
+                 fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
+         if (!fn) goto slow;
+diff -ru a/runtime/spu/spu_dispatch_mt.c b/runtime/spu/spu_dispatch_mt.c
+--- a/runtime/spu/spu_dispatch_mt.c	2026-10-18 14:04:14
++++ b/runtime/spu/spu_dispatch_mt.c	2026-10-18 14:04:14
+@@ -63,6 +63,9 @@
+         for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
+             if (ctx->resident_code[slot].image_id &&
+                 pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
++                { extern int spu_resident_slot_stale(spu_context*, unsigned, uint32_t);
++                  if (spu_resident_slot_stale(ctx, slot, pc)) {   /* not the slot's code: only the overlay may answer */
++                      owned = -1; if (ctx->resident_ovl) fn = spu_lookup(pc, ctx->resident_ovl); break; } }
+                 if (!ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
+                 else if ((fn = spu_lookup(pc - ctx->resident_code[slot].lsa, ctx->resident_code[slot].image_id)))
+                     ctx->code_base = ctx->resident_code[slot].lsa;
+@@ -70,7 +73,7 @@
+             }
+         if (!owned && ctx->resident_ovl) fn = spu_lookup(pc, ctx->resident_ovl);
+         if (!owned && !fn) fn = spu_lookup(pc, ctx->image_id);
+-        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn; ++slot)   /* resident module code outside its image */
++        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn && owned >= 0; ++slot)   /* resident module code outside its image */
+             if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
+         if (fn) {
+             ctx->pc = pc;
+diff -ru a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+--- a/runtime/spu/spu_drain.c	2026-10-18 14:04:14
++++ b/runtime/spu/spu_drain.c	2026-10-18 14:04:14
+@@ -588,6 +588,9 @@
+             for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
+                 if (ctx->resident_code[slot].image_id &&
+                     pc - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) {
++                    { extern int spu_resident_slot_stale(spu_context*, unsigned, uint32_t);
++                      if (spu_resident_slot_stale(ctx, slot, pc)) {   /* not the slot's code: only the overlay may answer */
++                          owned = -1; if (ctx->resident_ovl) fn = spu_lookup(pc, ctx->resident_ovl); break; } }
+                     if (!ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
+                     else if ((fn = spu_lookup(pc - ctx->resident_code[slot].lsa, ctx->resident_code[slot].image_id)))
+                         ctx->code_base = ctx->resident_code[slot].lsa;
+@@ -595,7 +598,7 @@
+                 }
+             if (!owned && ctx->resident_ovl) fn = spu_lookup(pc, ctx->resident_ovl);
+             if (!owned && !fn) fn = spu_lookup(pc, ctx->image_id);
+-            for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn; ++slot)   /* resident module code outside its image */
++            for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS && !fn && owned >= 0; ++slot)   /* resident module code outside its image */
+                 if (ctx->resident_code[slot].image_id && !ctx->resident_code[slot].reloc) fn = spu_lookup(pc, ctx->resident_code[slot].image_id);
+             if (fn) {
+                 { static int _n = 0; if (PS3_LOG_FIRST(_n, 8))
+diff -ru a/runtime/spu/tests/test_spu_lifted_start.c b/runtime/spu/tests/test_spu_lifted_start.c
+--- a/runtime/spu/tests/test_spu_lifted_start.c	2026-10-18 14:04:14
++++ b/runtime/spu/tests/test_spu_lifted_start.c	2026-10-18 14:04:14
+@@ -383,7 +383,17 @@
+     spu_context* ctx = (spu_context*)calloc(1, sizeof *ctx);
+     if (!ctx) { check(0, "allocate streamed code context"); return; }
+     spu_context_init(ctx, 0);
++    /* The slot bookkeeping compares local store with the modules' source
++     * bytes at their EAs (0x500000..0x700000): give it a guest of its own --
++     * this test runs before main() maps the guarded arena (vm_base NULL). */
++    uint8_t* const saved_vm = vm_base;
++    uint8_t* const guest = (uint8_t*)calloc(1, 0x800000);
++    if (!guest) { check(0, "allocate streamed code guest"); free(ctx); return; }
++    vm_base = guest;
+     const uint32_t a = 0x11000, b = 0x12000;
++    /* What the GETs bring in: each module's own (non-zero) code bytes. */
++    memset(guest + 0x500000, 0x11, 0x400); memcpy(ctx->ls + a, guest + 0x500000, 0x400);
++    memset(guest + 0x600000, 0x22, 0x400); memcpy(ctx->ls + b, guest + 0x600000, 0x400);
+     spu_begin_image(81); spu_register_function(a, code_a);
+     spu_begin_image(82); spu_register_function(b, code_b);
+     spu_begin_image(83); spu_register_function(a, code_stale);
+@@ -399,12 +409,36 @@
+     check(ctx->gpr[3]._u32[0] == 81, "first streamed job survives second job and continuation DMA");
+     ctx->pc = b; spu_indirect_branch(ctx);
+     check(ctx->gpr[3]._u32[0] == 82, "second streamed job overrides stale base-image code");
++    memset(ctx->ls + a, 0x33, 0x100);
+     spu_overlay_note_get(ctx, 0x700000, ctx->ls + a, 0x100);
+     ctx->pc = a; spu_indirect_branch(ctx);
+     check(ctx->gpr[3]._u32[0] != 81, "overwriting a code buffer invalidates its old image");
+     ctx->pc = b; spu_indirect_branch(ctx);
+     check(ctx->gpr[3]._u32[0] == 82, "overwriting one buffer preserves the other");
++
++    /* A module whose image has zeros where other code later lands keeps its
++     * slot through that GET (the hole reads as a buffer it fills itself), so
++     * dispatch there went to the module's lift -- or, with none, to the
++     * interpreter -- instead of the resident overlay that owns the address
++     * now (the Edge geometry job's rare fault). Dispatch must check the word. */
++    const uint32_t c = 0x14000;
++    memset(guest + 0x580000, 0x44, 0x100);            /* code, then a zero hole */
++    memcpy(ctx->ls + c, guest + 0x580000, 0x800);
++    spu_begin_image(84); spu_register_function(c + 0x400, code_stale);
++    spu_begin_image(85); spu_register_function(c + 0x400, code_b);
++    spu_begin_image(0);
++    spu_overlay_register_region(0x580000, 0x800, 84);
++    spu_overlay_note_get(ctx, 0x580000, ctx->ls + c, 0x800);
++    memset(ctx->ls + c + 0x400, 0x55, 0x100);         /* the job lands in the hole */
++    spu_overlay_note_get(ctx, 0x590000, ctx->ls + c + 0x400, 0x100);
++    ctx->resident_ovl = 85;
++    ctx->gpr[3]._u32[0] = 0;
++    ctx->pc = c + 0x400; spu_indirect_branch(ctx);
++    check(ctx->gpr[3]._u32[0] == 82, "code streamed into a module's zero hole dispatches to its own lift");
++    ctx->resident_ovl = 0;
+     g_spu_trampoline_fn = 0;
++    vm_base = saved_vm;
++    free(guest);
+     free(ctx);
+ }
+ 

@@ -1,0 +1,105 @@
+diff -ru a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+--- a/libs/video/rsx_draw_engine.c	2026-10-18 14:04:15
++++ b/libs/video/rsx_draw_engine.c	2026-10-18 14:04:15
+@@ -3093,6 +3093,101 @@
+       alpha[2] = bottom ? (float)(win & 0xFFFu) : 0.0f;
+       alpha[3] = 0.0f; }
+ 
++    /* PS3RECOMP_ENG_OCCDUMP=<sec>:<dir>[:<hex>,<hex>..]: DIAGNOSTIC for the
++     * occlusion volumes (default programs 5f740845528b0e62 props and
++     * 7875289ea6b856a6 characters). In one frame, <sec> seconds after their
++     * first draw: the render target's bytes before every volume draw and
++     * after the last one (rt_NNN.rgba), the depth snapshot and normals they
++     * sample (unit0.rgba / unit1.rgba), each cone LUT raw (lut_<off>.bin) and
++     * every draw's constants and state (draws.txt) -- so the per-draw alpha
++     * the GPU produced can be checked against the program's math offline.
++     * Every dump flushes and waits: one frame, debugging only. */
++    { static int oinit; static u64 ofp[4] = { 0x5f740845528b0e62ull, 0x7875289ea6b856a6ull }; static int nofp = 2;
++      static long osec = -1; static char odir[400]; static unsigned long long ot0;
++      static u32 oframe = ~0u, on_draw, olast_h, olast_w, olast_hh; static int ostate; /* 0 wait, 1 capturing, 2 done */
++      static u32 oluts[64], nluts;
++      if (!oinit) { oinit = 1; const char* e = getenv("PS3RECOMP_ENG_OCCDUMP");
++          if (e) { char* d; osec = strtol(e, &d, 10);
++                   if (*d == ':') { const char* p = d + 1; const char* c = strchr(p, ':');
++                       size_t n = c ? (size_t)(c - p) : strlen(p); if (n >= sizeof odir) n = sizeof odir - 1;
++                       memcpy(odir, p, n); odir[n] = 0;
++                       if (c) { nofp = 0; c++; while (*c && nofp < 4) { ofp[nofp++] = strtoull(c, (char**)&c, 16); if (*c == ',') c++; else break; } } } } }
++      if (osec >= 0 && odir[0] && ostate < 2 && g.be->readback && g.be->submit_and_wait) {
++          const u64 fk = eng_current_fp_structural();
++          int vol = 0; for (int k = 0; k < nofp; k++) if (fk && fk == ofp[k]) vol = 1;
++          extern unsigned long long ps3_ms_now(void);
++          if (vol && !ot0) ot0 = ps3_ms_now();
++          char path[512];
++          /* the frame ended, or a non-volume draw follows the volumes: final dump */
++          if (ostate == 1 && (!vol || g.frames != oframe) && olast_h) {
++              u8* px = (u8*)malloc((size_t)olast_w * olast_hh * 4);
++              if (px) { g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
++                  g.be->readback(g.be->user, olast_h, 0, 0, olast_w, olast_hh, px, olast_w * 4);
++                  snprintf(path, sizeof path, "%s/rt_%03u.rgba", odir, on_draw);
++                  FILE* f = fopen(path, "wb"); if (f) { fwrite(px, 1, (size_t)olast_w * olast_hh * 4, f); fclose(f); }
++                  free(px); }
++              fprintf(stderr, "[occdump] frame %u: %u volume draws dumped to %s\n", oframe, on_draw, odir);
++              ostate = 2;
++          }
++          if (vol && ostate == 0 && ps3_ms_now() - ot0 >= (unsigned long long)osec * 1000ull) { ostate = 1; oframe = g.frames; }
++          if (vol && ostate == 1 && g.frames == oframe && n_targets) {
++              const eng_surface* es = &g.surfaces[targets[0]];
++              g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
++              u8* px = (u8*)malloc((size_t)es->w * es->h * 4);
++              if (px) { g.be->readback(g.be->user, es->handle, 0, 0, es->w, es->h, px, es->w * 4);
++                  snprintf(path, sizeof path, "%s/rt_%03u.rgba", odir, on_draw);
++                  FILE* f = fopen(path, "wb"); if (f) { fwrite(px, 1, (size_t)es->w * es->h * 4, f); fclose(f); }
++                  free(px); }
++              olast_h = es->handle; olast_w = es->w; olast_hh = es->h;
++              for (u32 u = 0; u < 2; u++) {
++                  rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
++                  snprintf(path, sizeof path, "%s/unit%u.rgba", odir, u);
++                  static int odone_u[2]; if (!t.enabled || !textures[u] || !t.width || !t.height || odone_u[u]) continue; odone_u[u] = 1;
++                  u8* tp = (u8*)malloc((size_t)t.width * t.height * 4);
++                  if (!tp) continue;
++                  g.be->readback(g.be->user, textures[u], 0, 0, t.width, t.height, tp, t.width * 4);
++                  FILE* f = fopen(path, "wb"); if (f) { fwrite(tp, 1, (size_t)t.width * t.height * 4, f); fclose(f); }
++                  free(tp);
++              }
++              rsx_dsp_texture lt; rsx_dsp_get_texture(&g.rsx, 2, &lt);
++              if (lt.enabled && lt.width) {
++                  const u32 key = lt.offset ^ (lt.location << 31);
++                  u32 k = 0; while (k < nluts && oluts[k] != key) k++;
++                  if (k == nluts && nluts < 64) { oluts[nluts++] = key;
++                      const u32 depth = (lt.dimension == 3 && !lt.cubemap && lt.depth) ? lt.depth : 1u;
++                      const u32 span = depth > 1 ? eng_texture_span_3d(lt.format, lt.width, lt.height, depth, lt.mipmaps, lt.pitch)
++                                                 : eng_texture_span(lt.format, lt.width, lt.height, lt.mipmaps, lt.pitch, (int)lt.cubemap);
++                      const u8* src = span ? eng_guest_ptr(NULL, lt.location, lt.offset, span) : NULL;
++                      snprintf(path, sizeof path, "%s/lut_%u_%08X.bin", odir, lt.location, lt.offset);
++                      FILE* f = src ? fopen(path, "wb") : NULL; if (f) { fwrite(src, 1, span, f); fclose(f); } } }
++              snprintf(path, sizeof path, "%s/draws.txt", odir);
++              FILE* f = fopen(path, "a");
++              if (f) {
++                  fprintf(f, "draw %u frame %u fp %016llx p %u n %u rt h%u off 0x%08X %ux%u ztest %u zfunc 0x%X zwrite %u cull %u/0x%X front 0x%X stencil %u func 0x%X ref 0x%02X mask 0x%02X blend 0x%08X cmask 0x%08X\n",
++                          on_draw, g.frames, (unsigned long long)fk, pipeline, n_draw, es->handle, es->offset, es->w, es->h,
++                          rs.depth_test, rs.depth_func, rs.depth_write, rs.cull_enable, rs.cull_face, rs.front_face,
++                          rs.stencil_enable, rs.s_func, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_REF) & 0xFFu,
++                          rsx_dsp_reg(&g.rsx, 0x0330) & 0xFFu, rsx_dsp_reg(&g.rsx, 0x0314), rsx_dsp_reg(&g.rsx, 0x0324));
++                  for (u32 u = 0; u < 3; u++) { rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
++                      fprintf(f, "tex %u en %u h%u loc %u off 0x%08X fmt 0x%02X %ux%u depth %u dim %u remap 0x%08X filter 0x%08X addr 0x%08X\n",
++                              u, t.enabled, textures[u], t.location, t.offset, t.format, t.width, t.height, t.depth, t.dimension,
++                              t.remap, t.filter, t.wrap); }
++                  fprintf(f, "xf %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", xf[0], xf[1], xf[2], xf[3], xf[4], xf[5], xf[6], xf[7]);
++                  const float* k = (const float*)g.fp_cb;
++                  for (u32 q = 0; q < g.fp_constants->count; q++)
++                      fprintf(f, "k %u %.9g %.9g %.9g %.9g\n", q, k[q * 4], k[q * 4 + 1], k[q * 4 + 2], k[q * 4 + 3]);
++                  for (u32 c = 0; c < RSX_DSP_NUM_CONSTANTS; c++) {
++                      float v[4]; memcpy(v, g.rsx.constants[c], sizeof v);
++                      if (!(v[0] != 0.0f || v[1] != 0.0f || v[2] != 0.0f || v[3] != 0.0f)) continue;
++                      if (!(c >= 256 && c <= 272) && c != 466 && c != 467) continue;
++                      fprintf(f, "c %u %.9g %.9g %.9g %.9g\n", c, v[0], v[1], v[2], v[3]);
++                  }
++                  fclose(f);
++              }
++              on_draw++;
++          }
++      } }
++
+     /* The depth attachment is cleared the first time it is bound, so a title
+      * that never clears its shadow zeta still tests against something. */
+     const u32 depth_handle = (zslot != ENG_INVALID) ? g.zdepths[zslot].handle : 0;
