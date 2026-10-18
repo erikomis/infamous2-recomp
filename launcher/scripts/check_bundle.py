@@ -9,13 +9,16 @@ temporary folder first. Every file is checked by name and by its first
 bytes; a hit on any of these fails the check:
 
   - licences and keys: *.rap, *.rif, act.dat, idps, *.edat/*.sdat
+  - the game's art and sound from PARAM.SFO's folder: ICON0/ICON1, PIC0/PIC1/
+    PIC2, SND0 (the launcher reads the player's own at runtime)
   - game code and data: EBOOT*, *.self/*.sprx/*.prx, PARAM.SFO/*.sfo, *.pkg,
     *.psarc, *.pup, NPUA80638*, folders dev_hdd0/dev_hdd1/dev_flash/
     PS3_GAME/USRDIR
   - anything derived from them: *.elf, the lifted output folders
     (recompiled/, lle/, lle_spu/, jobmods/)
-  - by content: SCE (SELF/SPRX/PUP), PKG, PSF, PSAR, NPD headers and
-    big-endian PowerPC or SPU ELF files
+  - by content: SCE (SELF/SPRX/PUP), PKG, PSF, PSAR, NPD headers,
+    big-endian PowerPC or SPU ELF files, and a PNG of ICON0's exact size
+    (320x176) under any name
   - inside the bundled port/ folder: any file over 4 MB, except a text
     patch (*.patch starting with "diff --git"), allowed up to 16 MB: the
     toolkit patch carries the vendored Dear ImGui and is ~4 MB
@@ -35,7 +38,8 @@ import tempfile
 import zipfile
 
 BAD_NAMES = ('*.rap', '*.rif', '*.edat', '*.sdat', 'act.dat', 'idps*', 'eboot*', '*.self', '*.sprx', '*.prx',
-             'param.sfo', '*.sfo', '*.pkg', '*.psarc', '*.pup', 'ps3updat*', '*.elf', 'npua80638*')
+             'param.sfo', '*.sfo', '*.pkg', '*.psarc', '*.pup', 'ps3updat*', '*.elf', 'npua80638*',
+             'icon0*', 'icon1*', 'pic0*', 'pic1*', 'pic2*', 'snd0*')
 BAD_DIRS = ('dev_hdd0', 'dev_hdd1', 'dev_flash', 'ps3_game', 'usrdir', 'recompiled', 'lle', 'lle_spu',
             'jobmods')
 MAGIC = ((b'SCE\0', 'SCE header (SELF/SPRX)'), (b'SCEUF', 'PUP firmware'), (b'\x7fPKG', 'PS3 PKG'),
@@ -43,6 +47,12 @@ MAGIC = ((b'SCE\0', 'SCE header (SELF/SPRX)'), (b'SCEUF', 'PUP firmware'), (b'\x
 PORT_MAX_FILE = 4 * 1024 * 1024
 PORT_MAX_PATCH = 16 * 1024 * 1024
 EXPECT = ('port', 'infamous2-lle', 'tools', 'rebuild.py')
+
+
+def icon0_png(head):
+    # a PNG whose IHDR says 320x176, the size of a PS3 ICON0.PNG
+    return (head[:8] == b'\x89PNG\r\n\x1a\n' and head[12:16] == b'IHDR'
+            and int.from_bytes(head[16:20], 'big') == 320 and int.from_bytes(head[20:24], 'big') == 176)
 
 
 def ps3_elf(head):
@@ -82,6 +92,8 @@ def scan(root, label):
                     problems.append('%s: %s (%s)' % (label, rel, what))
             if ps3_elf(head):
                 problems.append('%s: %s (PowerPC/SPU ELF)' % (label, rel))
+            if icon0_png(head):
+                problems.append("%s: %s (a 320x176 PNG, the game's ICON0)" % (label, rel))
             is_patch = f.endswith('.patch') and head.startswith(b'diff --git')
             if in_port and size > (PORT_MAX_PATCH if is_patch else PORT_MAX_FILE):
                 problems.append('%s: %s is %d MB, too big for a port source' % (label, rel, size >> 20))

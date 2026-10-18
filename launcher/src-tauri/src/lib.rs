@@ -4,6 +4,7 @@
 //! variables. No game code or data is part of the app: everything it shows or
 //! starts comes from the player's own install folder.
 
+mod app_icon;
 mod input_map;
 mod report;
 mod saves;
@@ -69,8 +70,8 @@ pub struct Settings {
     pub window_mode: String,
     /// PS3_WINDOW_SIZE: "<w>x<h>" in points; empty = the game's 1280x720.
     pub window_size: String,
-    /// PS3_WINDOW_ICON=game: the player's own ICON0.PNG in the Dock instead
-    /// of the placeholder.
+    /// The player's own ICON0.PNG in the Dock instead of the placeholder:
+    /// the game's (PS3_WINDOW_ICON) and the launcher's own (app_icon.rs).
     pub game_icon: bool,
     /// PS3_DISPLAY: the screen's name (or its 1-based number when two share
     /// a name); empty = the main screen.
@@ -402,6 +403,8 @@ pub struct AppState {
     report: Mutex<Option<(PathBuf, bool)>>,
     /// Where the last game this launcher started writes its output.
     last_log: Mutex<Option<PathBuf>>,
+    /// The launcher's Dock icon as last set (app_icon::key; "" = the bundle's).
+    dock_icon: Mutex<String>,
 }
 
 /// A GUI app on macOS starts with a bare PATH; Homebrew's tools (cmake,
@@ -733,7 +736,7 @@ fn get_settings() -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(settings: Settings) -> Result<(), String> {
+fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let p = settings_path();
     if let Some(d) = p.parent() {
         fs::create_dir_all(d).map_err(|e| e.to_string())?;
@@ -741,7 +744,9 @@ fn save_settings(settings: Settings) -> Result<(), String> {
     let tmp = p.with_extension("json.tmp");
     fs::write(&tmp, serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &p).map_err(|e| e.to_string())
+    fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
+    sync_app_icon(&app); // "Your copy's icon in the Dock" may have changed
+    Ok(())
 }
 
 /// The controls file for the Controls screen: what it binds (the screen
@@ -799,6 +804,10 @@ pub struct Status {
     /// The game builds and runs here (macOS only for now).
     host_supported: bool,
     os: String,
+    /// The .app the launcher runs from (macOS; none in a development build)
+    /// and whether it has the custom Finder icon.
+    app_bundle: Option<String>,
+    finder_icon: bool,
 }
 
 #[tauri::command]
@@ -818,6 +827,8 @@ async fn get_status(app: AppHandle, state: State<'_, AppState>) -> Result<Status
     };
     let icon = data_url(&icon_path, "image/png");
     let background = data_url(&background_path, "image/png");
+    sync_app_icon(&app);
+    let bundle = app_icon::app_bundle().filter(|_| cfg!(target_os = "macos"));
     Ok(Status {
         install_dir: s.install_dir.clone(),
         install,
@@ -832,7 +843,96 @@ async fn get_status(app: AppHandle, state: State<'_, AppState>) -> Result<Status
         default_install_dir: default_install_dir().to_string_lossy().into_owned(),
         host_supported: host_supported(),
         os: std::env::consts::OS.into(),
+        finder_icon: bundle.as_deref().is_some_and(app_icon::has_finder_icon),
+        app_bundle: bundle.map(|b| b.to_string_lossy().into_owned()),
     })
+}
+
+// ---------------------------------------------------------------------------
+// The Dock and Finder icons from the player's copy (app_icon.rs)
+// ---------------------------------------------------------------------------
+
+/// The ICON0.PNG the icons are drawn from: the install's, else the game
+/// folder chosen on the Install screen (as the Home hero).
+fn icon_source(s: &Settings) -> Option<PathBuf> {
+    let p = match resolve_install(Path::new(&s.install_dir)) {
+        Ok(i) if Path::new(&i.icon).is_file() => i.icon,
+        _ => copy_art(&s.game_paths).0,
+    };
+    Some(PathBuf::from(p)).filter(|p| p.is_file())
+}
+
+fn app_icon_cache() -> PathBuf {
+    data_root().join(app_icon::CACHE_NAME)
+}
+
+/// The composed square icon when the setting is on and there is art (drawn
+/// again when the copy's ICON0.PNG changed; the cached one when the copy is
+/// out of reach).
+fn composed_icon(s: &Settings) -> Option<PathBuf> {
+    if !s.game_icon {
+        return None;
+    }
+    app_icon::refresh(&app_icon_cache(), icon_source(s).as_deref())
+}
+
+/// Bring the launcher's Dock icon in line with the settings: the composed
+/// icon, or the bundle's placeholder. Off the main thread (the drawing takes
+/// a moment the first time); sets the Dock only when that changes.
+fn sync_app_icon(app: &AppHandle) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let app = app.clone();
+    thread::spawn(move || {
+        let icon = composed_icon(&load_settings_file());
+        let key = app_icon::key(icon.as_deref());
+        let state = app.state::<AppState>();
+        let mut cur = state.dock_icon.lock().unwrap();
+        if *cur != key {
+            *cur = key;
+            app_icon::apply_dock_icon(&app, icon);
+        }
+    });
+}
+
+/// PS3_WINDOW_ICON=game gets the same square icon as the launcher when it is
+/// drawn (the toolkit centres the bare 320x176 ICON0 on a transparent square
+/// otherwise; `=<file>` is its own option).
+fn game_window_icon(s: &Settings, env: &mut [(String, String)]) {
+    for (k, v) in env.iter_mut() {
+        if k == "PS3_WINDOW_ICON" && v == "game" {
+            if let Some(p) = composed_icon(s) {
+                *v = p.to_string_lossy().into_owned();
+            }
+        }
+    }
+}
+
+/// "Use as Finder icon": the composed icon on the installed .app (set), or
+/// the bundle's own back (!set). Returns whether a custom icon is on now.
+#[tauri::command]
+async fn finder_icon(app: AppHandle, set: bool) -> Result<bool, String> {
+    if !cfg!(target_os = "macos") {
+        return Err("the Finder icon is macOS only".into());
+    }
+    let bundle = app_icon::app_bundle().ok_or("the launcher is not running from an .app (development build)")?;
+    let icon = if set {
+        let s = load_settings_file();
+        let src = icon_source(&s);
+        Some(app_icon::refresh(&app_icon_cache(), src.as_deref()).ok_or("no ICON0.PNG from your copy yet")?)
+    } else {
+        None
+    };
+    // NSWorkspace on the main thread, the answer back here
+    let (tx, rx) = std::sync::mpsc::channel();
+    let b = bundle.clone();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(app_icon::set_finder_icon(&b, icon.as_deref()));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())??;
+    Ok(app_icon::has_finder_icon(&bundle))
 }
 
 // ---------------------------------------------------------------------------
@@ -1355,7 +1455,9 @@ fn cancel_rebuild(state: State<'_, AppState>) {
 #[tauri::command]
 fn launch_preview(settings: Settings) -> Result<String, String> {
     let inst = resolve_install(Path::new(&settings.install_dir))?;
-    let mut s: Vec<String> = launch_env(&settings, &inst, &input_env())
+    let mut env = launch_env(&settings, &inst, &input_env());
+    game_window_icon(&settings, &mut env);
+    let mut s: Vec<String> = env
         .into_iter()
         .map(|(k, v)| format!("{k}={}", shell_quote(&v)))
         .collect();
@@ -1426,6 +1528,7 @@ fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) ->
         .stdout(log)
         .stderr(log2);
     let mut env = launch_env(&s, &inst, &input_env());
+    game_window_icon(&s, &mut env);
     if let Some(d) = &report_dir {
         env.extend(report::env(d)); // after the extra variables: the report's paths win
     }
@@ -1937,6 +2040,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .setup(|app| {
+            sync_app_icon(app.handle()); // the player's icon in the Dock from the start
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
@@ -1973,7 +2080,8 @@ pub fn run() {
             report_list,
             report_triage,
             report_capture,
-            report_zip
+            report_zip,
+            finder_icon
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");

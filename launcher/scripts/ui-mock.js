@@ -50,7 +50,7 @@
       installDir: settings.installDir, install: flags.notInstalled ? null : install, installError: null, icon: null, background: null,
       lastSave: { title: "inFAMOUS 2", subtitle: "(Auto) 7. Sangue no gelo", detail: "Progresso: 34%\nKarma: Herói", modified: now - 3600 * 5, folder: "/saves/x" },
       gameRunning: !!flags.running, rebuildRunning: false, rebuildScript: "/x/rebuild.py", dataRoot: "/x", defaultInstallDir: settings.installDir,
-      hostSupported: true, os: "macos",
+      hostSupported: true, os: "macos", appBundle: "/Applications/infamous2-recomp.app", finderIcon: false,
     }),
     check_updates: () => ({
       appVersion: "0.1.0", sourcesCommit: "89216bb", installedCommit: "89216bb", rebuildSuggested: false,
@@ -97,6 +97,7 @@
     launch_preview: () => "INFAMOUS2_VFS=/x/vfs PS3_LANG=pt PS3_ANISO=8 PS3_AA=fxaa PS3_SHARPEN=0.35 PS3_UPSCALE=metalfx PS3_WINDOW_SIZE=1920x1080 PS3_AUDIO_VOLUME=85 /x/run.sh",
     read_game_log: () => ({ path: "/Users/player/Library/Application Support/infamous2-recomp/logs/game.log", exists: true, size: log.length, modified: now - 120, text: log, truncated: false }),
     log_paths: () => ({ game: "/x/game.log", saves: "/x/gamedata" }),
+    finder_icon: (args) => args.set,
   };
   let cb = 0;
   window.__TAURI_INTERNALS__ = {
