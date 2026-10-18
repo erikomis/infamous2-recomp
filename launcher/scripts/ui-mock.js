@@ -62,6 +62,24 @@
     report_info: () => (flags.running
       ? { dir: "/x/reports/20261018T130000Z", id: "20261018T130000Z", live: true, captures: 2, pending: false, surfaces: 412, shaders: 96, bytes: 512000000, zip: null, zipBytes: 0 }
       : null),
+    report_list: () => [
+      { dir: "/x/reports/20261018-190412", id: "20261018-190412", live: false, debug: true, captures: 2, pending: false, surfaces: 388,
+        shaders: 214, bytes: 486000000, logBytes: 41200000, duration: 1874, exit: "signal=15", stopped: true, crashReport: false,
+        zip: null, zipBytes: 0,
+        triage: { errors: 3, warnings: 7, expected: 912, captures: 2, stale: false, md: "/x/reports/20261018-190412/triage.md",
+          categories: [["stall", 4], ["texture", 3], ["audio", 2], ["unimplemented", 1]],
+          top: [
+            { category: "texture", severity: "error", title: "texture bind failed -> black: fmt 0x9F", count: 3, first: 612, last: 1440 },
+            { category: "stall", severity: "warn", title: "GPU stalled 2 s: the FIFO is empty (get == put), the game stopped feeding it", count: 2, first: 905, last: 1702 },
+            { category: "stall", severity: "warn", title: "RSX semaphore acquire (offset 0x890) gave up after 200 ms: a label nobody wrote (lighting may be stale)", count: 2, first: 911, last: 911 },
+            { category: "audio", severity: "warn", title: "audio mixer behind real time (< 175 of 187.5 blocks/s): crackle or slow sound", count: 2, first: 300, last: 305 },
+            { category: "unimplemented", severity: "warn", title: "unresolved HLE import NID 0x1A2B3C4D", count: 1, first: 12, last: 12 },
+          ] } },
+      { dir: "/x/reports/20261017-221530", id: "20261017-221530", live: false, debug: true, captures: 0, pending: false, surfaces: 0,
+        shaders: 198, bytes: 23000000, logBytes: 19800000, duration: 642, exit: "code=0", stopped: false, crashReport: false,
+        zip: null, zipBytes: 0, triage: null },
+    ],
+    report_triage: () => answers.report_list()[1],
     check_prereqs: () => ({
       os: "macos", arch: "aarch64", supported: true, clt: true, homebrew: "/opt/homebrew/bin/brew", script: "/x/rebuild.py",
       checks: ["host", "xcode-clt", "python", "cmake", "ninja", "sdl2", "glslang", "spirv-cross", "rpcs3", "firmware", "disk"].map((n) => ({ level: "ok", name: n, message: "ok" })),

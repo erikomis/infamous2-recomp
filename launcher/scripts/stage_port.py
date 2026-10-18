@@ -11,7 +11,9 @@ machine into <out>, in the repository's layout (the launcher looks for
     port/LICENSE, CREDITS.md
     port/tools/setup_toolkit.sh     fetches and patches the ps3recomp toolkit
     port/infamous2-lle/             rebuild.PORT_FILES + README.md
-    port/infamous2-lle/tools/       the *.py / *.sh that step_port copies
+    port/infamous2-lle/tools/       the *.py / *.sh (and rebuild.TOOL_DATA) that
+                                    step_port copies; the launcher runs
+                                    log_triage.py from here
     port/infamous2-lle/patches/     the one toolkit patch rebuild.py applies
 
 Only files tracked by git are taken, so nothing local (a decrypted EBOOT, a
@@ -61,7 +63,7 @@ def wanted_files(rb):
     # step_port copies every *.py / *.sh of infamous2-lle/tools, and the
     # port's step key hashes them: ship the same set.
     want += [p for p in tracked(['infamous2-lle/tools'])
-             if p.count('/') == 2 and p.endswith(('.py', '.sh'))]
+             if p.count('/') == 2 and rb.is_tool(p.rsplit('/', 1)[1])]
     want.append(os.path.relpath(rb.PATCH, REPO).replace(os.sep, '/'))
     return want
 

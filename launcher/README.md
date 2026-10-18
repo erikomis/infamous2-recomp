@@ -61,7 +61,7 @@ Screenshots (1280×800, mocked backend, no game art: the fallback hero):
 | ![Home](docs/screenshots/home.png) | ![Graphics](docs/screenshots/graphics.png) |
 | ![Performance](docs/screenshots/performance.png) | ![Game](docs/screenshots/game.png) |
 | ![Controls](docs/screenshots/controls.png) | ![Advanced: install](docs/screenshots/advanced-install.png) |
-| ![Advanced: game log](docs/screenshots/advanced-log.png) | ![Home, diagnostic game running](docs/screenshots/home-running.png) |
+| ![Advanced: game log](docs/screenshots/advanced-log.png) | ![Home, debug-mode game running](docs/screenshots/home-running.png) |
 
 More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
 
@@ -71,14 +71,14 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   nothing ships with the app), else a plain styled title; the
   "NPUA80638 · version 01.03" line, build date and port commit; a big
   **Play/Jogar** (Stop in orange while the game runs; **Capture this frame**
-  next to it when the game was started in diagnostic mode). A bar under it
+  next to it when the game was started in debug mode). A bar under it
   when there is news from Updates (rebuild needed, newer app). Then three
   cards: **Quick settings** (display mode, upscaling, vsync, fps counter: the
   same settings as the Graphics/Performance pages, kept in sync), **Last
   save** (title, progress, date; manage saves, saves folder) and **Status**
-  (installed/running/diagnostic, version, build, port commit, folder; links to
+  (installed/running/debug mode, version, build, port commit, folder; links to
   the log viewer, the log file and Updates). A strip at the bottom leads to
-  Report a problem. Play first backs up the saves (see Saves).
+  Debug mode. Play first backs up the saves (see Saves).
 - **Graphics / Gráficos**: Display (window mode `PS3_WINDOW_MODE`, size
   `PS3_WINDOW_SIZE`, screen `PS3_DISPLAY` from AppKit's screen names through
   `osascript`, the Dock icon `PS3_WINDOW_ICON=game`) and Image quality
@@ -133,11 +133,12 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
     to it. `INFAMOUS2_NO_UPDATE_CHECK=1` turns the online check off
     (`src-tauri/src/update.rs`).
   - **Game log**: the end of the log the last game this app started wrote
-    (`logs/game.log`, or the report folder's in diagnostic mode; at most the
+    (`logs/game.log`, or the session folder's in debug mode; at most the
     last 512 KB, cut at a line), read by `read_game_log`. Followed every 2 s
     while the tab is open, a text filter, "warnings and errors only",
     warnings in orange and errors in red, copy, show in Finder.
-  - **Report a problem**: see below.
+  - **Debug mode**: play with the problems logged, capture frames, analyse
+    past sessions and pack them into a .zip; see "Debug mode" below.
   - **Environment**: extra environment variables, the equivalent command line,
     and Restore defaults.
 - UI in Brazilian Portuguese (default) and English (sidebar), English as the
@@ -187,38 +188,99 @@ launcher (Rust, src-tauri/src/lib.rs)
 - A GUI app on macOS starts with a minimal `PATH`; the launcher puts
   `/opt/homebrew/bin` and `/usr/local/bin` in front for the rebuild and the game.
 
-## Report a problem
+## Debug mode (Report a problem)
 
-`src-tauri/src/report.rs`, in Advanced > Report a problem (Home's hero also
-shows **Capture this frame** while such a game runs). **Play in diagnostic mode** starts the game as
-Play does, plus the variables of `infamous2-lle/tools/play_dump.sh` pointed
-at a new folder `…/infamous2-recomp/reports/<UTC time>/`: the texture log
+`src-tauri/src/report.rs`, in Advanced > Debug mode (Home's hero also shows
+**Capture this frame** while such a game runs). The player plays normally;
+the game logs what goes wrong and a session index keeps the times, so a
+person or an agent can go through the session afterwards with
+`infamous2-lle/tools/log_triage.py`.
+
+**Play in debug mode** starts the game as Play does, plus the variables of
+`infamous2-lle/tools/play_dump.sh` pointed at a new folder
+`…/infamous2-recomp/reports/<UTC time>/`: the texture log
 (`PS3RECOMP_ENG_TEXLOG`), every pipeline's shaders with `manifest.txt`
 (`shaders/`), the pass log on request (`PS3RECOMP_METAL_PASS_LOG=2`, flushed),
 the whole frame every 120 presents (`frame.ppm`), the trigger file
 (`PS3RECOMP_METAL_DUMP_TRIGGER=<report>/.dump-now`) and the FPS line. Unlike
 `play_dump.sh` it sets `PS3RECOMP_METAL_SURF_DUMP_MIN=2000000000`, so the
-first world frame is not dumped on its own: only captures are. The game's
-log goes to `<report>/game.log` (Home's "Open game log" and the log viewer
-follow it), and
-`system.txt` gets the macOS version, Mac model, CPU, memory, GPU, the
-build's version and commits, and the variables `run.sh` was given (home
-folder as `~`). A normal Play is unchanged.
+first world frame is not dumped on its own: only captures are. On top of
+that, the problem logs (`report::DEBUG_ENV`), none of which changes what is
+drawn:
+
+| Variable | What it adds to the log | Cost |
+|---|---|---|
+| `PS3RECOMP_ENG_FPSLOG=1` | per 10 s: frames that drew (world/light), presents with no draws, and where a present's time went | a clock read per present |
+| `PS3_EDGE_WATCH=1` | the Edge geometry job's slot allocator checked after every runtime call; names the call when the rare Edge SPU fault starts | a 5-register compare per call in one SPU loop |
+| `LV2_ERRDBG=1` | each syscall that fails, once per (number, error), at most 64 | one compare per syscall |
+| `AUDIO_RATE=1` | every 5 s: mixed blocks vs real time, the silent share, frames the device dropped | a scan of one 256-sample block until a non-zero sample |
+| `PS3RECOMP_ENG_DROPLOG=1` | draws the engine drops and why (6 per reason) | only on a dropped draw |
+| `PS3_THREAD_DUMP=60` | every 60 s each guest thread and its call chain: the last dump before a hang shows what it waits on | ~30 lines a minute |
+
+Always on anyway (no variable needed): unresolved HLE NIDs (once each),
+texture binds that come out black (`PS3RECOMP_ENG_TEXFAIL`, first 48),
+pipeline and MSL compile failures, `[cellGcmSys] ref stuck` FIFO stalls,
+semaphore acquires given up, SPU faults and branches to 0, `[fs] open FAIL`.
+Not used: `PS3_FTRACE` (a fixed window, written only at a clean exit),
+`PS3_FSLOG` (a line per stat and read).
+
+The game's log goes to `<report>/game.log` (Home's "Open game log" and the
+log viewer follow it), and `system.txt` gets the macOS version, Mac model,
+CPU, memory, GPU, the build's version and commits, and the variables
+`run.sh` was given (home folder as `~`). `events.tsv` is the session index,
+one tab-separated line per event (UTC time, Unix ms, the log's size then,
+event, detail): `start`, `tick` every 2 s, `capture n=<n> frame=<present>
+shot=<file>`, `taken` (the game consumed the trigger), `stop` (Stop pressed),
+`exit code=<n>` or `exit signal=<n>`. When the game ends in a way the player
+did not ask for, the launcher waits up to 20 s for macOS's crash report
+(`~/Library/Logs/DiagnosticReports/Infamous2Recomp-*.ips`) and copies it as
+`crash.ips`. A normal Play is unchanged.
 
 - **Capture this frame** (while that game runs) touches the trigger: at its
   next present the game removes it and writes every render target to
-  `surf/f<present>_h<handle>.ppm` and that frame's pass log to the log. The
+  `surf/f<n>_h<handle>.ppm` and that frame's pass log to the log. The
   launcher also keeps the latest `frame.ppm` as `shots/shot<n>.ppm` and
-  notes the capture in `captures.txt`. The card shows the count of captures,
-  surfaces and shaders and the folder's size, and "waiting" until the game
-  has taken the capture.
-- **Create .zip** writes `reports/infamous2-report-<id>.zip` (and shows it):
-  every file of the folder, the PPMs as PNG (converted in Rust, Sub filter +
-  deflate; a capture is ~130-280 surfaces, ~150-340 MB as PPM), text files
-  with the home folder's path replaced by `~`, and the optional description
-  as `notes.txt`. **Open folder** and **Open an issue on GitHub** sit next
-  to it. The last report (this session's, or the newest on disk) stays
-  available after the game closes.
+  notes the capture in `captures.txt` and `events.tsv`, with the present
+  count of the last frame dump in the log (`captured frame N`, to the
+  nearest 120). The card shows the count of captures, surfaces and shaders
+  and the folder's size, and "waiting" until the game has taken the capture.
+- **Debug sessions** lists every report folder, newest first: date, length,
+  how it ended (Stop, closed, crashed, crash report saved), captures, log
+  and folder size, and the analysis when there is one.
+  - **Analyse** runs `python3 -I log_triage.py <folder>` (the bundled port's
+    copy, a development checkout's, or the install's) and shows its summary:
+    errors, warnings, expected lines, problem counts by category and the top
+    issues with their count and first/last time; **Open the analysis**
+    shows `triage.md`.
+  - **Create .zip** writes `reports/infamous2-report-<id>.zip` (and shows
+    it): a fresh analysis first, then every file of the folder, the PPMs as
+    PNG (converted in Rust, Sub filter + deflate; a capture is ~130-280
+    surfaces, ~150-340 MB as PPM), text files (`.log .txt .md .json .tsv
+    .ips`) with the home folder's path replaced by `~`, and the optional
+    description as `notes.txt`. It can be attached to an issue or handed to
+    the developer.
+  - **Open folder**, **Show the .zip**; **Open an issue on GitHub** below.
+
+### log_triage.py
+
+`infamous2-lle/tools/log_triage.py <session folder | log>` (standard
+library, Python 3.9+; `--selftest` runs it on a synthetic session) writes
+`triage.md` and `triage.json` into the session folder (for a bare
+`out/<name>.log`, `out/<name>.triage.md` / `.json`; `--out` picks another
+folder). Lines are grouped by message with numbers and addresses masked,
+with counts and first/last time, into crash (and the exit and crash report),
+stall, shader (with the FP/VP hashes from `shaders/manifest.txt` and the
+decompiler TODOs in the dumped shaders), texture (by format), SPU,
+unimplemented (NIDs, stub syscalls), syscall errors, file system, audio,
+draws dropped and other errors; plus fps and frame-time statistics, the last
+thread dump when a stall or crash needs it, and each capture with the
+problems from 10 s before to 3 s after and the log lines just before it.
+Times come from `events.tsv`, else from the game's own timestamps (`t=` on
+the frame-dump lines). Lines that match `log_triage_known.txt` (category |
+regex | why) count as expected and stay out of the problem lists: the
+missing patch and DLC psarcs, `ugc_message`, the boot-time FIFO wait, syscall
+871, timeouts of waits that were given one, the offline network. A 1.5 GB
+batch of real logs parses at ~40 MB/s.
 
 ## Saves
 
