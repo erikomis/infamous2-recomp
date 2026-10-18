@@ -288,6 +288,47 @@ faixas pretas quando a janela tem outro formato.
 | Cmd+F ou Option+Return | liga/desliga a tela cheia (sem bordas com `PS3_WINDOW_MODE=borderless`, a do macOS nos outros casos) |
 | Cmd+Ctrl+F | liga/desliga a tela cheia do macOS |
 | Esc / Cmd | solta o mouse |
+| F1 (fn+F1 no teclado do Mac), Insert ou Cmd+, ; L3+R3 no controle | o menu dentro do jogo (abaixo) |
+
+### Menu dentro do jogo
+
+F1 (fn+F1 no teclado do Mac, onde F1 é a tecla de brilho), Insert (Help nos
+teclados Mac antigos) ou Cmd+, abre e fecha o menu; no controle, aperte L3 e R3
+(os dois analógicos) juntos. Esc ou ○ também fecha, L1/R1 trocam de aba, o
+D-pad/analógico esquerdo e ✕ mexem nos controles, e o mouse clica. Com o menu
+aberto o jogo não recebe comandos (controle, teclas e mouse ficam neutros e o
+cursor é solto), mas continua rodando: pause antes com START se precisar. Um
+clique de analógico sozinho continua chegando ao jogo como antes; com os dois
+apertados, nenhum chega. `PS3_OVERLAY_PAD=0` desliga a combinação no controle,
+`PS3_OVERLAY=0` o menu inteiro.
+
+| Aba | O que muda, na hora |
+| --- | --- |
+| Imagem | a gama própria (ou o brilho do próprio jogo), nitidez, FXAA, escala MetalFX, vsync, janela / tela cheia do macOS / sem bordas; a filtragem anisotrópica vale no próximo início |
+| Áudio | volume geral |
+| Controles | vibração liga/desliga e força, sensibilidade do mouse e inversão vertical/horizontal |
+| Desempenho | um painel pequeno num canto que fica com o menu fechado: fps, tempo de quadro com gráfico, núcleos de CPU em uso e threads ocupadas (≥ 80% de um núcleo: aqui sobretudo as das SPUs), o tempo de codificação Metal do RSX e a espera pela GPU por quadro; canto, opacidade e gráfico são opções |
+
+O que o menu muda é salvo quando ele fecha, em
+`~/Library/Application Support/infamous2-recomp/overlay.ini` (o `run.sh`
+aponta `PS3_OVERLAY_INI` para ele no jogo em janela; `PS3_OVERLAY_INI=` deixa as
+mudanças só na sessão). O arquivo guarda só o que foi mudado no menu, em linhas
+com os mesmos nomes e valores das variáveis (`PS3_SHARPEN=0.40`,
+`PS3_AUDIO_VOLUME=70`, `PS3_OVERLAY_HUD=1`, ...). Precedência ao abrir:
+
+1. uma variável definida quando o jogo abre vence (o terminal, ou o launcher,
+   que passa só os ajustes que estão fora do padrão);
+2. senão, a linha do menu no `overlay.ini`;
+3. senão, o padrão embutido (e, para o mouse, o `[mouse]` do arquivo de
+   controles).
+
+O menu marca com um "env" laranja um ajuste cuja variável estava definida: a
+mudança vale na hora, mas a variável vence de novo na próxima vez. Para o valor
+do menu ficar, volte o ajuste do launcher ao padrão. Um aviso pequeno no canto
+diz quando os ajustes foram salvos. Execuções headless nunca leem o arquivo e
+não desenham nada; `PS3_OVERLAY_FORCE_OPEN=1` / `PS3_OVERLAY_HUD=1` desenham o
+menu / o painel lá também, nos quadros que o `tools/capture.sh` guarda (um
+interruptor de teste).
 
 | Variável | O que faz |
 | --- | --- |

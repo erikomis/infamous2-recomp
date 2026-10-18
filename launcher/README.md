@@ -143,6 +143,12 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
     and Restore defaults.
 - UI in Brazilian Portuguese (default) and English (sidebar), English as the
   fallback for a missing string.
+- **In the game**, F1 (fn+F1 on a Mac keyboard), Insert or Cmd+, opens the
+  in-game menu (L3+R3 together on a controller): picture, volume, vibration,
+  mouse and a performance HUD, changed live and saved to `overlay.ini` next to
+  `launcher.json`. A setting this app has away from its default is passed as a
+  variable and wins over the menu's saved value at the next Play (main README,
+  "In-game menu"). The Advanced page says so too.
 
 ## How it fits together
 
@@ -458,6 +464,6 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
   password in Terminal); the app shows the command.
 - From the God of War III PC launcher, not done yet: a "Play" shortcut or
   executable that starts the game straight away with the saved settings (needs
-  a `--play` mode in the app), an in-game overlay menu, button-prompt icon
+  a `--play` mode in the app), button-prompt icon
   styles, mods, "Add to Steam", downloading and installing app updates, a GUI
   scale option.
