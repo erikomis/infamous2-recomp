@@ -270,6 +270,7 @@ Open upstream PRs applied:
 - [x] Renderer diagnostics: per-material pass log, configurable thresholds, shader and render-target dumps, and analysis with `passlog.py`, `psfeatures.py`, `surfstats.py` and `greenshare.py`; `tools/play_capture.sh` for windowed sessions.
 - [x] Extractor for the EBOOT's 27 job modules (`extract_eboot_jobmods.py`), translation of the captured SPURS jobs (`lift_spu_jobs.sh`), re-translation of a module with extra entry points (`relift_jobmod.py`), translation of the five `DA7ABA5E` modules (`lift_datamods.py`) and of the relocatable jobs (`lift_relocmods.py`).
 - [x] `rap2rifkey.py`: an EDAT's RIF key from the player's `.rap`.
+- [x] (2026-10-17) CI for the port's own scripts (`.github/workflows/tools.yml`, on every change to a `.py` or `.sh`): every Python file compiles, every shell script parses, and `decrypt_self.py --selftest` and `pup_extract.py --selftest` run their synthetic round trips (made-up keys), so the no-RPCS3 decryption and the PUP path stay checked. Run locally step by step; the first GitHub run comes with the push.
 - [x] GitHub repository with README, credits, license and a `.gitignore` that blocks game data, firmware and saves.
 
 ---
