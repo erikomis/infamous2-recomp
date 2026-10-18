@@ -6,6 +6,8 @@ import { initControls, renderControls, showControls } from "./controls";
 import { RebuildProgress } from "./progress";
 import { initSaves, refresh as refreshSaves, render as renderSaves } from "./saves";
 import { initUpdates, refreshUpdates, renderUpdates } from "./update";
+import { initLog, renderLog, showLog } from "./gamelog";
+import { flashSaved, human } from "./ui";
 
 // ---- types shared with src-tauri/src/lib.rs (camelCase) ----------------------
 interface Settings {
@@ -128,18 +130,49 @@ let lastDry = false;
 const progress = new RebuildProgress();
 
 // ---- navigation ----------------------------------------------------------------
-function showView(name: string) {
+// Pages: home, graphics, performance, game, controls, advanced; Advanced has
+// tabs (install, updates, log, diagnostics, env). Older names still work.
+const LEGACY: Record<string, [string, string?]> = {
+  install: ["advanced", "install"],
+  settings: ["graphics"],
+  saves: ["game"],
+};
+let advancedTab = "install";
+
+function showView(view: string, tab?: string) {
+  const [name, legacyTab] = LEGACY[view] ?? [view];
+  tab ??= legacyTab;
   document.querySelectorAll<HTMLElement>(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  document.querySelector("main")!.scrollTop = 0;
   if (name === "home") refreshStatus();
-  if (name === "settings") {
-    updatePreview();
+  if (name === "graphics") refreshOutputs();
+  if (name === "game") {
     refreshOutputs();
+    refreshSaves();
   }
   if (name === "controls") showControls();
-  if (name === "saves") refreshSaves();
+  if (name === "advanced") showTab(tab ?? advancedTab);
 }
+
+function showTab(tab: string) {
+  advancedTab = tab;
+  document.querySelectorAll<HTMLElement>(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll<HTMLElement>(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${tab}`));
+  if (tab === "env") updatePreview();
+  if (tab === "log") showLog();
+  if (tab === "updates") renderUpdates();
+  if (tab === "diagnostics") refreshReport();
+}
+
 document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view!)));
+document.querySelectorAll<HTMLElement>(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab!)));
+// in-page shortcuts: data-go="page" or "page:tab"
+document.querySelectorAll<HTMLElement>("[data-go]").forEach((b) =>
+  b.addEventListener("click", () => {
+    const [view, tab] = b.dataset.go!.split(":");
+    showView(view, tab);
+  }));
 
 // ---- settings persistence --------------------------------------------------------
 let saveTimer = 0;
@@ -147,10 +180,7 @@ function persist() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(async () => {
     await invoke("save_settings", { settings });
-    for (const s of [$("saved"), $("controls-saved"), $("saves-saved")]) {
-      show(s, true);
-      window.setTimeout(() => show(s, false), 1200);
-    }
+    flashSaved();
     updatePreview();
   }, 250);
 }
@@ -183,6 +213,8 @@ function applyLang(l: Lang) {
   renderSaves();
   renderOutputs();
   renderReport();
+  renderLog();
+  renderUpdates();
 }
 
 // ---- screens and audio outputs (PS3_DISPLAY, PS3_AUDIO_DEVICE) ------------------
@@ -230,21 +262,36 @@ function renderOutputs() {
   fillSelect("audio-device", devices, settings.audioDevice, "settings.audioMissing");
 }
 
+/** A setting can have more than one control (Home's quick settings repeat
+ * a few of Graphics and Performance): after every change each control is set
+ * again from `settings`. */
+const syncers: (() => void)[] = [];
+function syncAll() {
+  for (const f of syncers) f();
+  syncDependent();
+}
+
 function bindSettings() {
   const bindCheck = (id: string, key: keyof Settings) => {
     const el = $<HTMLInputElement>(id);
-    el.checked = settings[key] as boolean;
+    const sync = () => (el.checked = settings[key] as boolean);
+    syncers.push(sync);
+    sync();
     el.addEventListener("change", () => {
       (settings[key] as boolean) = el.checked;
-      syncDependent();
+      syncAll();
       persist();
     });
   };
   const bindRange = (id: string, key: keyof Settings, fmt: (v: number) => string) => {
     const el = $<HTMLInputElement>(id);
     const out = $(`${id}-out`);
-    el.value = String(settings[key]);
-    out.textContent = fmt(Number(el.value));
+    const sync = () => {
+      el.value = String(settings[key]);
+      out.textContent = fmt(Number(el.value));
+    };
+    syncers.push(sync);
+    sync();
     el.addEventListener("input", () => {
       (settings[key] as number) = Number(el.value);
       out.textContent = fmt(Number(el.value));
@@ -261,8 +308,10 @@ function bindSettings() {
   bindCheck("mouse-capture", "mouseCapture");
   bindCheck("game-icon", "gameIcon");
   bindCheck("vsync", "vsync");
+  bindCheck("q-vsync", "vsync");
   bindCheck("rumble-on", "rumble");
   bindCheck("show-fps", "showFps");
+  bindCheck("q-fps", "showFps");
   for (const [id, key] of [["screen", "display"], ["audio-device", "audioDevice"]] as const) {
     const el = $<HTMLSelectElement>(id);
     el.addEventListener("change", () => {
@@ -270,16 +319,8 @@ function bindSettings() {
       persist();
     });
   }
-  const bindSelect = (id: string, key: "windowMode" | "windowSize") => {
-    const el = $<HTMLSelectElement>(id);
-    el.value = settings[key];
-    if (el.value !== settings[key]) el.selectedIndex = 0; // a value the list does not offer
-    el.addEventListener("change", () => {
-      settings[key] = el.value;
-      persist();
-    });
-  };
   bindSelect("display", "windowMode");
+  bindSelect("q-display", "windowMode");
   bindSelect("window-size", "windowSize");
   bindRange("gamma", "gamma", (v) => v.toFixed(2));
   bindGraphics(bindRange);
@@ -366,19 +407,30 @@ function bindSettings() {
   syncDependent();
 }
 
+/** A fixed list (window mode and size, anisotropic, AA, upscaling). */
+function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa" | "upscale") {
+  const el = $<HTMLSelectElement>(id);
+  const sync = () => {
+    el.value = String(settings[key]);
+    if (el.value !== String(settings[key])) el.selectedIndex = 0; // a value the list does not offer
+  };
+  syncers.push(sync);
+  sync();
+  el.addEventListener("change", () => {
+    if (key === "aniso") settings.aniso = Number(el.value);
+    else settings[key] = el.value;
+    syncAll();
+    persist();
+  });
+}
+
 /** Anisotropic filtering, AA, sharpening and upscaling (PS3_ANISO, PS3_AA,
  * PS3_SHARPEN, PS3_UPSCALE); Play passes only what differs from the default. */
 function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: number) => string) => void) {
-  for (const [id, key] of [["aniso", "aniso"], ["aa", "aa"], ["upscale", "upscale"]] as const) {
-    const el = $<HTMLSelectElement>(id);
-    el.value = String(settings[key]);
-    if (el.value !== String(settings[key])) el.selectedIndex = 0; // a value the list does not offer
-    el.addEventListener("change", () => {
-      if (key === "aniso") settings.aniso = Number(el.value);
-      else settings[key] = el.value;
-      persist();
-    });
-  }
+  bindSelect("aniso", "aniso");
+  bindSelect("aa", "aa");
+  bindSelect("upscale", "upscale");
+  bindSelect("q-upscale", "upscale");
   bindRange("sharpen", "sharpen", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
 }
 
@@ -426,30 +478,35 @@ async function refreshStatus() {
   refreshUpdates();
 }
 
+const TITLE_ID = "NPUA80638";
+
 function renderHome() {
   if (!status) return;
   const inst = status.install;
   show($("installed-actions"), !!inst);
   show($("not-installed"), !inst);
+  // the art comes from the player's own copy (ICON0.PNG, PIC1.PNG); without
+  // it the hero is a plain styled title
   const cover = $<HTMLImageElement>("cover");
   if (status.icon) cover.src = status.icon;
   show(cover, !!status.icon);
-  $("hero").style.backgroundImage = status.background ? `url(${status.background})` : "";
+  $("hero-art").style.backgroundImage = status.background ? `url(${status.background})` : "";
+  $("hero").classList.toggle("no-art", !status.background);
   $("game-title").textContent = inst?.title || "inFAMOUS 2";
+  $("game-id").textContent = inst?.appVer ? `${TITLE_ID} · ${t("home.version")} ${inst.appVer}` : inst ? TITLE_ID : "";
   const meta: string[] = [];
   if (inst) {
-    if (inst.appVer) meta.push(`${t("home.version")} ${inst.appVer}`);
     if (inst.builtAt) meta.push(`${t("home.builtAt")} ${new Date(inst.builtAt).toLocaleString(lang())}`);
     if (inst.layout === "dev") meta.push(t("home.devTree"));
     if (inst.portCommit) meta.push(`port ${inst.portCommit}`);
   }
   $("game-meta").textContent = meta.join(" · ");
   const play = $<HTMLButtonElement>("play");
-  play.textContent = t(gameRunning ? "home.stop" : "home.play");
-  play.classList.toggle("danger", gameRunning);
+  $("play-label").textContent = t(gameRunning ? "home.stop" : "home.play");
+  play.classList.toggle("stop", gameRunning);
   play.disabled = rebuildRunning || !status.hostSupported;
   show($("run-state"), gameRunning);
-  show($("report-card"), !!inst);
+  renderStatusList();
   renderReport();
   show($("home-unsupported"), !status.hostSupported);
   show($("go-install"), status.hostSupported);
@@ -469,6 +526,39 @@ function renderHome() {
     w.className = "small";
     w.textContent = s.modified ? new Date(s.modified * 1000).toLocaleString(lang()) : "";
     box.append(b, d, w);
+  }
+}
+
+/** Home's Status card. */
+function renderStatusList() {
+  if (!status) return;
+  const inst = status.install;
+  const rows: [Key, string, string?][] = [];
+  const live = !!report?.live && gameRunning;
+  rows.push([
+    "home.st.state",
+    rebuildRunning
+      ? t("home.st.rebuilding")
+      : gameRunning
+        ? t(live ? "home.st.diag" : "home.st.running")
+        : inst
+          ? t(inst.layout === "dev" ? "home.st.dev" : "home.st.installed")
+          : t("home.st.notInstalled"),
+    inst || gameRunning ? "ok-text" : "warn-text",
+  ]);
+  if (inst?.appVer) rows.push(["home.st.version", `${TITLE_ID} ${inst.appVer}`]);
+  if (inst?.builtAt) rows.push(["home.st.built", new Date(inst.builtAt).toLocaleString(lang())]);
+  if (inst?.portCommit) rows.push(["home.st.port", inst.portCommit]);
+  rows.push(["home.st.folder", status.installDir.replace(/^\/Users\/[^/]+/, "~")]);
+  const dl = $("status-list");
+  dl.replaceChildren();
+  for (const [k, v, cls] of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = t(k);
+    const dd = document.createElement("dd");
+    dd.textContent = v;
+    if (cls) dd.className = cls;
+    dl.append(dt, dd);
   }
 }
 
@@ -496,8 +586,11 @@ $("play").addEventListener("click", async () => {
   }
   await startGame(false);
 });
-$("go-install").addEventListener("click", () => showView("install"));
-$("go-saves").addEventListener("click", () => showView("saves"));
+$("go-install").addEventListener("click", () => showView("advanced", "install"));
+$("go-saves").addEventListener("click", () => {
+  showView("game");
+  $("saves-section").scrollIntoView({ behavior: "smooth", block: "start" });
+});
 $("open-saves").addEventListener("click", async () => {
   const p = await invoke<Record<string, string>>("log_paths");
   invoke("reveal", { path: status?.lastSave?.folder ?? p.saves });
@@ -512,17 +605,6 @@ let report: ReportInfo | null = null;
 let reportPoll = 0;
 let zipping = false;
 const URL_ISSUE = "https://github.com/erikomis/infamous2-recomp/issues/new";
-
-function human(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB"];
-  let v = bytes;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(i && v < 10 ? 1 : 0)} ${units[i]}`;
-}
 
 async function refreshReport() {
   try {
@@ -545,8 +627,10 @@ function renderReport() {
   const live = !!r?.live && gameRunning;
   $("report-hint").textContent = t(live ? "report.hintLive" : gameRunning ? "report.hintNotDiag" : "report.hintIdle");
   show($("report-play"), !gameRunning);
-  $<HTMLButtonElement>("report-play").disabled = rebuildRunning || !status?.hostSupported;
+  $<HTMLButtonElement>("report-play").disabled = rebuildRunning || !status?.hostSupported || !status?.install;
   show($("report-capture"), live);
+  show($("hero-capture"), live);
+  renderStatusList();
   show($("report-done"), !!r);
   show($("report-show-zip"), !!r?.zip);
   $<HTMLButtonElement>("report-zip").disabled = zipping;
@@ -557,15 +641,20 @@ function renderReport() {
 }
 
 $("report-play").addEventListener("click", () => startGame(true));
-$("report-capture").addEventListener("click", async () => {
+async function captureFrame() {
+  let text: string;
   try {
     report = await invoke<ReportInfo>("report_capture");
-    $("report-msg").textContent = t("report.captured", { n: report.captures });
+    text = t("report.captured", { n: report.captures });
   } catch (e) {
-    $("report-msg").textContent = String(e);
+    text = String(e);
   }
+  $("report-msg").textContent = text;
+  $("home-msg").textContent = text;
   renderReport();
-});
+}
+$("report-capture").addEventListener("click", captureFrame);
+$("hero-capture").addEventListener("click", captureFrame);
 $("report-open").addEventListener("click", () => report && invoke("reveal", { path: report.dir }));
 $("report-show-zip").addEventListener("click", () => report?.zip && invoke("reveal", { path: report.zip }));
 $("report-issue").addEventListener("click", () => invoke("open_url", { url: URL_ISSUE }));
@@ -622,6 +711,7 @@ async function refreshPrereqs() {
 
 /** Open "More options" at the decryption fields. */
 function showDecryptOptions(focus: string) {
+  if (!$("tab-install").classList.contains("active") || !$("view-advanced").classList.contains("active")) showView("advanced", "install");
   ($("more-options") as HTMLDetailsElement).open = true;
   const el = $(focus);
   el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1017,6 +1107,7 @@ listen<number>("game-exit", (ev) => {
   $("home-msg").textContent = t("home.exited", { code: ev.payload });
   renderHome();
   refreshReport();
+  if ($("tab-log").classList.contains("active")) showLog();
 });
 
 // ---- start ---------------------------------------------------------------------
@@ -1025,6 +1116,7 @@ async function main() {
   setLang(settings.uiLang as Lang);
   bindSettings();
   initControls();
+  initLog();
   initSaves({
     keep: () => settings.saveBackupsKeep ?? 10,
     setKeep: (n) => {
@@ -1035,7 +1127,7 @@ async function main() {
   initUpdates({
     canRebuild: () => !rebuildRunning && !gameRunning && !!status?.hostSupported && !!status?.rebuildScript,
     rebuild: () => {
-      showView("install");
+      showView("advanced", "install");
       startRebuild(false);
     },
   });
@@ -1051,7 +1143,7 @@ async function main() {
   await refreshStatus();
   refreshReport();
   renderPrereqs();
-  if (!status?.install) showView("install");
+  if (!status?.install) showView("advanced", "install");
   if (status?.hostSupported) {
     // "only pick the game folder": RPCS3's copy and licence are found on their own
     if (!settings.gamePaths.length) await detectRpcs3(true);

@@ -8,246 +8,374 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
+    <!-- icon sprite (original line icons, currentColor) -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2 4.5 13.5h6.5L9.5 22l10-12.5h-6.6z" /></symbol>
+      <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 11 12 4l8.5 7v8.5a1 1 0 0 1-1 1H15v-6H9v6H4.5a1 1 0 0 1-1-1z" /></symbol>
+      <symbol id="i-graphics" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12.5" rx="1.5" /><path d="M8.5 20.5h7M12 16.5v4" /></symbol>
+      <symbol id="i-perf" viewBox="0 0 24 24"><path d="M3.8 17.5a8.2 8.2 0 1 1 16.4 0" /><path d="m12 17.5 4.2-5.2" /><path d="M6.5 13.5h1M12 7.8v1M17.5 13.5h-1" /></symbol>
+      <symbol id="i-game" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.8" /><circle cx="12" cy="12" r="2.6" /><path d="M12 3.2a8.8 8.8 0 0 1 8.2 5.6" /></symbol>
+      <symbol id="i-controls" viewBox="0 0 24 24"><path d="M7.5 7.5h9a4.5 4.5 0 0 1 4.4 3.6l.8 4.2a2.7 2.7 0 0 1-4.7 2.3L15 15.5H9l-2 2.1a2.7 2.7 0 0 1-4.7-2.3l.8-4.2a4.5 4.5 0 0 1 4.4-3.6z" /><path d="M8 10.2v3.2M6.4 11.8h3.2M15.6 11h.01M17.6 13h.01" /></symbol>
+      <symbol id="i-advanced" viewBox="0 0 24 24"><path d="M4 6.5h9M17 6.5h3M4 12h3M11 12h9M4 17.5h11M19 17.5h1" /><circle cx="15" cy="6.5" r="2" /><circle cx="9" cy="12" r="2" /><circle cx="17" cy="17.5" r="2" /></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12.5-7.5z" /></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5" /></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
+    </svg>
+
     <nav class="sidebar">
-      <div class="brand">inFAMOUS 2<span>recomp</span></div>
-      <button class="nav active" data-view="home" data-i18n="nav.home">Início</button>
-      <button class="nav" data-view="install" data-i18n="nav.install">Instalar</button>
-      <button class="nav" data-view="controls" data-i18n="nav.controls">Controles</button>
-      <button class="nav" data-view="saves" data-i18n="nav.saves">Saves</button>
-      <button class="nav" data-view="settings" data-i18n="nav.settings">Configurações</button>
+      <div class="brand">
+        <svg class="brand-bolt"><use href="#i-bolt" /></svg>
+        <div>
+          <div class="brand-title">inFAMOUS 2</div>
+          <div class="brand-sub">recomp</div>
+        </div>
+      </div>
+      <button class="nav active" data-view="home"><svg class="ico"><use href="#i-home" /></svg><span data-i18n="nav.home">Início</span></button>
+      <button class="nav" data-view="graphics"><svg class="ico"><use href="#i-graphics" /></svg><span data-i18n="nav.graphics">Gráficos</span></button>
+      <button class="nav" data-view="performance"><svg class="ico"><use href="#i-perf" /></svg><span data-i18n="nav.performance">Desempenho</span></button>
+      <button class="nav" data-view="game"><svg class="ico"><use href="#i-game" /></svg><span data-i18n="nav.game">Jogo</span></button>
+      <button class="nav" data-view="controls"><svg class="ico"><use href="#i-controls" /></svg><span data-i18n="nav.controls">Controles</span></button>
+      <button class="nav" data-view="advanced"><svg class="ico"><use href="#i-advanced" /></svg><span data-i18n="nav.advanced">Avançado</span></button>
       <div class="spacer"></div>
-      <label class="small" for="ui-lang" data-i18n="app.lang">Idioma do app</label>
-      <select id="ui-lang">
-        <option value="pt-BR">Português (Brasil)</option>
-        <option value="en">English</option>
-      </select>
+      <div class="sidebar-foot">
+        <div id="save-state" class="save-state" title="">
+          <span class="dot"></span><span id="save-state-text" data-i18n="ui.autosave">Salvo automaticamente</span>
+        </div>
+        <p class="hint" data-i18n="ui.autosaveHint"></p>
+        <label class="small" for="ui-lang" data-i18n="app.lang">Idioma do app</label>
+        <select id="ui-lang">
+          <option value="pt-BR">Português (Brasil)</option>
+          <option value="en">English</option>
+        </select>
+        <p id="app-version" class="tiny"></p>
+      </div>
     </nav>
 
     <main>
       <!-- Home ------------------------------------------------------------>
       <section id="view-home" class="view active">
-        <div class="hero" id="hero">
+        <div class="hero no-art" id="hero">
+          <div class="hero-art" id="hero-art"></div>
           <div class="hero-shade"></div>
           <div class="hero-body">
             <img id="cover" class="cover hidden" alt="" />
             <div class="hero-text">
-              <h1 id="game-title">inFAMOUS 2</h1>
-              <p id="game-meta" class="muted"></p>
-              <div id="installed-actions" class="row hidden">
-                <button id="play" class="primary big" data-i18n="home.play">Jogar</button>
-                <span id="run-state" class="pill hidden" data-i18n="home.running">Em execução</span>
+              <p id="game-id" class="game-id"></p>
+              <h1 id="game-title" class="game-title">inFAMOUS 2</h1>
+              <p id="game-meta" class="game-meta"></p>
+              <div id="installed-actions" class="row hero-actions hidden">
+                <button id="play" class="play-btn">
+                  <svg class="ico ico-play"><use href="#i-play" /></svg><svg class="ico ico-stop"><use href="#i-stop" /></svg>
+                  <span id="play-label" data-i18n="home.play">Jogar</span>
+                </button>
+                <button id="hero-capture" class="primary hidden" data-i18n="report.capture">Capturar este quadro</button>
+                <span id="run-state" class="pill warm hidden"><span class="pulse"></span><span data-i18n="home.running">Em execução</span></span>
               </div>
               <div id="not-installed" class="hidden">
                 <h2 data-i18n="home.notInstalled">O jogo ainda não está instalado</h2>
                 <p class="muted" data-i18n="home.notInstalledHint"></p>
-                <button id="go-install" class="primary" data-i18n="home.goInstall">Instalar</button>
+                <button id="go-install" class="primary big" data-i18n="home.goInstall">Instalar</button>
               </div>
               <div id="home-unsupported" class="banner hidden">
                 <strong data-i18n="unsupported.title"></strong>
                 <p data-i18n="unsupported.body"></p>
               </div>
-              <p id="home-msg" class="muted small"></p>
+              <p id="home-msg" class="home-msg"></p>
             </div>
           </div>
         </div>
-        <div class="cards">
+
+        <div id="home-update" class="notice-bar hidden">
+          <svg class="ico"><use href="#i-bolt" /></svg>
+          <div id="home-update-text" class="grow"></div>
+          <button id="home-update-rebuild" class="primary hidden" data-i18n="update.rebuild">Recompilar o jogo</button>
+          <button id="home-update-open" class="hidden" data-i18n="update.open">Ver a versão nova</button>
+        </div>
+
+        <div class="home-grid">
           <div class="card">
-            <h3 data-i18n="home.lastSave">Último save</h3>
-            <div id="save-info" class="muted"></div>
-            <div class="row">
+            <h3 class="card-title" data-i18n="home.quick">Ajustes rápidos</h3>
+            <div class="opt compact">
+              <label class="opt-label" for="q-display" data-i18n="settings.display">Modo de exibição</label>
+              <select id="q-display">
+                <option value="windowed" data-i18n="settings.windowed">Janela</option>
+                <option value="fullscreen" data-i18n="settings.fullscreen">Tela cheia (macOS)</option>
+                <option value="borderless" data-i18n="settings.borderless">Tela cheia sem bordas</option>
+              </select>
+            </div>
+            <div class="opt compact">
+              <label class="opt-label" for="q-upscale" data-i18n="settings.upscale">Ampliação</label>
+              <select id="q-upscale">
+                <option value="" data-i18n="settings.off">Desligado</option>
+                <option value="metalfx" data-i18n="settings.upscaleMetalfx">MetalFX (macOS)</option>
+              </select>
+            </div>
+            <label class="opt compact">
+              <span class="opt-label" data-i18n="settings.vsyncShort">Vsync</span>
+              <span class="switch"><input id="q-vsync" type="checkbox" /><i></i></span>
+            </label>
+            <label class="opt compact">
+              <span class="opt-label" data-i18n="settings.showFpsShort">Contador de fps</span>
+              <span class="switch"><input id="q-fps" type="checkbox" /><i></i></span>
+            </label>
+            <button class="link more" data-go="graphics"><span data-i18n="home.allGraphics">Todas as opções de gráficos</span> →</button>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title" data-i18n="home.lastSave">Último save</h3>
+            <div id="save-info" class="save-info muted"></div>
+            <div class="row links">
               <button id="go-saves" class="link" data-i18n="home.manageSaves">Gerenciar saves</button>
               <button id="open-saves" class="link" data-i18n="home.openSaves">Abrir pasta de saves</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title" data-i18n="home.status">Status</h3>
+            <dl id="status-list" class="status-list"></dl>
+            <div class="row links">
+              <button class="link" data-go="advanced:log" data-i18n="home.viewLog">Ver o log do jogo</button>
               <button id="open-log" class="link" data-i18n="home.openLog">Abrir log do jogo</button>
+              <button class="link" data-go="advanced:updates" data-i18n="update.title">Atualizações</button>
             </div>
           </div>
-          <div class="card" id="report-card">
-            <h3 data-i18n="report.title">Reportar um problema</h3>
-            <p class="hint" id="report-hint"></p>
-            <div class="row">
-              <button id="report-play" data-i18n="report.play">Jogar em modo de diagnóstico</button>
-              <button id="report-capture" class="primary hidden" data-i18n="report.capture">Capturar este quadro</button>
-            </div>
-            <p id="report-state" class="small muted"></p>
-            <div id="report-done" class="hidden">
-              <label for="report-notes" data-i18n="report.notes">O que deu errado (opcional)</label>
-              <textarea id="report-notes" rows="2"></textarea>
-              <div class="row">
-                <button id="report-zip" data-i18n="report.zip">Criar .zip</button>
-                <button id="report-open" class="link" data-i18n="report.open">Abrir pasta</button>
-                <button id="report-show-zip" class="link hidden" data-i18n="report.showZip">Mostrar o .zip</button>
-                <button id="report-issue" class="link" data-i18n="report.issue">Abrir uma issue no GitHub</button>
-              </div>
-              <p class="hint" data-i18n="report.privacy"></p>
-            </div>
-            <p id="report-msg" class="small"></p>
+        </div>
+
+        <div class="report-strip">
+          <div class="grow">
+            <strong data-i18n="report.title">Reportar um problema</strong>
+            <span class="muted" data-i18n="home.reportLead"></span>
           </div>
-          <div id="update-card" class="card hidden">
-            <h3 data-i18n="update.title">Atualizações</h3>
-            <div id="update-info" class="muted"></div>
-            <div class="row">
-              <button id="update-rebuild" class="link hidden" data-i18n="update.rebuild">Recompilar o jogo</button>
-              <button id="update-open" class="link hidden" data-i18n="update.open">Ver a versão nova</button>
-              <button id="update-check" class="link" data-i18n="update.check">Procurar de novo</button>
-            </div>
-          </div>
+          <button class="link" data-go="advanced:diagnostics"><span data-i18n="home.reportGo">Como funciona</span> →</button>
         </div>
       </section>
 
-      <!-- Install --------------------------------------------------------->
-      <section id="view-install" class="view">
-        <h1 data-i18n="install.title">Instalar</h1>
-        <p class="muted" data-i18n="install.lead"></p>
-
-        <div id="install-unsupported" class="banner hidden">
-          <strong data-i18n="unsupported.title"></strong>
-          <p data-i18n="unsupported.body"></p>
-          <button class="link" data-url="https://github.com/erikomis/infamous2-recomp" data-i18n="unsupported.follow"></button>
-        </div>
-
-        <!-- 1. what this computer still needs -->
-        <div id="card-prereqs" class="card step">
-          <div class="row step-head">
-            <span class="step-no">1</span>
-            <h2 data-i18n="prereq.title">Requisitos deste computador</h2>
-            <span id="prereq-summary" class="pill"></span>
+      <!-- Graphics -------------------------------------------------------->
+      <section id="view-graphics" class="view">
+        <header class="page-head">
+          <div>
+            <h1 data-i18n="nav.graphics">Gráficos</h1>
+            <p class="lead" data-i18n="page.graphics">…</p>
           </div>
-          <p class="hint" data-i18n="prereq.lead"></p>
-          <ul id="prereqs" class="list prereqs"></ul>
-          <div id="prereq-brew-missing" class="notice hidden">
-            <p data-i18n="prereq.noBrew"></p>
-            <code class="preview">/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</code>
-            <div class="row">
-              <button class="link" data-url="https://brew.sh/" data-i18n="prereq.openBrew"></button>
-              <button id="copy-brew" class="link" data-i18n="prereq.copyCmd"></button>
-            </div>
-          </div>
-          <div class="row">
-            <button id="prereq-fix" class="primary hidden" data-i18n="prereq.fix">Instalar o que falta</button>
-            <button id="prereq-recheck" data-i18n="prereq.recheck">Verificar de novo</button>
-            <button id="setup-cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
-          </div>
-          <p id="prereq-msg" class="small"></p>
-          <pre id="setup-log" class="log short hidden"></pre>
-        </div>
+          <span class="autosave-chip" data-i18n="ui.appliesNext">Vale no próximo Jogar</span>
+        </header>
 
-        <!-- 2. the player's copy -->
-        <div id="card-game" class="card step">
-          <div class="row step-head">
-            <span class="step-no">2</span>
-            <h2 data-i18n="game.title">Sua cópia do jogo</h2>
-          </div>
-          <p class="hint" data-i18n="game.lead"></p>
-          <div class="row">
-            <button id="pick-game-dir" class="primary" data-i18n="game.pick">Escolher a pasta do jogo…</button>
-            <button id="detect" data-i18n="install.detect">Procurar no RPCS3</button>
-          </div>
-          <div id="game-summary" class="summary hidden">
-            <div><span class="ico" id="game-ico"></span> <b id="game-name"></b> <span id="game-where" class="muted small"></span></div>
-            <div><span class="ico" id="rap-ico"></span> <span id="rap-state"></span></div>
-          </div>
-          <p id="install-msg-top" class="small"></p>
-
-          <details id="more-options">
-            <summary data-i18n="game.more">Mais opções</summary>
-            <label data-i18n="install.game">Cópia do jogo</label>
-            <div class="field">
-              <textarea id="game-paths" rows="2" spellcheck="false"></textarea>
-              <div class="buttons">
-                <button id="pick-game-pkg" data-i18n="install.pickPkg">PKG…</button>
-              </div>
-            </div>
-            <p class="hint" data-i18n="install.gameHint"></p>
-
-            <label data-i18n="install.rap">Licença (.rap)</label>
-            <div class="field">
-              <input id="rap-path" type="text" spellcheck="false" />
-              <div class="buttons"><button id="pick-rap" data-i18n="install.pick">Escolher…</button></div>
-            </div>
-            <p class="hint" data-i18n="install.rapHint"></p>
-
-            <label data-i18n="install.out">Pasta de instalação</label>
-            <div class="field">
-              <input id="out-dir" type="text" spellcheck="false" />
-              <div class="buttons"><button id="pick-out" data-i18n="install.pick">Escolher…</button></div>
-            </div>
-
-            <label for="decrypt-with" data-i18n="install.decrypt">Descriptografia</label>
-            <select id="decrypt-with">
-              <option value="auto" data-i18n="install.decryptAuto">Automática</option>
-              <option value="python" data-i18n="install.decryptPython">Arquivo de chaves</option>
-              <option value="rpcs3" data-i18n="install.decryptRpcs3">RPCS3</option>
+        <section class="section">
+          <h2 data-i18n="sec.display">Tela</h2>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="display" data-i18n="settings.display">Modo de exibição</label><span class="hint" data-i18n="settings.displayHint"></span></span>
+            <select id="display">
+              <option value="windowed" data-i18n="settings.windowed">Janela</option>
+              <option value="fullscreen" data-i18n="settings.fullscreen">Tela cheia (macOS)</option>
+              <option value="borderless" data-i18n="settings.borderless">Tela cheia sem bordas</option>
             </select>
-            <p class="hint" data-i18n="install.decryptHint"></p>
+          </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="window-size" data-i18n="settings.windowSize">Tamanho da janela</label></span>
+            <select id="window-size">
+              <option value="" data-i18n="settings.windowSizeDefault">1280 × 720 (padrão)</option>
+              <option value="1600x900">1600 × 900</option>
+              <option value="1920x1080">1920 × 1080</option>
+              <option value="2560x1440">2560 × 1440</option>
+            </select>
+          </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="screen" data-i18n="settings.screen">Tela</label><span class="hint" data-i18n="settings.screenHint"></span></span>
+            <select id="screen"></select>
+          </div>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.gameIcon"></span><span class="hint" data-i18n="settings.gameIconHint"></span></span>
+            <span class="switch"><input id="game-icon" type="checkbox" /><i></i></span>
+          </label>
+        </section>
 
-            <label for="keys-path" data-i18n="install.keys">Arquivo de chaves</label>
-            <div class="field">
-              <input id="keys-path" type="text" spellcheck="false" />
-              <div class="buttons"><button id="pick-keys" data-i18n="install.pick">Escolher…</button></div>
-            </div>
-            <p class="hint" data-i18n="install.keysHint"></p>
+        <section class="section">
+          <h2 data-i18n="sec.image">Qualidade de imagem</h2>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="upscale" data-i18n="settings.upscale">Ampliação</label><span class="hint" data-i18n="settings.upscaleHint"></span></span>
+            <select id="upscale">
+              <option value="" data-i18n="settings.off">Desligado</option>
+              <option value="metalfx" data-i18n="settings.upscaleMetalfx">MetalFX (macOS)</option>
+            </select>
+          </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="aa" data-i18n="settings.aa">Antisserrilhamento</label><span class="hint" data-i18n="settings.aaHint"></span></span>
+            <select id="aa">
+              <option value="" data-i18n="settings.off">Desligado</option>
+              <option value="fxaa">FXAA</option>
+            </select>
+          </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="sharpen" data-i18n="settings.sharpen">Nitidez</label><span class="hint" data-i18n="settings.sharpenHint"></span></span>
+            <span class="slider"><input id="sharpen" type="range" min="0" max="1" step="0.05" /><output id="sharpen-out"></output></span>
+          </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="aniso" data-i18n="settings.aniso">Filtragem anisotrópica</label><span class="hint" data-i18n="settings.anisoHint"></span></span>
+            <select id="aniso">
+              <option value="0" data-i18n="settings.off">Desligado</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+              <option value="16">16×</option>
+            </select>
+          </div>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.gamma"></span><span class="hint" data-i18n="settings.gammaHint"></span></span>
+            <span class="switch"><input id="gamma-on" type="checkbox" /><i></i></span>
+          </label>
+          <div class="opt sub">
+            <span class="opt-text"><label class="opt-label" for="gamma" data-i18n="settings.gammaValue">Gama</label></span>
+            <span class="slider"><input id="gamma" type="range" min="0.8" max="1.2" step="0.01" /><output id="gamma-out"></output></span>
+          </div>
+        </section>
+      </section>
 
-            <label for="firmware-path" data-i18n="install.firmware">Firmware do PS3</label>
-            <div class="field">
-              <input id="firmware-path" type="text" spellcheck="false" />
-              <div class="buttons">
-                <button id="pick-fw-dir" data-i18n="install.pickFolder">Pasta…</button>
-                <button id="pick-fw-pup" data-i18n="install.pickPup">PUP…</button>
+      <!-- Performance ----------------------------------------------------->
+      <section id="view-performance" class="view">
+        <header class="page-head">
+          <div>
+            <h1 data-i18n="nav.performance">Desempenho</h1>
+            <p class="lead" data-i18n="page.performance">…</p>
+          </div>
+          <span class="autosave-chip" data-i18n="ui.appliesNext">Vale no próximo Jogar</span>
+        </header>
+
+        <section class="section">
+          <h2 data-i18n="sec.gpu">Aceleração na GPU</h2>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.gpuLight"></span><span class="hint" data-i18n="settings.gpuLightHint"></span></span>
+            <span class="switch"><input id="gpu-light" type="checkbox" /><i></i></span>
+          </label>
+          <label class="opt sub">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.gpuSsao"></span><span class="hint" data-i18n="settings.gpuSsaoHint"></span></span>
+            <span class="switch"><input id="gpu-ssao" type="checkbox" /><i></i></span>
+          </label>
+        </section>
+
+        <section class="section">
+          <h2 data-i18n="sec.fixes">Correções</h2>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.skipOcc"></span><span class="hint" data-i18n="settings.skipOccHint"></span></span>
+            <span class="switch"><input id="skip-occ" type="checkbox" /><i></i></span>
+          </label>
+        </section>
+
+        <section class="section">
+          <h2 data-i18n="sec.pacing">Ritmo de quadros</h2>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.vsync"></span><span class="hint" data-i18n="settings.vsyncHint"></span></span>
+            <span class="switch"><input id="vsync" type="checkbox" /><i></i></span>
+          </label>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.showFps"></span><span class="hint" data-i18n="settings.showFpsHint"></span></span>
+            <span class="switch"><input id="show-fps" type="checkbox" /><i></i></span>
+          </label>
+        </section>
+      </section>
+
+      <!-- Game ------------------------------------------------------------>
+      <section id="view-game" class="view">
+        <header class="page-head">
+          <div>
+            <h1 data-i18n="nav.game">Jogo</h1>
+            <p class="lead" data-i18n="page.game">…</p>
+          </div>
+          <span class="autosave-chip" data-i18n="ui.appliesNext">Vale no próximo Jogar</span>
+        </header>
+
+        <section class="section">
+          <h2 data-i18n="sec.language">Idioma</h2>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="game-lang" data-i18n="settings.gameLang">Idioma</label><span class="hint" data-i18n="settings.gameLangHint"></span></span>
+            <select id="game-lang"></select>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 data-i18n="settings.audio">Áudio</h2>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="audio-volume" data-i18n="settings.volume">Volume</label></span>
+            <span class="slider"><input id="audio-volume" type="range" min="0" max="100" step="1" /><output id="audio-volume-out"></output></span>
+          </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="audio-device" data-i18n="settings.audioDevice">Saída de áudio</label><span class="hint" data-i18n="settings.audioHint"></span></span>
+            <select id="audio-device"></select>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 data-i18n="settings.installDir">Pasta de instalação</h2>
+          <div class="field">
+            <input id="install-dir" type="text" spellcheck="false" />
+            <div class="buttons"><button id="pick-install-dir" data-i18n="install.pick">Escolher…</button></div>
+          </div>
+          <p class="hint" data-i18n="settings.installDirHint"></p>
+        </section>
+
+        <section class="section" id="saves-section">
+          <div class="section-head">
+            <h2 data-i18n="saves.title">Saves</h2>
+            <button id="saves-refresh" class="link" data-i18n="saves.refresh">Atualizar</button>
+          </div>
+          <p class="hint" data-i18n="saves.lead"></p>
+          <div id="saves-busy" class="banner hidden">
+            <strong data-i18n="saves.busyTitle"></strong>
+            <p data-i18n="saves.busyBody"></p>
+          </div>
+          <div class="row toolbar">
+            <button id="saves-backup-all" class="primary" data-i18n="saves.backupAll">Fazer backup de tudo</button>
+            <button id="saves-export-zip" data-i18n="saves.exportZip">Exportar .zip…</button>
+            <button id="saves-import-zip" data-i18n="saves.importZip">Importar .zip…</button>
+          </div>
+          <p id="saves-msg" class="small"></p>
+          <div class="columns saves-cols">
+            <div>
+              <div class="row col-head">
+                <h3 data-i18n="saves.port">Este port</h3>
+                <button id="saves-open-port" class="link small" data-i18n="saves.openFolder">Abrir pasta</button>
               </div>
-            </div>
-            <p class="hint" data-i18n="install.firmwareHint"></p>
-
-            <label data-i18n="install.rapKey">Chave RAP</label>
-            <input id="rap-key" type="password" autocomplete="off" spellcheck="false" />
-            <p class="hint" data-i18n="install.rapKeyHint"></p>
-            <label class="check"><input id="force" type="checkbox" /> <span data-i18n="install.force">Refazer</span></label>
-          </details>
-        </div>
-
-        <!-- 3. the rebuild -->
-        <div id="card-run" class="card step">
-          <div class="row step-head">
-            <span class="step-no">3</span>
-            <h2 data-i18n="run.title">Instalar</h2>
-          </div>
-          <p class="hint" data-i18n="run.lead"></p>
-          <div class="row actions">
-            <button id="start" class="primary big" data-i18n="install.start">Instalar</button>
-            <button id="dry-run" data-i18n="install.check">Verificar</button>
-            <button id="cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
-          </div>
-
-          <div class="progress-wrap">
-            <div class="progress"><div id="bar"></div></div>
-            <div id="progress-text" class="small muted"></div>
-            <div id="install-msg"></div>
-          </div>
-
-          <div class="columns">
-            <div>
-              <h3 data-i18n="install.checks">Requisitos</h3>
-              <ul id="checks" class="list"></ul>
+              <div id="saves-port" class="slots"></div>
             </div>
             <div>
-              <h3 data-i18n="install.steps">Etapas</h3>
-              <ol id="steps" class="list"></ol>
+              <div class="row col-head">
+                <h3 data-i18n="saves.rpcs3">RPCS3</h3>
+                <span id="saves-user-wrap" class="row hidden"><span class="small muted" data-i18n="saves.user">Usuário</span><select id="saves-user" class="small-select"></select></span>
+                <button id="saves-open-rpcs3" class="link small" data-i18n="saves.openFolder">Abrir pasta</button>
+              </div>
+              <p id="saves-rpcs3-open" class="small hint-warn hidden" data-i18n="saves.rpcs3Open"></p>
+              <div id="saves-rpcs3" class="slots"></div>
             </div>
           </div>
+        </section>
 
-          <div class="row log-head">
-            <h3 data-i18n="install.log">Log</h3>
-            <button id="copy-log" class="link" data-i18n="install.copyLog">Copiar log</button>
+        <section class="section">
+          <div class="section-head">
+            <h2 data-i18n="saves.backups">Backups</h2>
+            <button id="saves-open-backups" class="link" data-i18n="saves.openFolder">Abrir pasta</button>
           </div>
-          <pre id="log" class="log"></pre>
-        </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="saves-keep" data-i18n="saves.keep">Backups automáticos antes de Jogar a manter</label><span class="hint" data-i18n="saves.keepHint"></span></span>
+            <input id="saves-keep" type="number" min="0" max="100" step="1" class="num" />
+          </div>
+          <ul id="saves-backups" class="list backups"></ul>
+        </section>
       </section>
 
       <!-- Controls -------------------------------------------------------->
       <section id="view-controls" class="view">
-        <div class="row"><h1 data-i18n="controls.title">Controles</h1><span id="controls-saved" class="pill hidden" data-i18n="settings.saved">Salvo</span></div>
-        <p class="muted" data-i18n="controls.lead"></p>
+        <header class="page-head">
+          <div>
+            <h1 data-i18n="controls.title">Controles</h1>
+            <p class="lead" data-i18n="controls.lead"></p>
+          </div>
+          <span class="autosave-chip" data-i18n="ui.appliesNext">Vale no próximo Jogar</span>
+        </header>
 
-        <fieldset id="controls-test">
-          <legend data-i18n="controls.bindings">Botões</legend>
+        <section class="section" id="controls-test">
+          <div class="section-head">
+            <h2 data-i18n="controls.bindings">Botões</h2>
+            <button id="controls-reset" class="link" data-i18n="controls.reset">Restaurar padrões</button>
+          </div>
           <p class="hint" data-i18n="controls.testHint"></p>
           <table class="bindings">
             <thead>
@@ -260,179 +388,296 @@
             </thead>
             <tbody id="controls-body"></tbody>
           </table>
-          <p id="controls-msg" class="small"></p>
+          <p id="controls-msg" class="small accent-text"></p>
           <p class="hint" data-i18n="controls.notes"></p>
-          <div class="row">
-            <button id="controls-reset" data-i18n="controls.reset">Restaurar padrões</button>
+          <div class="row path-row">
+            <code id="controls-path" class="path"></code>
             <button id="controls-open" class="link" data-i18n="controls.open">Mostrar o arquivo</button>
           </div>
-          <code id="controls-path" class="preview"></code>
-        </fieldset>
+        </section>
 
-        <fieldset>
-          <legend data-i18n="settings.mouse">Mouse</legend>
-          <label class="check"><input id="mouse-on" type="checkbox" /> <span data-i18n="settings.mouseOn"></span></label>
-          <label data-i18n="settings.mouseSens">Sensibilidade</label>
-          <div class="slider"><input id="mouse-sens" type="range" min="0.25" max="4" step="0.05" /><output id="mouse-sens-out"></output></div>
-          <label class="check"><input id="mouse-invert" type="checkbox" /> <span data-i18n="settings.mouseInvert"></span></label>
-          <label class="check"><input id="mouse-invert-x" type="checkbox" /> <span data-i18n="settings.mouseInvertX"></span></label>
-          <label data-i18n="settings.mouseDeadzone">Zona morta</label>
-          <div class="slider"><input id="mouse-dz" type="range" min="0" max="120" step="1" /><output id="mouse-dz-out"></output></div>
-          <label class="check"><input id="mouse-capture" type="checkbox" /> <span data-i18n="settings.mouseCapture"></span></label>
-          <p class="hint" data-i18n="settings.mouseCaptureHint"></p>
-        </fieldset>
+        <section class="section">
+          <h2 data-i18n="settings.mouse">Mouse</h2>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.mouseOn"></span></span>
+            <span class="switch"><input id="mouse-on" type="checkbox" /><i></i></span>
+          </label>
+          <div class="opt sub">
+            <span class="opt-text"><label class="opt-label" for="mouse-sens" data-i18n="settings.mouseSens">Sensibilidade</label></span>
+            <span class="slider"><input id="mouse-sens" type="range" min="0.25" max="4" step="0.05" /><output id="mouse-sens-out"></output></span>
+          </div>
+          <label class="opt sub">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.mouseInvert"></span></span>
+            <span class="switch"><input id="mouse-invert" type="checkbox" /><i></i></span>
+          </label>
+          <label class="opt sub">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.mouseInvertX"></span></span>
+            <span class="switch"><input id="mouse-invert-x" type="checkbox" /><i></i></span>
+          </label>
+          <div class="opt sub">
+            <span class="opt-text"><label class="opt-label" for="mouse-dz" data-i18n="settings.mouseDeadzone">Zona morta</label></span>
+            <span class="slider"><input id="mouse-dz" type="range" min="0" max="120" step="1" /><output id="mouse-dz-out"></output></span>
+          </div>
+          <label class="opt sub">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.mouseCapture"></span><span class="hint" data-i18n="settings.mouseCaptureHint"></span></span>
+            <span class="switch"><input id="mouse-capture" type="checkbox" /><i></i></span>
+          </label>
+        </section>
 
-        <fieldset>
-          <legend data-i18n="settings.rumbleTitle">Vibração</legend>
-          <label class="check"><input id="rumble-on" type="checkbox" /> <span data-i18n="settings.rumble"></span></label>
-          <label data-i18n="settings.rumbleStrength">Intensidade</label>
-          <div class="slider"><input id="rumble-strength" type="range" min="0" max="200" step="10" /><output id="rumble-strength-out"></output></div>
-          <p class="hint" data-i18n="settings.rumbleHint"></p>
-          <div class="row"><button id="rumble-test" data-i18n="settings.rumbleTest">Testar</button><span id="rumble-test-msg" class="small muted"></span></div>
-        </fieldset>
+        <section class="section">
+          <h2 data-i18n="settings.rumbleTitle">Vibração</h2>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.rumble"></span><span class="hint" data-i18n="settings.rumbleHint"></span></span>
+            <span class="switch"><input id="rumble-on" type="checkbox" /><i></i></span>
+          </label>
+          <div class="opt sub">
+            <span class="opt-text"><label class="opt-label" for="rumble-strength" data-i18n="settings.rumbleStrength">Intensidade</label></span>
+            <span class="slider"><input id="rumble-strength" type="range" min="0" max="200" step="10" /><output id="rumble-strength-out"></output></span>
+          </div>
+          <div class="row sub-row"><button id="rumble-test" data-i18n="settings.rumbleTest">Testar</button><span id="rumble-test-msg" class="small muted"></span></div>
+        </section>
       </section>
 
-      <!-- Saves ------------------------------------------------------------>
-      <section id="view-saves" class="view">
-        <div class="row"><h1 data-i18n="saves.title">Saves</h1><span id="saves-saved" class="pill hidden" data-i18n="settings.saved">Salvo</span></div>
-        <p class="muted" data-i18n="saves.lead"></p>
-        <div id="saves-busy" class="banner hidden">
-          <strong data-i18n="saves.busyTitle"></strong>
-          <p data-i18n="saves.busyBody"></p>
-        </div>
-        <div class="row">
-          <button id="saves-backup-all" class="primary" data-i18n="saves.backupAll">Fazer backup de tudo</button>
-          <button id="saves-export-zip" data-i18n="saves.exportZip">Exportar .zip…</button>
-          <button id="saves-import-zip" data-i18n="saves.importZip">Importar .zip…</button>
-          <button id="saves-refresh" class="link" data-i18n="saves.refresh">Atualizar</button>
-        </div>
-        <p id="saves-msg" class="small"></p>
-        <div class="columns saves-cols">
+      <!-- Advanced -------------------------------------------------------->
+      <section id="view-advanced" class="view">
+        <header class="page-head">
           <div>
-            <div class="row col-head">
-              <h3 data-i18n="saves.port">Este port</h3>
-              <button id="saves-open-port" class="link small" data-i18n="saves.openFolder">Abrir pasta</button>
-            </div>
-            <div id="saves-port" class="slots"></div>
+            <h1 data-i18n="nav.advanced">Avançado</h1>
+            <p class="lead" data-i18n="page.advanced">…</p>
           </div>
-          <div>
-            <div class="row col-head">
-              <h3 data-i18n="saves.rpcs3">RPCS3</h3>
-              <span id="saves-user-wrap" class="row hidden"><span class="small muted" data-i18n="saves.user">Usuário</span><select id="saves-user" class="small-select"></select></span>
-              <button id="saves-open-rpcs3" class="link small" data-i18n="saves.openFolder">Abrir pasta</button>
+        </header>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="install" role="tab" data-i18n="tab.install">Instalar / recompilar</button>
+          <button class="tab" data-tab="updates" role="tab" data-i18n="update.title">Atualizações</button>
+          <button class="tab" data-tab="log" role="tab" data-i18n="tab.log">Log do jogo</button>
+          <button class="tab" data-tab="diagnostics" role="tab" data-i18n="report.title">Reportar um problema</button>
+          <button class="tab" data-tab="env" role="tab" data-i18n="tab.env">Ambiente</button>
+        </div>
+
+        <!-- Install / rebuild -->
+        <div id="tab-install" class="tab-panel active">
+          <p class="hint" data-i18n="install.lead"></p>
+          <div id="install-unsupported" class="banner hidden">
+            <strong data-i18n="unsupported.title"></strong>
+            <p data-i18n="unsupported.body"></p>
+            <button class="link" data-url="https://github.com/erikomis/infamous2-recomp" data-i18n="unsupported.follow"></button>
+          </div>
+
+          <!-- 1. what this computer still needs -->
+          <div id="card-prereqs" class="card step">
+            <div class="row step-head">
+              <span class="step-no">1</span>
+              <h2 data-i18n="prereq.title">Requisitos deste computador</h2>
+              <span id="prereq-summary" class="pill"></span>
             </div>
-            <p id="saves-rpcs3-open" class="small hint-warn hidden" data-i18n="saves.rpcs3Open"></p>
-            <div id="saves-rpcs3" class="slots"></div>
+            <p class="hint" data-i18n="prereq.lead"></p>
+            <ul id="prereqs" class="list prereqs"></ul>
+            <div id="prereq-brew-missing" class="notice hidden">
+              <p data-i18n="prereq.noBrew"></p>
+              <code class="preview">/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</code>
+              <div class="row">
+                <button class="link" data-url="https://brew.sh/" data-i18n="prereq.openBrew"></button>
+                <button id="copy-brew" class="link" data-i18n="prereq.copyCmd"></button>
+              </div>
+            </div>
+            <div class="row">
+              <button id="prereq-fix" class="primary hidden" data-i18n="prereq.fix">Instalar o que falta</button>
+              <button id="prereq-recheck" data-i18n="prereq.recheck">Verificar de novo</button>
+              <button id="setup-cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
+            </div>
+            <p id="prereq-msg" class="small"></p>
+            <pre id="setup-log" class="log short hidden"></pre>
+          </div>
+
+          <!-- 2. the player's copy -->
+          <div id="card-game" class="card step">
+            <div class="row step-head">
+              <span class="step-no">2</span>
+              <h2 data-i18n="game.title">Sua cópia do jogo</h2>
+            </div>
+            <p class="hint" data-i18n="game.lead"></p>
+            <div class="row">
+              <button id="pick-game-dir" class="primary" data-i18n="game.pick">Escolher a pasta do jogo…</button>
+              <button id="detect" data-i18n="install.detect">Procurar no RPCS3</button>
+            </div>
+            <div id="game-summary" class="summary hidden">
+              <div><span class="ico" id="game-ico"></span> <b id="game-name"></b> <span id="game-where" class="muted small"></span></div>
+              <div><span class="ico" id="rap-ico"></span> <span id="rap-state"></span></div>
+            </div>
+            <p id="install-msg-top" class="small"></p>
+
+            <details id="more-options">
+              <summary data-i18n="game.more">Mais opções</summary>
+              <div class="details-body">
+                <label class="field-label" for="game-paths" data-i18n="install.game">Cópia do jogo</label>
+                <div class="field">
+                  <textarea id="game-paths" rows="2" spellcheck="false"></textarea>
+                  <div class="buttons">
+                    <button id="pick-game-pkg" data-i18n="install.pickPkg">PKG…</button>
+                  </div>
+                </div>
+                <p class="hint" data-i18n="install.gameHint"></p>
+
+                <label class="field-label" for="rap-path" data-i18n="install.rap">Licença (.rap)</label>
+                <div class="field">
+                  <input id="rap-path" type="text" spellcheck="false" />
+                  <div class="buttons"><button id="pick-rap" data-i18n="install.pick">Escolher…</button></div>
+                </div>
+                <p class="hint" data-i18n="install.rapHint"></p>
+
+                <label class="field-label" for="out-dir" data-i18n="install.out">Pasta de instalação</label>
+                <div class="field">
+                  <input id="out-dir" type="text" spellcheck="false" />
+                  <div class="buttons"><button id="pick-out" data-i18n="install.pick">Escolher…</button></div>
+                </div>
+
+                <h3 class="sub-title" data-i18n="install.decrypt">Descriptografia</h3>
+                <label class="field-label" for="decrypt-with" data-i18n="install.decryptMethod">Método</label>
+                <select id="decrypt-with">
+                  <option value="auto" data-i18n="install.decryptAuto">Automática</option>
+                  <option value="python" data-i18n="install.decryptPython">Arquivo de chaves</option>
+                  <option value="rpcs3" data-i18n="install.decryptRpcs3">RPCS3</option>
+                </select>
+                <p class="hint" data-i18n="install.decryptHint"></p>
+
+                <label class="field-label" for="keys-path" data-i18n="install.keys">Arquivo de chaves</label>
+                <div class="field">
+                  <input id="keys-path" type="text" spellcheck="false" />
+                  <div class="buttons"><button id="pick-keys" data-i18n="install.pick">Escolher…</button></div>
+                </div>
+                <p class="hint" data-i18n="install.keysHint"></p>
+
+                <label class="field-label" for="firmware-path" data-i18n="install.firmware">Firmware do PS3</label>
+                <div class="field">
+                  <input id="firmware-path" type="text" spellcheck="false" />
+                  <div class="buttons">
+                    <button id="pick-fw-dir" data-i18n="install.pickFolder">Pasta…</button>
+                    <button id="pick-fw-pup" data-i18n="install.pickPup">PUP…</button>
+                  </div>
+                </div>
+                <p class="hint" data-i18n="install.firmwareHint"></p>
+
+                <h3 class="sub-title" data-i18n="install.dlc">DLC</h3>
+                <label class="field-label" for="rap-key" data-i18n="install.rapKey">Chave RAP</label>
+                <input id="rap-key" type="password" autocomplete="off" spellcheck="false" />
+                <p class="hint" data-i18n="install.rapKeyHint"></p>
+                <label class="check"><input id="force" type="checkbox" /> <span data-i18n="install.force">Refazer</span></label>
+              </div>
+            </details>
+          </div>
+
+          <!-- 3. the rebuild -->
+          <div id="card-run" class="card step">
+            <div class="row step-head">
+              <span class="step-no">3</span>
+              <h2 data-i18n="run.title">Instalar</h2>
+            </div>
+            <p class="hint" data-i18n="run.lead"></p>
+            <div class="row actions">
+              <button id="start" class="primary big" data-i18n="install.start">Instalar</button>
+              <button id="dry-run" data-i18n="install.check">Verificar</button>
+              <button id="cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
+            </div>
+
+            <div class="progress-wrap">
+              <div class="progress"><div id="bar"></div></div>
+              <div id="progress-text" class="small muted"></div>
+              <div id="install-msg"></div>
+            </div>
+
+            <div class="columns">
+              <div>
+                <h3 data-i18n="install.checks">Requisitos</h3>
+                <ul id="checks" class="list"></ul>
+              </div>
+              <div>
+                <h3 data-i18n="install.steps">Etapas</h3>
+                <ol id="steps" class="list"></ol>
+              </div>
+            </div>
+
+            <div class="row log-head">
+              <h3 data-i18n="install.log">Log</h3>
+              <button id="copy-log" class="link" data-i18n="install.copyLog">Copiar log</button>
+            </div>
+            <pre id="log" class="log"></pre>
           </div>
         </div>
 
-        <fieldset>
-          <legend data-i18n="saves.backups">Backups</legend>
-          <label for="saves-keep" data-i18n="saves.keep">Backups automáticos antes de Jogar a manter</label>
-          <input id="saves-keep" type="number" min="0" max="100" step="1" class="num" />
-          <p class="hint" data-i18n="saves.keepHint"></p>
-          <ul id="saves-backups" class="list backups"></ul>
-          <div class="row"><button id="saves-open-backups" class="link" data-i18n="saves.openFolder">Abrir pasta</button></div>
-        </fieldset>
-      </section>
-
-      <!-- Settings -------------------------------------------------------->
-      <section id="view-settings" class="view">
-        <div class="row"><h1 data-i18n="settings.title">Configurações</h1><span id="saved" class="pill hidden" data-i18n="settings.saved">Salvo</span></div>
-        <p class="muted" data-i18n="settings.lead"></p>
-
-        <fieldset>
-          <legend data-i18n="settings.game">Jogo</legend>
-          <label for="game-lang" data-i18n="settings.gameLang">Idioma</label>
-          <select id="game-lang"></select>
-          <p class="hint" data-i18n="settings.gameLangHint"></p>
-        </fieldset>
-
-        <fieldset>
-          <legend data-i18n="settings.graphics">Gráficos</legend>
-          <label class="check"><input id="gpu-light" type="checkbox" /> <span data-i18n="settings.gpuLight"></span></label>
-          <p class="hint" data-i18n="settings.gpuLightHint"></p>
-          <label class="check"><input id="gpu-ssao" type="checkbox" /> <span data-i18n="settings.gpuSsao"></span></label>
-          <p class="hint" data-i18n="settings.gpuSsaoHint"></p>
-          <label class="check"><input id="skip-occ" type="checkbox" /> <span data-i18n="settings.skipOcc"></span></label>
-          <p class="hint" data-i18n="settings.skipOccHint"></p>
-          <label class="check"><input id="gamma-on" type="checkbox" /> <span data-i18n="settings.gamma"></span></label>
-          <div class="slider"><input id="gamma" type="range" min="0.8" max="1.2" step="0.01" /><output id="gamma-out"></output></div>
-          <p class="hint" data-i18n="settings.gammaHint"></p>
-          <label for="aniso" data-i18n="settings.aniso">Filtragem anisotrópica</label>
-          <select id="aniso">
-            <option value="0" data-i18n="settings.off">Desligado</option>
-            <option value="2">2×</option>
-            <option value="4">4×</option>
-            <option value="8">8×</option>
-            <option value="16">16×</option>
-          </select>
-          <p class="hint" data-i18n="settings.anisoHint"></p>
-          <label for="aa" data-i18n="settings.aa">Antisserrilhamento</label>
-          <select id="aa">
-            <option value="" data-i18n="settings.off">Desligado</option>
-            <option value="fxaa">FXAA</option>
-          </select>
-          <p class="hint" data-i18n="settings.aaHint"></p>
-          <label data-i18n="settings.sharpen">Nitidez</label>
-          <div class="slider"><input id="sharpen" type="range" min="0" max="1" step="0.05" /><output id="sharpen-out"></output></div>
-          <p class="hint" data-i18n="settings.sharpenHint"></p>
-          <label for="upscale" data-i18n="settings.upscale">Ampliação</label>
-          <select id="upscale">
-            <option value="" data-i18n="settings.off">Desligado</option>
-            <option value="metalfx" data-i18n="settings.upscaleMetalfx">MetalFX (macOS)</option>
-          </select>
-          <p class="hint" data-i18n="settings.upscaleHint"></p>
-          <label for="display" data-i18n="settings.display">Modo de exibição</label>
-          <select id="display">
-            <option value="windowed" data-i18n="settings.windowed">Janela</option>
-            <option value="fullscreen" data-i18n="settings.fullscreen">Tela cheia (macOS)</option>
-            <option value="borderless" data-i18n="settings.borderless">Tela cheia sem bordas</option>
-          </select>
-          <p class="hint" data-i18n="settings.displayHint"></p>
-          <label for="window-size" data-i18n="settings.windowSize">Tamanho da janela</label>
-          <select id="window-size">
-            <option value="" data-i18n="settings.windowSizeDefault">1280 × 720 (padrão)</option>
-            <option value="1600x900">1600 × 900</option>
-            <option value="1920x1080">1920 × 1080</option>
-            <option value="2560x1440">2560 × 1440</option>
-          </select>
-          <label for="screen" data-i18n="settings.screen">Tela</label>
-          <select id="screen"></select>
-          <p class="hint" data-i18n="settings.screenHint"></p>
-          <label class="check"><input id="vsync" type="checkbox" /> <span data-i18n="settings.vsync"></span></label>
-          <p class="hint" data-i18n="settings.vsyncHint"></p>
-          <label class="check"><input id="show-fps" type="checkbox" /> <span data-i18n="settings.showFps"></span></label>
-          <p class="hint" data-i18n="settings.showFpsHint"></p>
-          <label class="check"><input id="game-icon" type="checkbox" /> <span data-i18n="settings.gameIcon"></span></label>
-          <p class="hint" data-i18n="settings.gameIconHint"></p>
-        </fieldset>
-
-        <fieldset>
-          <legend data-i18n="settings.audio">Áudio</legend>
-          <label data-i18n="settings.volume">Volume</label>
-          <div class="slider"><input id="audio-volume" type="range" min="0" max="100" step="1" /><output id="audio-volume-out"></output></div>
-          <label for="audio-device" data-i18n="settings.audioDevice">Saída de áudio</label>
-          <select id="audio-device"></select>
-          <p class="hint" data-i18n="settings.audioHint"></p>
-        </fieldset>
-
-
-        <fieldset>
-          <legend data-i18n="settings.advanced">Avançado</legend>
-          <label data-i18n="settings.installDir">Pasta de instalação</label>
-          <div class="field">
-            <input id="install-dir" type="text" spellcheck="false" />
-            <div class="buttons"><button id="pick-install-dir" data-i18n="install.pick">Escolher…</button></div>
+        <!-- Updates -->
+        <div id="tab-updates" class="tab-panel">
+          <div id="update-card" class="card">
+            <h3 class="card-title" data-i18n="update.title">Atualizações</h3>
+            <div id="update-info" class="update-info"></div>
+            <div class="row">
+              <button id="update-rebuild" class="primary hidden" data-i18n="update.rebuild">Recompilar o jogo</button>
+              <button id="update-open" class="hidden" data-i18n="update.open">Ver a versão nova</button>
+              <button id="update-check" data-i18n="update.check">Procurar de novo</button>
+            </div>
+            <p class="hint" data-i18n="update.hint"></p>
           </div>
-          <p class="hint" data-i18n="settings.installDirHint"></p>
-          <label data-i18n="settings.extraEnv">Variáveis extras</label>
-          <textarea id="extra-env" rows="3" spellcheck="false"></textarea>
-          <p class="hint" data-i18n="settings.extraEnvHint"></p>
-          <label data-i18n="settings.preview">Comando equivalente</label>
-          <code id="preview" class="preview"></code>
-          <div class="row"><button id="reset" data-i18n="settings.reset">Restaurar padrões</button></div>
-        </fieldset>
+        </div>
+
+        <!-- Game log -->
+        <div id="tab-log" class="tab-panel">
+          <p class="hint" data-i18n="log.lead"></p>
+          <div class="row toolbar">
+            <button id="glog-refresh" data-i18n="log.refresh">Atualizar</button>
+            <label class="check inline"><span class="switch"><input id="glog-follow" type="checkbox" checked /><i></i></span><span data-i18n="log.follow">Acompanhar</span></label>
+            <input id="glog-filter" type="search" class="grow" spellcheck="false" data-i18n-placeholder="log.filter" />
+            <label class="check inline"><input id="glog-errors" type="checkbox" /> <span data-i18n="log.errorsOnly">Só avisos e erros</span></label>
+          </div>
+          <div class="row log-meta">
+            <code id="glog-path" class="path grow"></code>
+            <button id="glog-copy" class="link" data-i18n="log.copy">Copiar</button>
+            <button id="glog-open" class="link" data-i18n="log.open">Mostrar no Finder</button>
+          </div>
+          <pre id="glog" class="log tall"></pre>
+          <p id="glog-state" class="small muted"></p>
+        </div>
+
+        <!-- Report a problem -->
+        <div id="tab-diagnostics" class="tab-panel">
+          <div class="card" id="report-card">
+            <h3 class="card-title" data-i18n="report.title">Reportar um problema</h3>
+            <p class="hint" id="report-hint"></p>
+            <div class="row">
+              <button id="report-play" class="primary" data-i18n="report.play">Jogar em modo de diagnóstico</button>
+              <button id="report-capture" class="primary hidden" data-i18n="report.capture">Capturar este quadro</button>
+            </div>
+            <p id="report-state" class="small muted"></p>
+            <div id="report-done" class="hidden">
+              <label class="field-label" for="report-notes" data-i18n="report.notes">O que deu errado (opcional)</label>
+              <textarea id="report-notes" rows="3"></textarea>
+              <div class="row">
+                <button id="report-zip" data-i18n="report.zip">Criar .zip</button>
+                <button id="report-open" class="link" data-i18n="report.open">Abrir pasta</button>
+                <button id="report-show-zip" class="link hidden" data-i18n="report.showZip">Mostrar o .zip</button>
+                <button id="report-issue" class="link" data-i18n="report.issue">Abrir uma issue no GitHub</button>
+              </div>
+              <p class="hint" data-i18n="report.privacy"></p>
+            </div>
+            <p id="report-msg" class="small"></p>
+          </div>
+        </div>
+
+        <!-- Environment -->
+        <div id="tab-env" class="tab-panel">
+          <section class="section">
+            <h2 data-i18n="settings.extraEnv">Variáveis extras</h2>
+            <textarea id="extra-env" rows="5" spellcheck="false"></textarea>
+            <p class="hint" data-i18n="settings.extraEnvHint"></p>
+          </section>
+          <section class="section">
+            <h2 data-i18n="settings.preview">Comando equivalente</h2>
+            <code id="preview" class="preview"></code>
+          </section>
+          <section class="section">
+            <h2 data-i18n="settings.resetTitle">Restaurar</h2>
+            <p class="hint" data-i18n="settings.resetHint"></p>
+            <div class="row"><button id="reset" class="danger-outline" data-i18n="settings.reset">Restaurar padrões</button></div>
+          </section>
+        </div>
       </section>
     </main>
   </body>
