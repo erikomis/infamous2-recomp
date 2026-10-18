@@ -278,9 +278,9 @@ and `run.sh` starts it directly, so the environment and the log work as
 before). Its Info.plist marks it as a game, so macOS 14+ turns on Game Mode
 while the game is fullscreen and in front: first call on the CPU and GPU, half
 the Bluetooth latency for controllers and AirPods. macOS fullscreen turns it on;
-borderless may not. The game also keeps macOS from App-Napping it and runs its
-PPU, SPU and RSX threads at the top QoS class (`PS3_QOS=0` leaves them at the
-system default).
+borderless may not. The game also keeps macOS from App-Napping it.
+`PS3_QOS=1` (experimental) puts its PPU, SPU and RSX threads in the top QoS
+class; it did not raise the frame rate in tests and coincided with hangs.
 
 | Variable | What it does |
 | --- | --- |

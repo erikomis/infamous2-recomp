@@ -84,8 +84,9 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 export PS3RECOMP_ENG_SKIP_FP="${PS3RECOMP_ENG_SKIP_FP-5f740845528b0e62,7875289ea6b856a6}"
 
 # Priority (macos_host.m, the toolkit's host_qos.h): the game keeps macOS from
-# App-Napping it and runs its PPU, SPU and RSX threads at USER_INTERACTIVE QoS
-# (P-cores first). PS3_QOS=0 leaves the threads at the system default.
+# App-Napping or timer-throttling it. PS3_QOS=1 also runs its PPU, SPU and RSX
+# threads at USER_INTERACTIVE QoS; off by default (no frame-time gain in a
+# headless A/B, and two of three runs with it hung on the frame fence).
 # The window (Metal backend; rsx_metal_backend.h has the details):
 #   PS3_WINDOW_MODE=windowed|fullscreen|borderless   how it opens (windowed)
 #   PS3_WINDOW_SIZE=1920x1080   windowed size in points (1280x720 by default)

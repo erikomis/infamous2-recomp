@@ -289,8 +289,9 @@ funcionam como antes). O Info.plist dele diz que é um jogo, e assim o macOS 14+
 liga o Modo Jogo enquanto o jogo está em tela cheia e na frente: prioridade na
 CPU e na GPU, metade da latência Bluetooth para controles e AirPods. A tela
 cheia do macOS liga o Modo Jogo; a sem bordas pode não ligar. O jogo também
-impede o macOS de colocá-lo em App Nap e roda as threads de PPU, SPU e RSX na
-classe de QoS mais alta (`PS3_QOS=0` as deixa no padrão do sistema).
+impede o macOS de colocá-lo em App Nap. `PS3_QOS=1` (experimental) põe as
+threads de PPU, SPU e RSX na classe de QoS mais alta; nos testes não aumentou o
+fps e coincidiu com travamentos.
 
 | Variável | O que faz |
 | --- | --- |

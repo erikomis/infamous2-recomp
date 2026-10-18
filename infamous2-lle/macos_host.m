@@ -15,7 +15,9 @@
  * ahead of background work). The toolkit does the same for the PPU and SPU
  * threads it creates (runtime/platform/host_qos.h); this covers the threads
  * the port creates: the main thread, the guest's main thread and the frame
- * clock (RSX FIFO, present). PS3_QOS=0 turns both off.
+ * clock (RSX FIFO, present). Opt-in, PS3_QOS=1: the headless A/B showed no
+ * frame-time gain and two hangs on the frame fence in three runs with it
+ * (host_qos.h). The App Nap activity is always on.
  */
 #import <Foundation/Foundation.h>
 #include <pthread.h>
@@ -40,7 +42,7 @@ int infamous2_host_qos_enabled(void)
     static int on = -1;
     if (on < 0) {
         const char* e = getenv("PS3_QOS");
-        on = !(e && e[0] == '0');
+        on = e && e[0] == '1';
     }
     return on;
 }
