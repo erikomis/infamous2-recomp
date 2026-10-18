@@ -364,6 +364,22 @@ direction for 10 s from 470 s, then the left one, the left stick forward from
 the pier gate ("Hold L1 to aim"). `tools/play_prologue.sh [name] [seconds]`
 does all of that in one command.
 
+Switching knobs while the game runs: `PS3_TOGGLE_FILE=<file>` names a text
+file the game re-reads every 250 ms when it changes, one `NAME=value` per line
+(`#` starts a comment), NAME being the environment variable. A line overrides
+that variable, a removed line goes back to it, and each change logs
+`[toggle] NAME old -> new`. Live: `PS3RECOMP_ENG_VCACHE`,
+`PS3RECOMP_ENG_TEXHASH_FULL`, `PS3RECOMP_ENG_SKIP_FP` (the whole list),
+`PS3_SPU_FASTJOB`, `PS3_SPU_STUB_MICRO`, `PS3_SPU_STACK_HINT`,
+`PS3_SPU_DRAIN_INLINE` (the drain's inline launch check), `PS3_DISPLAY_GAMMA`,
+`PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO` and `PS3RECOMP_METAL_FPS`; everything else
+(the GPU light/SSAO passes among them) is still read once at start. Without the
+variable nothing changes. `tools/ab_live.sh <name> <KNOB> [B] [A]` uses it for
+an fps A/B inside one headless run: it flips the knob every 20 s from 200 s
+into the New Marais recipe and `tools/ftrace_report.py --phases` reports the
+frame times of each value, so both sides see the same scene at the same moment
+instead of two runs that drift apart.
+
 ## Fixes made here
 
 In the toolkit (in `infamous2-lle/patches/`, applied by `setup_toolkit.sh`):

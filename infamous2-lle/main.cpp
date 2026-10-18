@@ -38,6 +38,7 @@
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
 #include "ps3emu/ps3_ftrace.h"   /* PS3_FTRACE: present spans */
+#include "ps3emu/ps3_toggles.h"  /* PS3_TOGGLE_FILE: knobs switched while the game runs */
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #include <pthread.h>
@@ -222,6 +223,10 @@ static DWORD WINAPI frame_clock(LPVOID)
          * (the SPU lighting label), re-check every 1 ms instead of every 4. */
         Sleep(sema_fast_poll && cellGcm_drain_sema_blocked() ? 1 : 4);
         ULONGLONG now = GetTickCount64();
+        /* PS3_TOGGLE_FILE=<path>: re-read every 250 ms when it changed, so an
+         * A/B flips a knob inside one run (tools/ab_live.sh). Without the
+         * variable this is one predictable branch. */
+        ps3_toggles_poll();
 
         int fired = 0;
         while ((long long)(now - next_tick) >= 0 && fired < 240) {
