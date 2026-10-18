@@ -31,9 +31,13 @@ interface Settings {
   audioDevice: string;
   rumble: boolean;
   rumbleStrength: number;
+  showFps: boolean;
   extraEnv: string;
   gamePaths: string[];
   rapPath: string;
+  keysPath: string;
+  firmwarePath: string;
+  decryptWith: string;
   saveBackupsKeep: number;
 }
 interface InstallInfo {
@@ -85,6 +89,19 @@ interface Prereqs {
   firmwareMissing: boolean;
   ok: boolean;
   error: string | null;
+}
+/** A "Report a problem" folder (src-tauri/src/report.rs). */
+interface ReportInfo {
+  dir: string;
+  id: string;
+  live: boolean;
+  captures: number;
+  pending: boolean;
+  surfaces: number;
+  shaders: number;
+  bytes: number;
+  zip: string | null;
+  zipBytes: number;
 }
 interface LicenceSearch {
   gameDir: string | null;
@@ -160,6 +177,7 @@ function applyLang(l: Lang) {
   renderControls();
   renderSaves();
   renderOutputs();
+  renderReport();
 }
 
 // ---- screens and audio outputs (PS3_DISPLAY, PS3_AUDIO_DEVICE) ------------------
@@ -239,6 +257,7 @@ function bindSettings() {
   bindCheck("game-icon", "gameIcon");
   bindCheck("vsync", "vsync");
   bindCheck("rumble-on", "rumble");
+  bindCheck("show-fps", "showFps");
   for (const [id, key] of [["screen", "display"], ["audio-device", "audioDevice"]] as const) {
     const el = $<HTMLSelectElement>(id);
     el.addEventListener("change", () => {
@@ -297,7 +316,15 @@ function bindSettings() {
     persist();
   });
   $("reset").addEventListener("click", async () => {
-    const keep = { uiLang: settings.uiLang, installDir: settings.installDir, gamePaths: settings.gamePaths, rapPath: settings.rapPath };
+    const keep = {
+      uiLang: settings.uiLang,
+      installDir: settings.installDir,
+      gamePaths: settings.gamePaths,
+      rapPath: settings.rapPath,
+      keysPath: settings.keysPath,
+      firmwarePath: settings.firmwarePath,
+      decryptWith: settings.decryptWith,
+    };
     Object.assign(settings, {
       gameLang: "pt",
       gpuLight: true,
@@ -320,6 +347,7 @@ function bindSettings() {
       audioDevice: "",
       rumble: true,
       rumbleStrength: 100,
+      showFps: false,
       extraEnv: "",
     }, keep);
     await invoke("save_settings", { settings });
@@ -394,6 +422,8 @@ function renderHome() {
   play.classList.toggle("danger", gameRunning);
   play.disabled = rebuildRunning || !status.hostSupported;
   show($("run-state"), gameRunning);
+  show($("report-card"), !!inst);
+  renderReport();
   show($("home-unsupported"), !status.hostSupported);
   show($("go-install"), status.hostSupported);
 
@@ -414,23 +444,29 @@ function renderHome() {
   }
 }
 
-$("play").addEventListener("click", async () => {
+async function startGame(diagnostic: boolean) {
   const msg = $("home-msg");
   try {
-    if (gameRunning) {
-      await invoke("stop_game");
-      return;
-    }
-    const r = await invoke<{ log: string; backup: string | null; backupError: string | null }>("play");
+    const r = await invoke<{ log: string; backup: string | null; backupError: string | null; report: string | null }>("play", { diagnostic });
     gameRunning = true;
     msg.textContent =
-      t("home.started", { log: r.log }) +
+      (r.report ? t("home.startedDiag", { dir: r.report }) : t("home.started", { log: r.log })) +
       (r.backup ? t("home.backedUp", { id: r.backup }) : "") +
       (r.backupError ? t("home.backupFailed", { e: r.backupError }) : "");
+    $("report-msg").textContent = "";
   } catch (e) {
     msg.textContent = String(e);
   }
   renderHome();
+  refreshReport();
+}
+
+$("play").addEventListener("click", async () => {
+  if (gameRunning) {
+    await invoke("stop_game").catch((e) => ($("home-msg").textContent = String(e)));
+    return;
+  }
+  await startGame(false);
 });
 $("go-install").addEventListener("click", () => showView("install"));
 $("go-saves").addEventListener("click", () => showView("saves"));
@@ -441,6 +477,84 @@ $("open-saves").addEventListener("click", async () => {
 $("open-log").addEventListener("click", async () => {
   const p = await invoke<Record<string, string>>("log_paths");
   invoke("reveal", { path: p.game });
+});
+
+// ---- report a problem (diagnostic mode, src-tauri/src/report.rs) ---------------------
+let report: ReportInfo | null = null;
+let reportPoll = 0;
+let zipping = false;
+const URL_ISSUE = "https://github.com/erikomis/infamous2-recomp/issues/new";
+
+function human(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(i && v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+async function refreshReport() {
+  try {
+    report = await invoke<ReportInfo | null>("report_info");
+  } catch {
+    report = null;
+  }
+  renderReport();
+  // follow the dumps while the diagnostic game runs
+  const live = !!report?.live && gameRunning;
+  if (live && !reportPoll) reportPoll = window.setInterval(refreshReport, 2000);
+  if (!live && reportPoll) {
+    window.clearInterval(reportPoll);
+    reportPoll = 0;
+  }
+}
+
+function renderReport() {
+  const r = report;
+  const live = !!r?.live && gameRunning;
+  $("report-hint").textContent = t(live ? "report.hintLive" : gameRunning ? "report.hintNotDiag" : "report.hintIdle");
+  show($("report-play"), !gameRunning);
+  $<HTMLButtonElement>("report-play").disabled = rebuildRunning || !status?.hostSupported;
+  show($("report-capture"), live);
+  show($("report-done"), !!r);
+  show($("report-show-zip"), !!r?.zip);
+  $<HTMLButtonElement>("report-zip").disabled = zipping;
+  $("report-state").textContent = r
+    ? t("report.state", { id: r.id, captures: r.captures, surfaces: r.surfaces, shaders: r.shaders, size: human(r.bytes) }) +
+      (r.pending && live ? t("report.pending") : "")
+    : "";
+}
+
+$("report-play").addEventListener("click", () => startGame(true));
+$("report-capture").addEventListener("click", async () => {
+  try {
+    report = await invoke<ReportInfo>("report_capture");
+    $("report-msg").textContent = t("report.captured", { n: report.captures });
+  } catch (e) {
+    $("report-msg").textContent = String(e);
+  }
+  renderReport();
+});
+$("report-open").addEventListener("click", () => report && invoke("reveal", { path: report.dir }));
+$("report-show-zip").addEventListener("click", () => report?.zip && invoke("reveal", { path: report.zip }));
+$("report-issue").addEventListener("click", () => invoke("open_url", { url: URL_ISSUE }));
+$("report-zip").addEventListener("click", async () => {
+  const msg = $("report-msg");
+  zipping = true;
+  msg.textContent = t("report.zipping");
+  renderReport();
+  try {
+    report = await invoke<ReportInfo>("report_zip", { notes: $<HTMLTextAreaElement>("report-notes").value });
+    msg.textContent = t("report.zipped", { file: report.zip ?? "", size: human(report.zipBytes) });
+    if (report.zip) invoke("reveal", { path: report.zip });
+  } catch (e) {
+    msg.textContent = String(e);
+  }
+  zipping = false;
+  renderReport();
 });
 
 // ---- install: 1. prerequisites ---------------------------------------------------
@@ -457,9 +571,18 @@ function checkLabel(name: string): string {
   return v === k ? name : v;
 }
 
+/** The decryption the Install screen is set to (rebuild.py --keys/--firmware/--decrypt-with). */
+function decryptOpts() {
+  return { keys: settings.keysPath ?? "", firmware: settings.firmwarePath ?? "", decryptWith: settings.decryptWith || "auto" };
+}
+
+let prereqSeq = 0;
 async function refreshPrereqs() {
   $("prereq-msg").textContent = t("prereq.checking");
-  prereqs = await invoke<Prereqs>("check_prereqs");
+  const seq = ++prereqSeq;
+  const p = await invoke<Prereqs>("check_prereqs", { decrypt: decryptOpts() });
+  if (seq !== prereqSeq) return; // a newer check (the decryption changed meanwhile) wins
+  prereqs = p;
   $("prereq-msg").textContent = prereqs.error && prereqs.supported ? t("prereq.error", { e: prereqs.error }) : "";
   renderPrereqs();
   // the Command Line Tools install in Apple's own window; stop polling once they are in
@@ -469,22 +592,42 @@ async function refreshPrereqs() {
   }
 }
 
-function prereqAction(c: CheckItem): HTMLButtonElement | null {
-  if (c.level !== "fail" || !prereqs) return null;
-  const b = document.createElement("button");
-  if (c.name === "xcode-clt") {
-    b.textContent = t("prereq.installClt");
-    b.addEventListener("click", installClt);
-  } else if (c.name === "rpcs3") {
-    b.textContent = t("prereq.getRpcs3");
-    b.addEventListener("click", () => invoke("open_url", { url: URL_RPCS3 }));
-  } else if (c.name === "firmware") {
-    b.textContent = t("prereq.howFirmware");
-    b.addEventListener("click", () => invoke("open_url", { url: URL_FIRMWARE }));
-  } else {
-    return null;
+/** Open "More options" at the decryption fields. */
+function showDecryptOptions(focus: string) {
+  ($("more-options") as HTMLDetailsElement).open = true;
+  const el = $(focus);
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.focus();
+}
+
+function prereqActions(c: CheckItem): HTMLButtonElement[] {
+  if (c.level !== "fail" || !prereqs) return [];
+  const button = (label: Key, run: () => unknown) => {
+    const b = document.createElement("button");
+    b.textContent = t(label);
+    b.addEventListener("click", () => run());
+    return b;
+  };
+  switch (c.name) {
+    case "xcode-clt":
+      return [button("prereq.installClt", installClt)];
+    case "rpcs3":
+      return [
+        button("prereq.getRpcs3", () => invoke("open_url", { url: URL_RPCS3 })),
+        button("prereq.withoutRpcs3", () => showDecryptOptions("decrypt-with")),
+      ];
+    case "firmware":
+      return settings.firmwarePath
+        ? [button("prereq.chooseFirmware", () => showDecryptOptions("firmware-path"))]
+        : [
+            button("prereq.howFirmware", () => invoke("open_url", { url: URL_FIRMWARE })),
+            button("prereq.chooseFirmware", () => showDecryptOptions("firmware-path")),
+          ];
+    case "keys":
+      return [button("prereq.chooseKeys", () => showDecryptOptions("keys-path"))];
+    default:
+      return [];
   }
-  return b;
 }
 
 function renderPrereqs() {
@@ -505,6 +648,7 @@ function renderPrereqs() {
   const hints: Record<string, Key> = {
     rpcs3: "prereq.hint.rpcs3",
     firmware: "prereq.hint.firmware",
+    keys: "prereq.hint.keys",
     "xcode-clt": "prereq.hint.clt",
     disk: "prereq.hint.disk",
   };
@@ -517,8 +661,7 @@ function renderPrereqs() {
     li.querySelector("b")!.textContent = checkLabel(c.name);
     li.querySelector(".tip")!.textContent = c.level === "fail" && hints[c.name] ? t(hints[c.name]) : "";
     li.querySelector(".msg")!.textContent = c.message;
-    const act = prereqAction(c);
-    if (act) li.appendChild(act);
+    li.append(...prereqActions(c));
     list.appendChild(li);
   }
   const sum = $("prereq-summary");
@@ -588,10 +731,16 @@ listen<number>("setup-exit", (ev) => {
 const gamePaths = $<HTMLTextAreaElement>("game-paths");
 const rapPath = $<HTMLInputElement>("rap-path");
 const outDir = $<HTMLInputElement>("out-dir");
+const keysPath = $<HTMLInputElement>("keys-path");
+const firmwarePath = $<HTMLInputElement>("firmware-path");
+const decryptWith = $<HTMLSelectElement>("decrypt-with");
 
 function readInstallForm() {
   settings.gamePaths = gamePaths.value.split("\n").map((s) => s.trim()).filter(Boolean);
   settings.rapPath = rapPath.value.trim();
+  settings.keysPath = keysPath.value.trim();
+  settings.firmwarePath = firmwarePath.value.trim();
+  settings.decryptWith = decryptWith.value || "auto";
   const out = outDir.value.trim();
   if (out) settings.installDir = out;
   $<HTMLInputElement>("install-dir").value = settings.installDir;
@@ -666,6 +815,36 @@ $("pick-rap").addEventListener("click", async () => {
     renderGame(lastSearch);
   }
 });
+// Decryption: what the requirements need changes with it, so check again.
+let recheckTimer = 0;
+function decryptChanged() {
+  readInstallForm();
+  window.clearTimeout(recheckTimer);
+  recheckTimer = window.setTimeout(refreshPrereqs, 300);
+}
+[keysPath, firmwarePath, decryptWith].forEach((el) => el.addEventListener("change", decryptChanged));
+$("pick-keys").addEventListener("click", async () => {
+  const p = await open({ title: t("install.keys"), defaultPath: keysPath.value || undefined });
+  if (typeof p === "string") {
+    keysPath.value = p;
+    decryptChanged();
+  }
+});
+$("pick-fw-dir").addEventListener("click", async () => {
+  const p = await open({ directory: true, title: t("install.firmware") });
+  if (typeof p === "string") {
+    firmwarePath.value = p;
+    decryptChanged();
+  }
+});
+$("pick-fw-pup").addEventListener("click", async () => {
+  const p = await open({ title: t("install.firmware"), filters: [{ name: "PS3UPDAT.PUP", extensions: ["PUP", "pup"] }] });
+  if (typeof p === "string") {
+    firmwarePath.value = p;
+    decryptChanged();
+  }
+});
+
 $("pick-out").addEventListener("click", async () => {
   const p = await open({ directory: true, defaultPath: outDir.value || undefined });
   if (typeof p === "string") {
@@ -720,6 +899,7 @@ async function startRebuild(dryRun: boolean) {
         dryRun,
         force: $<HTMLInputElement>("force").checked,
         rapKey: $<HTMLInputElement>("rap-key").value || null,
+        decrypt: decryptOpts(),
       },
     });
     rebuildRunning = true;
@@ -808,6 +988,7 @@ listen<number>("game-exit", (ev) => {
   gameRunning = false;
   $("home-msg").textContent = t("home.exited", { code: ev.payload });
   renderHome();
+  refreshReport();
 });
 
 // ---- start ---------------------------------------------------------------------
@@ -827,8 +1008,13 @@ async function main() {
   gamePaths.value = settings.gamePaths.join("\n");
   rapPath.value = settings.rapPath;
   outDir.value = settings.installDir;
+  keysPath.value = settings.keysPath ?? "";
+  firmwarePath.value = settings.firmwarePath ?? "";
+  decryptWith.value = settings.decryptWith || "auto";
+  if (!decryptWith.value) decryptWith.value = "auto"; // a value the list does not offer
   applyLang(settings.uiLang as Lang);
   await refreshStatus();
+  refreshReport();
   renderPrereqs();
   if (!status?.install) showView("install");
   if (status?.hostSupported) {

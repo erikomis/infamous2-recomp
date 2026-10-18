@@ -60,6 +60,27 @@
               <button id="open-log" class="link" data-i18n="home.openLog">Abrir log do jogo</button>
             </div>
           </div>
+          <div class="card" id="report-card">
+            <h3 data-i18n="report.title">Reportar um problema</h3>
+            <p class="hint" id="report-hint"></p>
+            <div class="row">
+              <button id="report-play" data-i18n="report.play">Jogar em modo de diagnóstico</button>
+              <button id="report-capture" class="primary hidden" data-i18n="report.capture">Capturar este quadro</button>
+            </div>
+            <p id="report-state" class="small muted"></p>
+            <div id="report-done" class="hidden">
+              <label for="report-notes" data-i18n="report.notes">O que deu errado (opcional)</label>
+              <textarea id="report-notes" rows="2"></textarea>
+              <div class="row">
+                <button id="report-zip" data-i18n="report.zip">Criar .zip</button>
+                <button id="report-open" class="link" data-i18n="report.open">Abrir pasta</button>
+                <button id="report-show-zip" class="link hidden" data-i18n="report.showZip">Mostrar o .zip</button>
+                <button id="report-issue" class="link" data-i18n="report.issue">Abrir uma issue no GitHub</button>
+              </div>
+              <p class="hint" data-i18n="report.privacy"></p>
+            </div>
+            <p id="report-msg" class="small"></p>
+          </div>
         </div>
       </section>
 
@@ -140,6 +161,31 @@
               <input id="out-dir" type="text" spellcheck="false" />
               <div class="buttons"><button id="pick-out" data-i18n="install.pick">Escolher…</button></div>
             </div>
+
+            <label for="decrypt-with" data-i18n="install.decrypt">Descriptografia</label>
+            <select id="decrypt-with">
+              <option value="auto" data-i18n="install.decryptAuto">Automática</option>
+              <option value="python" data-i18n="install.decryptPython">Arquivo de chaves</option>
+              <option value="rpcs3" data-i18n="install.decryptRpcs3">RPCS3</option>
+            </select>
+            <p class="hint" data-i18n="install.decryptHint"></p>
+
+            <label for="keys-path" data-i18n="install.keys">Arquivo de chaves</label>
+            <div class="field">
+              <input id="keys-path" type="text" spellcheck="false" />
+              <div class="buttons"><button id="pick-keys" data-i18n="install.pick">Escolher…</button></div>
+            </div>
+            <p class="hint" data-i18n="install.keysHint"></p>
+
+            <label for="firmware-path" data-i18n="install.firmware">Firmware do PS3</label>
+            <div class="field">
+              <input id="firmware-path" type="text" spellcheck="false" />
+              <div class="buttons">
+                <button id="pick-fw-dir" data-i18n="install.pickFolder">Pasta…</button>
+                <button id="pick-fw-pup" data-i18n="install.pickPup">PUP…</button>
+              </div>
+            </div>
+            <p class="hint" data-i18n="install.firmwareHint"></p>
 
             <label data-i18n="install.rapKey">Chave RAP</label>
             <input id="rap-key" type="password" autocomplete="off" spellcheck="false" />
@@ -323,6 +369,8 @@
           <p class="hint" data-i18n="settings.screenHint"></p>
           <label class="check"><input id="vsync" type="checkbox" /> <span data-i18n="settings.vsync"></span></label>
           <p class="hint" data-i18n="settings.vsyncHint"></p>
+          <label class="check"><input id="show-fps" type="checkbox" /> <span data-i18n="settings.showFps"></span></label>
+          <p class="hint" data-i18n="settings.showFpsHint"></p>
           <label class="check"><input id="game-icon" type="checkbox" /> <span data-i18n="settings.gameIcon"></span></label>
           <p class="hint" data-i18n="settings.gameIconHint"></p>
         </fieldset>
