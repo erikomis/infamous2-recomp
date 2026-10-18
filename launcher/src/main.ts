@@ -5,6 +5,7 @@ import { GAME_LANGS, Key, Lang, lang, setLang, t, translateDom } from "./i18n";
 import { initControls, renderControls, showControls } from "./controls";
 import { RebuildProgress } from "./progress";
 import { initSaves, refresh as refreshSaves, render as renderSaves } from "./saves";
+import { initUpdates, refreshUpdates, renderUpdates } from "./update";
 
 // ---- types shared with src-tauri/src/lib.rs (camelCase) ----------------------
 interface Settings {
@@ -369,6 +370,7 @@ async function refreshStatus() {
   gameRunning = status.gameRunning;
   rebuildRunning = status.rebuildRunning || rebuildRunning;
   renderHome();
+  refreshUpdates();
 }
 
 function renderHome() {
@@ -396,6 +398,7 @@ function renderHome() {
   show($("run-state"), gameRunning);
   show($("home-unsupported"), !status.hostSupported);
   show($("go-install"), status.hostSupported);
+  renderUpdates();
 
   const s = status.lastSave;
   const box = $("save-info");
@@ -821,6 +824,13 @@ async function main() {
     setKeep: (n) => {
       settings.saveBackupsKeep = n;
       persist();
+    },
+  });
+  initUpdates({
+    canRebuild: () => !rebuildRunning && !gameRunning && !!status?.hostSupported && !!status?.rebuildScript,
+    rebuild: () => {
+      showView("install");
+      startRebuild(false);
     },
   });
   refreshOutputs();
