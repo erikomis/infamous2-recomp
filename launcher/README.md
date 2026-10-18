@@ -81,7 +81,8 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   Debug mode. Play first backs up the saves (see Saves).
 - **Graphics / Gráficos**: Display (window mode `PS3_WINDOW_MODE`, size
   `PS3_WINDOW_SIZE`, screen `PS3_DISPLAY` from AppKit's screen names through
-  `osascript`, the Dock icon `PS3_WINDOW_ICON=game`) and Image quality
+  `osascript`, "Your copy's icon in the Dock": see "The icon from your copy"
+  below) and Image quality
   (MetalFX upscaling `PS3_UPSCALE`, FXAA `PS3_AA`, sharpening `PS3_SHARPEN`,
   anisotropic filtering `PS3_ANISO`, all passed only when not off; gamma
   override `PS3_DISPLAY_GAMMA`).
@@ -379,9 +380,11 @@ unpacks every bundle (`.app`, `.dmg`, `.zip`, `.deb`, `.AppImage`, `.msi`,
 NSIS `.exe`) and fails on licences and keys (`*.rap`, `*.rif`, `act.dat`,
 `*.edat`), game code and data (`EBOOT*`, `*.self`, `*.sprx`, `*.prx`,
 `*.elf`, `*.pkg`, `*.psarc`, `*.pup`, `PARAM.SFO`, `NPUA80638*`, folders
-`dev_hdd0`, `dev_flash`, `PS3_GAME`, `USRDIR`), lifted output (`recompiled/`,
-`lle/`, `lle_spu/`, `jobmods/`), SCE/PKG/PSF/PSAR/NPD headers and PowerPC
-or SPU ELF files by content, any port file over 4 MB, and a missing
+`dev_hdd0`, `dev_flash`, `PS3_GAME`, `USRDIR`), the game's art and sound
+(`ICON0*`, `ICON1*`, `PIC0*`, `PIC1*`, `PIC2*`, `SND0*`), lifted output
+(`recompiled/`, `lle/`, `lle_spu/`, `jobmods/`), SCE/PKG/PSF/PSAR/NPD headers,
+PowerPC or SPU ELF files and 320x176 PNGs (ICON0's size, under any name) by
+content, any port file over 4 MB, and a missing
 `rebuild.py`.
 
 A local package (macOS):
@@ -435,6 +438,44 @@ Only secrets that are set reach the build (Tauri would treat an empty
 
 The icon is an original placeholder (`scripts/make_icon.py`, then
 `npx tauri icon src-tauri/icons/app-icon.png`); no Sony art or logo.
+
+### The icon from your copy
+
+Graphics > "Your copy's icon in the Dock" (`gameIcon` in `launcher.json`, off
+by default) is one switch for both Dock icons, macOS only:
+
+- **The launcher** (`src-tauri/src/app_icon.rs`): the copy's own
+  `PS3_GAME/ICON0.PNG` (320x176; from the install, else from the game folder
+  chosen on Install, as the Home hero) is drawn centred, aspect kept, on a
+  dark rounded square in Apple's icon grid (824/1024, the redesign's panel
+  colours, a thin rim and a soft shadow) with the `png` crate, cached as
+  `~/Library/Application Support/infamous2-recomp/app-icon.png` (plus
+  `app-icon.png.src`, the source's path, size and mtime: a changed ICON0 is
+  drawn again) and set with `-[NSApplication setApplicationIconImage:]` at
+  every start, on a settings change and on a status refresh. When the copy is
+  out of reach the cached icon stays; off gives the Dock the bundle's
+  placeholder back. Only the Dock and the app switcher while the app runs:
+  the bundle on disk keeps the placeholder.
+- **The game window**: `PS3_WINDOW_ICON=game` as before; when the square
+  icon is drawn, Play passes its path instead (`PS3_WINDOW_ICON=<file>`), so
+  both Dock icons look the same. Without it the toolkit centres the bare
+  ICON0 on a transparent square.
+- **Use as the app's Finder icon** (under the switch, shown in a packaged
+  `.app` when there is art): `-[NSWorkspace setIcon:forFile:options:]` puts
+  the square icon on the installed `.app`, so Finder, Launchpad and a kept
+  Dock item show it while the launcher is closed too; the same button takes
+  it off again. macOS writes an `Icon\r` file at the bundle root and a
+  `com.apple.FinderInfo` attribute on it. Checked on an ad-hoc signed test
+  bundle: `codesign --verify --deep` still passes (codesign leaves `Icon\r`
+  out of the seal), `--strict` fails only on the FinderInfo attribute, and
+  `spctl` gives the same verdict as before (an ad-hoc app is "rejected"
+  either way; the player has already let it through on the first start,
+  before the button can be pressed). Taking the icon off makes `--strict`
+  pass again. An app update replaces the bundle and so brings the
+  placeholder back.
+
+None of this art is in the repository or a bundle: `check_bundle.py`
+rejects `ICON0*`/`PIC1*` by name and any 320x176 PNG by content.
 
 ## The rebuild script on its own
 

@@ -255,7 +255,14 @@ const en = {
   "settings.showFpsHint":
     "The game window's title shows the fps on screen and the game's own frame rate, with frame times, once per second (also in the game log).",
   "settings.gameIcon": "Your copy's icon in the Dock",
-  "settings.gameIconHint": "Off: the launcher's own icon. On: ICON0.PNG from your installed copy.",
+  "settings.gameIconHint":
+    "Off: the app's placeholder icon. On: ICON0.PNG from your own copy on a dark square, for the launcher and for the game window (read from your copy; nothing ships with the app).",
+  "settings.finderIconSet": "Use as the app's Finder icon",
+  "settings.finderIconUnset": "Give the app its own Finder icon back",
+  "settings.finderIconHint":
+    "Also while the launcher is closed (Finder, Launchpad, a Dock shortcut). macOS writes an Icon file into the .app; its signature still checks, and an app update brings the placeholder back.",
+  "settings.finderIconDone": "Done. Finder can take a moment to show it.",
+  "settings.finderIconFailed": "Could not change the icon: {e}",
   "settings.screen": "Screen",
   "settings.screenMain": "Main screen (default)",
   "settings.screenMissing": "{name} (not connected)",
@@ -715,7 +722,14 @@ const ptBR: Partial<Record<Key, string>> = {
   "settings.showFpsHint":
     "O título da janela do jogo mostra o fps na tela e a taxa de quadros do próprio jogo, com os tempos de quadro, uma vez por segundo (também no log do jogo).",
   "settings.gameIcon": "Ícone da sua cópia no Dock",
-  "settings.gameIconHint": "Desligado: o ícone do próprio launcher. Ligado: o ICON0.PNG da sua cópia instalada.",
+  "settings.gameIconHint":
+    "Desligado: o ícone placeholder do app. Ligado: o ICON0.PNG da sua própria cópia num quadrado escuro, no launcher e na janela do jogo (lido da sua cópia; nada vem com o app).",
+  "settings.finderIconSet": "Usar como ícone do app no Finder",
+  "settings.finderIconUnset": "Voltar ao ícone original do app no Finder",
+  "settings.finderIconHint":
+    "Vale também com o launcher fechado (Finder, Launchpad, atalho no Dock). O macOS grava um arquivo Icon dentro do .app; a assinatura continua válida, e uma atualização do app traz o placeholder de volta.",
+  "settings.finderIconDone": "Pronto. O Finder pode levar um instante para mostrar.",
+  "settings.finderIconFailed": "Não deu para mudar o ícone: {e}",
   "settings.screen": "Tela",
   "settings.screenMain": "Tela principal (padrão)",
   "settings.screenMissing": "{name} (não conectada)",
