@@ -1,0 +1,1152 @@
+--- a/include/ps3emu/ps3_ftrace.h
++++ b/include/ps3emu/ps3_ftrace.h
+@@ -21,7 +21,9 @@
+  * and a predictable branch. Knobs: PS3_FTRACE_MIN_US (shortest span kept,
+  * default 20), PS3_FTRACE_MERGE_US (usleep polls of one thread at one call
+  * site closer than this become one span, default 300), PS3_FTRACE_CAP (spans
+- * kept, default 4M = 128 MB, allocated only when recording).
++ * kept, default 4M = 128 MB, allocated only when recording), PS3_FTRACE_KINDS
++ * (comma-separated span kinds to keep, default all: a long A/B run keeps
++ * 4,5,6,7,9,10,15 and leaves out the usleep polls that are most of a trace).
+  */
+ #ifndef PS3EMU_PS3_FTRACE_H
+ #define PS3EMU_PS3_FTRACE_H
+@@ -57,6 +59,9 @@
+     PS3_FT_GPU_EXEC    = 14, /* Metal: a command buffer's own GPU time, ending when the CPU saw it
+                               * complete; who = render passes, a = depth resolves | colour copies << 16,
+                               * b = 1 present / 0 flush */
++    PS3_FT_TOGGLE      = 15, /* instant: PS3_TOGGLE_FILE changed a knob (ps3_toggles.h); who = knob id
++                              * (64 + n: the n-th name that is not a built-in knob), a = old value,
++                              * b = new value (a string knob: a hash of its text) */
+ };
+ 
+ #if defined(_MSC_VER)
+@@ -74,6 +79,7 @@
+     int dumped;
+     uint32_t n, cap, dropped;
+     uint64_t base, start, end, min, merge;
++    uint32_t kinds;      /* bit k: keep spans of kind k (PS3_FTRACE_KINDS) */
+     ps3_ft_rec* buf;
+     char path[1024];
+     struct { uint64_t t0, t1; uint32_t lr, n; } us[PS3_FT_TIDS];   /* usleep run being merged */
+@@ -149,6 +155,17 @@
+             s->min = (m ? strtoull(m, 0, 10) : 20ull) * 1000ull;
+             const char* g = getenv("PS3_FTRACE_MERGE_US");
+             s->merge = (g ? strtoull(g, 0, 10) : 300ull) * 1000ull;
++            const char* kl = getenv("PS3_FTRACE_KINDS");
++            s->kinds = 0xFFFFFFFFu;
++            if (kl && *kl) {
++                s->kinds = 0;
++                for (const char* q = kl; *q;) {
++                    char* qe; const long k = strtol(q, &qe, 10);
++                    if (qe == q) break;
++                    if (k >= 0 && k < 32) s->kinds |= 1u << k;
++                    q = *qe == ',' ? qe + 1 : qe;
++                }
++            }
+             const char* c = getenv("PS3_FTRACE_CAP");
+             s->cap = c ? (uint32_t)strtoul(c, 0, 10) : 4u << 20;
+             s->buf = (ps3_ft_rec*)calloc(s->cap, sizeof(ps3_ft_rec));
+@@ -187,6 +204,7 @@
+     if (__atomic_load_n(&s->on, __ATOMIC_RELAXED) != 2) return;
+     if (t1 < s->start) return;
+     if (t0 > s->end) { ps3_ft_dump(); return; }
++    if (!(s->kinds >> (kind & 31) & 1u)) return;
+     const uint32_t i = __atomic_fetch_add(&s->n, 1, __ATOMIC_RELAXED);
+     if (i >= s->cap) { __atomic_fetch_add(&s->dropped, 1, __ATOMIC_RELAXED); return; }
+     ps3_ft_rec r = { t0, t1, a, b, who, (uint32_t)kind };
+--- /dev/null
++++ b/include/ps3emu/ps3_toggles.h
+@@ -0,0 +1,227 @@
++/*
++ * ps3_toggles -- performance and debug knobs that change while the game runs.
++ *
++ * PS3_TOGGLE_FILE=<path> names a small text file that the port re-reads while
++ * it runs (ps3_toggles_poll(), libs/misc/ps3_toggles.c, called from a thread
++ * that runs every frame; between changes it costs one stat() every 250 ms).
++ * One `NAME=value` per line, `#` starts a comment, NAME is the knob's own
++ * environment variable:
++ *
++ *     PS3RECOMP_ENG_VCACHE=0
++ *     PS3RECOMP_ENG_SKIP_FP=5f740845528b0e62     # a list: the whole value
++ *     PS3_SHARPEN=0.5
++ *
++ * A knob the file names overrides its environment value; a knob the file no
++ * longer names goes back to it. In the file a 0/1 knob takes a number (so
++ * PS3RECOMP_ENG_TEXHASH_FULL=0 is off there, while in the environment any
++ * value turns it on, as before). Every change logs `[toggle] NAME old -> new`,
++ * and while PS3_FTRACE records it leaves a PS3_FT_TOGGLE mark, so
++ * tools/ftrace_report.py --phases can split ONE run's frames into A and B:
++ * the same scene at the same moment instead of two runs that drift apart.
++ *
++ * Without PS3_TOGGLE_FILE nothing changes: each knob is read from its
++ * environment variable once, with the parsing it always had, into the same
++ * module-local int its hot path always read. ps3_toggle_watch() registers a
++ * callback that rewrites that int when the file changes the knob; the hot
++ * path itself never looks at this header's state and never parses anything.
++ *
++ * Header-only state (one weak object, as in ps3_ftrace.h): the files that read
++ * these knobs are also compiled on their own by self-contained tests, and a
++ * new link dependency would break each of them. Only the poll lives in a .c.
++ *
++ * Not live (read once, as before): PS3RECOMP_ENG_GPU_LIGHT / GPU_SSAO (they
++ * swap SPU job code with spu_replace_function while SPUs may be inside it),
++ * PS3_UPSCALE (it resizes the drawable on the main thread), the pacing and
++ * window knobs.
++ */
++#ifndef PS3EMU_PS3_TOGGLES_H
++#define PS3EMU_PS3_TOGGLES_H
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* The live knobs. ftrace_report.py has the same list (TOGGLE_NAMES): append
++ * only, so old traces keep their meaning. */
++enum ps3_toggle_id {
++    PS3T_ENG_VCACHE = 0,     /* rsx_draw_engine.c: cross-frame vertex cache       */
++    PS3T_ENG_TEXHASH_FULL,   /* rsx_draw_engine.c: full texture re-hash per frame */
++    PS3T_ENG_SKIP_FP,        /* rsx_draw_engine.c: fragment programs to skip      */
++    PS3T_SPU_FASTJOB,        /* spu_channels.c: job overlays on the fast dispatch */
++    PS3T_SPU_STUB_MICRO,     /* spu_channels.c: WWS interrupt stub microstepper   */
++    PS3T_SPU_STACK_HINT,     /* spu_channels.c: stack-reset hint table            */
++    PS3T_SPU_DRAIN_INLINE,   /* spu_drain.c: the launch check inline in the drain */
++    PS3T_DISPLAY_GAMMA,      /* cellAvconfExt.c: video-out gamma override         */
++    PS3T_SHARPEN,            /* rsx_metal_backend.m: CAS sharpening               */
++    PS3T_AA,                 /* rsx_metal_backend.m: FXAA                         */
++    PS3T_ANISO,              /* rsx_metal_backend.m: anisotropic filtering        */
++    PS3T_METAL_FPS,          /* rsx_metal_backend.m: window-title fps counter     */
++    PS3T_COUNT
++};
++
++/* How the environment variable was always read (the file always takes a
++ * number, or the text for the string knobs). */
++enum ps3_toggle_kind {
++    PS3_TK_ATOI,   /* set ? atoi(value) : default          */
++    PS3_TK_SET,    /* set (to anything) ? 1 : 0            */
++    PS3_TK_NOT0,   /* starts with '0' ? 0 : 1              */
++    PS3_TK_IS1,    /* exactly "1" ? 1 : 0                  */
++    PS3_TK_STR     /* text, read by the site; value = atoi */
++};
++
++typedef struct { const char* name; int kind; int def; } ps3_toggle_def;
++
++static inline const ps3_toggle_def* ps3_toggle_def_of(int id)
++{
++    static const ps3_toggle_def d[PS3T_COUNT] = {
++        { "PS3RECOMP_ENG_VCACHE",       PS3_TK_ATOI, 1 },
++        { "PS3RECOMP_ENG_TEXHASH_FULL", PS3_TK_SET,  0 },
++        { "PS3RECOMP_ENG_SKIP_FP",      PS3_TK_STR,  0 },
++        { "PS3_SPU_FASTJOB",            PS3_TK_NOT0, 1 },
++        { "PS3_SPU_STUB_MICRO",         PS3_TK_NOT0, 1 },
++        { "PS3_SPU_STACK_HINT",         PS3_TK_NOT0, 1 },
++        { "PS3_SPU_DRAIN_INLINE",       PS3_TK_NOT0, 1 },
++        { "PS3_DISPLAY_GAMMA",          PS3_TK_STR,  0 },
++        { "PS3_SHARPEN",                PS3_TK_STR,  0 },
++        { "PS3_AA",                     PS3_TK_STR,  0 },
++        { "PS3_ANISO",                  PS3_TK_ATOI, 0 },
++        { "PS3RECOMP_METAL_FPS",        PS3_TK_IS1,  0 },
++    };
++    return &d[id];
++}
++
++#if defined(_MSC_VER)
++#  define PS3_TOGGLE_SHARED __declspec(selectany)
++#else
++#  define PS3_TOGGLE_SHARED __attribute__((weak))
++#endif
++
++typedef void (*ps3_toggle_fn)(int id, int value);
++
++enum { PS3_TOGGLE_STR = 160, PS3_TOGGLE_WATCHERS = 4, PS3_TOGGLE_EXTRA = 16 };
++
++typedef struct {
++    int seeded;                                   /* 0 no, 1 seeding, 2 done */
++    char lock;                                    /* value/str/watchers/extra */
++    int value[PS3T_COUNT];                        /* current */
++    char str[PS3T_COUNT][PS3_TOGGLE_STR];
++    int env_value[PS3T_COUNT];                    /* what the environment said */
++    char env_str[PS3T_COUNT][PS3_TOGGLE_STR];
++    ps3_toggle_fn watch[PS3T_COUNT][PS3_TOGGLE_WATCHERS];
++    /* Names the file sets that are not built-in knobs: ps3_toggle_get() reads
++     * them, for a quick experiment that has no knob of its own yet. */
++    struct { char name[48]; int value, set; } extra[PS3_TOGGLE_EXTRA];
++    int n_extra;
++} ps3_toggle_state;
++
++PS3_TOGGLE_SHARED ps3_toggle_state g_ps3_toggles = { 0 };
++
++static inline void ps3_toggle_lock(void)
++{
++    while (__atomic_test_and_set(&g_ps3_toggles.lock, __ATOMIC_ACQUIRE)) { }
++}
++static inline void ps3_toggle_unlock(void)
++{
++    __atomic_clear(&g_ps3_toggles.lock, __ATOMIC_RELEASE);
++}
++
++static inline int ps3_toggle_env_parse(int id, const char* e)
++{
++    const ps3_toggle_def* d = ps3_toggle_def_of(id);
++    switch (d->kind) {
++    case PS3_TK_ATOI: return e ? atoi(e) : d->def;
++    case PS3_TK_SET:  return e ? 1 : 0;
++    case PS3_TK_NOT0: return (e && *e == '0') ? 0 : 1;
++    case PS3_TK_IS1:  return (e && !strcmp(e, "1")) ? 1 : 0;
++    default:          return e ? atoi(e) : d->def;
++    }
++}
++
++/* Every knob from the environment, once. */
++static inline void ps3_toggles_seed(void)
++{
++    ps3_toggle_state* s = &g_ps3_toggles;
++    if (__builtin_expect(__atomic_load_n(&s->seeded, __ATOMIC_ACQUIRE) == 2, 1)) return;
++    int expect = 0;
++    if (!__atomic_compare_exchange_n(&s->seeded, &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
++        while (__atomic_load_n(&s->seeded, __ATOMIC_ACQUIRE) != 2) { }
++        return;
++    }
++    for (int id = 0; id < PS3T_COUNT; id++) {
++        const char* e = getenv(ps3_toggle_def_of(id)->name);
++        s->env_value[id] = s->value[id] = ps3_toggle_env_parse(id, e);
++        snprintf(s->env_str[id], PS3_TOGGLE_STR, "%s", e ? e : "");
++        memcpy(s->str[id], s->env_str[id], PS3_TOGGLE_STR);
++    }
++    __atomic_store_n(&s->seeded, 2, __ATOMIC_RELEASE);
++}
++
++/* Register fn for knob id and call it with the current value (under the lock,
++ * so a change from the file cannot land between the two and be overwritten).
++ * Returns that value. fn runs on the polling thread on every later change, so
++ * it must be short: store an int, set a dirty flag. Registering the same fn
++ * twice (two threads racing a site's first use) keeps one. */
++static inline int ps3_toggle_watch(int id, ps3_toggle_fn fn)
++{
++    ps3_toggles_seed();
++    ps3_toggle_lock();
++    ps3_toggle_fn* w = g_ps3_toggles.watch[id];
++    for (int i = 0; i < PS3_TOGGLE_WATCHERS; i++) {
++        if (w[i] == fn) break;
++        if (!w[i]) { w[i] = fn; break; }
++    }
++    const int v = g_ps3_toggles.value[id];
++    fn(id, v);
++    ps3_toggle_unlock();
++    return v;
++}
++
++/* The current value (not for a hot path: use ps3_toggle_watch there). */
++static inline int ps3_toggle_value(int id)
++{
++    ps3_toggles_seed();
++    return __atomic_load_n(&g_ps3_toggles.value[id], __ATOMIC_RELAXED);
++}
++
++/* The current text of a knob ("" when neither the file nor the environment
++ * sets it). */
++static inline const char* ps3_toggle_str(int id, char* buf, size_t n)
++{
++    ps3_toggles_seed();
++    ps3_toggle_lock();
++    snprintf(buf, n, "%s", g_ps3_toggles.str[id]);
++    ps3_toggle_unlock();
++    return buf;
++}
++
++/* By name: a built-in knob's value, or a name the toggle file sets, else def.
++ * A string compare per call: for an experiment's code path, not a hot one. */
++static inline int ps3_toggle_get(const char* name, int def)
++{
++    ps3_toggles_seed();
++    for (int id = 0; id < PS3T_COUNT; id++)
++        if (!strcmp(ps3_toggle_def_of(id)->name, name)) return ps3_toggle_value(id);
++    int v = def;
++    ps3_toggle_lock();
++    for (int i = 0; i < g_ps3_toggles.n_extra; i++)
++        if (g_ps3_toggles.extra[i].set && !strcmp(g_ps3_toggles.extra[i].name, name)) {
++            v = g_ps3_toggles.extra[i].value; break;
++        }
++    ps3_toggle_unlock();
++    return v;
++}
++
++/* Re-read PS3_TOGGLE_FILE if it changed (at most every 250 ms) and apply it.
++ * Call from ONE thread that runs every frame. Does nothing without the
++ * variable. libs/misc/ps3_toggles.c. */
++void ps3_toggles_poll(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+--- a/libs/misc/cellAvconfExt.c
++++ b/libs/misc/cellAvconfExt.c
+@@ -9,6 +9,7 @@
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_write32: translate + byte-swap */
+ #include "../../runtime/ppu/ppu_context.h"  /* the float argument of SetGamma is in f1 */
+ #include <stdlib.h>
++#include "../../include/ps3emu/ps3_toggles.h"   /* PS3_TOGGLE_FILE: PS3_DISPLAY_GAMMA live */
+ 
+ /* The HLE ABI adapter passes pointer parameters as raw guest addresses, so a
+  * bare deref here writes to whatever host address shares that number. These
+@@ -206,19 +207,20 @@
+ /* The display gamma for the presenter: what the title set (0.8..1.2, 1 by
+  * default), or PS3_DISPLAY_GAMMA=<g> to override it. The video out applies
+  * it as out = in^gamma, like RPCS3's calibration pass. */
+-static volatile float s_gamma_override = -1.0f;   /* < 0: PS3_DISPLAY_GAMMA not read yet; 0: none */
++static int s_gamma_dirty = 1;   /* PS3_TOGGLE_FILE changed PS3_DISPLAY_GAMMA */
++static void avconf_gamma_set(int id, int v) { (void)id; (void)v; __atomic_store_n(&s_gamma_dirty, 1, __ATOMIC_RELAXED); }
+ float cellAvconfExt_display_gamma(void)
+ {
+-    float env = s_gamma_override;
+-    if (env < 0.0f) { const char* e = getenv("PS3_DISPLAY_GAMMA"); env = e ? (float)atof(e) : 0.0f;
+-                      if (!(env > 0.0f)) env = 0.0f; s_gamma_override = env; }
++    static float env = -1.0f;
++    if (__builtin_expect(__atomic_load_n(&s_gamma_dirty, __ATOMIC_RELAXED), 0)) {
++        if (env < 0.0f) ps3_toggle_watch(PS3T_DISPLAY_GAMMA, avconf_gamma_set);
++        __atomic_store_n(&s_gamma_dirty, 0, __ATOMIC_RELAXED);
++        char buf[PS3_TOGGLE_STR];
++        const char* e = ps3_toggle_str(PS3T_DISPLAY_GAMMA, buf, sizeof buf);
++        env = *e ? (float)atof(e) : 0.0f;
++    }
+     return env > 0.0f ? env : s_gamma;
+ }
+-/* The in-game menu (ps3_overlay.mm): the override (0 = the title's own
+- * gamma) and the title's value. */
+-float cellAvconfExt_display_gamma_override(void) { cellAvconfExt_display_gamma(); return s_gamma_override; }
+-void  cellAvconfExt_set_display_gamma_override(float g) { s_gamma_override = g > 0.0f ? g : 0.0f; }
+-float cellAvconfExt_title_gamma(void) { return s_gamma; }
+ 
+ /* cellAudioOutConfigure(audioOut, config, option, waitForEvent) -- set the
+  * audio output mode. We accept any config and report success (request id 0);
+--- /dev/null
++++ b/libs/misc/ps3_toggles.c
+@@ -0,0 +1,209 @@
++/*
++ * ps3recomp - PS3_TOGGLE_FILE: knobs switched while the game runs.
++ *
++ * The poll half of include/ps3emu/ps3_toggles.h (the format and the list of
++ * live knobs are there). One thread calls ps3_toggles_poll() every frame; at
++ * most every 250 ms it stat()s the file, and only when its modification time,
++ * size or inode moved does it read and parse it. Each knob whose value then
++ * differs from before is stored, logged ("[toggle] NAME old -> new"), marked
++ * in the PS3_FTRACE timeline and handed to its watchers, which update the
++ * module-local ints the hot paths read.
++ */
++#include "ps3emu/ps3_toggles.h"
++#include "ps3emu/ps3_ftrace.h"
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++
++#define TOGGLE_POLL_NS  (250ull * 1000000ull)
++#define TOGGLE_FILE_MAX (16u * 1024u)
++
++static uint32_t toggle_hash(const char* s)
++{
++    uint32_t h = 2166136261u;
++    for (; *s; s++) { h ^= (uint8_t)*s; h *= 16777619u; }
++    return h;
++}
++
++static char* trim(char* s)
++{
++    while (*s == ' ' || *s == '\t' || *s == '\r') s++;
++    char* e = s + strlen(s);
++    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) *--e = 0;
++    return s;
++}
++
++static void toggle_mark(uint32_t who, uint32_t a, uint32_t b)
++{
++    if (!PS3_FT_ON()) return;
++    const uint64_t now = ps3_ft_now();
++    ps3_ft_span(PS3_FT_TOGGLE, who, a, b, now, now);
++}
++
++/* One built-in knob to its new text (the file's, or the environment's when the
++ * file does not name it). Takes the lock; calls the watchers under it. */
++static void toggle_apply(int id, const char* text, int from_file)
++{
++    ps3_toggle_state* s = &g_ps3_toggles;
++    const ps3_toggle_def* d = ps3_toggle_def_of(id);
++    int v;
++    if (!from_file) v = s->env_value[id];
++    else if (d->kind == PS3_TK_STR) v = atoi(text);
++    else {
++        char* end = NULL;
++        const long l = strtol(text, &end, 0);
++        if (!*text || (end && *end)) {
++            fprintf(stderr, "[toggle] %s=%s: not a number, ignored\n", d->name, text);
++            return;
++        }
++        v = (int)l;
++    }
++    ps3_toggle_lock();
++    const int old = s->value[id];
++    char old_str[PS3_TOGGLE_STR];
++    memcpy(old_str, s->str[id], sizeof old_str);
++    const int changed = d->kind == PS3_TK_STR ? strcmp(old_str, text) != 0 : old != v;
++    if (changed) {
++        __atomic_store_n(&s->value[id], v, __ATOMIC_RELAXED);
++        snprintf(s->str[id], PS3_TOGGLE_STR, "%s", text);
++        for (int i = 0; i < PS3_TOGGLE_WATCHERS && s->watch[id][i]; i++)
++            s->watch[id][i](id, v);
++    }
++    ps3_toggle_unlock();
++    if (!changed) return;
++    if (d->kind == PS3_TK_STR) {
++        fprintf(stderr, "[toggle] %s %s -> %s%s\n", d->name, *old_str ? old_str : "(unset)",
++                *text ? text : "(unset)", from_file ? "" : " (environment)");
++        toggle_mark((uint32_t)id, toggle_hash(old_str), toggle_hash(text));
++    } else {
++        fprintf(stderr, "[toggle] %s %d -> %d%s\n", d->name, old, v, from_file ? "" : " (environment)");
++        toggle_mark((uint32_t)id, (uint32_t)old, (uint32_t)v);
++    }
++}
++
++/* A name that is not a built-in knob: kept for ps3_toggle_get(). */
++static void toggle_apply_extra(const char* name, const char* text, int set)
++{
++    ps3_toggle_state* s = &g_ps3_toggles;
++    const int v = set ? (int)strtol(text, NULL, 0) : 0;
++    ps3_toggle_lock();
++    int i = 0;
++    while (i < s->n_extra && strcmp(s->extra[i].name, name)) i++;
++    if (i == s->n_extra) {
++        if (!set || i >= PS3_TOGGLE_EXTRA) { ps3_toggle_unlock(); return; }
++        snprintf(s->extra[i].name, sizeof s->extra[i].name, "%s", name);
++        s->n_extra++;
++        fprintf(stderr, "[toggle] %s is not a built-in knob: only ps3_toggle_get() sees it\n", name);
++    }
++    const int was_set = s->extra[i].set, old = s->extra[i].value;
++    s->extra[i].set = set;
++    s->extra[i].value = v;
++    ps3_toggle_unlock();
++    if (was_set == set && (!set || old == v)) return;
++    char was[16];
++    snprintf(was, sizeof was, "%d", old);
++    fprintf(stderr, "[toggle] %s %s -> %s\n", name, was_set ? was : "(unset)", set ? text : "(unset)");
++    toggle_mark(64u + (uint32_t)i, (uint32_t)old, (uint32_t)v);
++}
++
++static void toggles_apply_text(char* buf)
++{
++    int seen[PS3T_COUNT] = { 0 };
++    char seen_extra[PS3_TOGGLE_EXTRA][48];
++    int n_seen_extra = 0;
++    int line_no = 0;
++    for (char* line = buf; line && *line;) {
++        char* next = strchr(line, '\n');
++        if (next) *next++ = 0;
++        line_no++;
++        char* hash = strchr(line, '#');
++        if (hash) *hash = 0;
++        char* l = trim(line);
++        line = next;
++        if (!*l) continue;
++        char* eq = strchr(l, '=');
++        if (!eq) {
++            fprintf(stderr, "[toggle] line %d: '%s' has no '=', ignored\n", line_no, l);
++            continue;
++        }
++        *eq = 0;
++        char* name = trim(l);
++        char* val = trim(eq + 1);
++        int id = 0;
++        while (id < PS3T_COUNT && strcmp(ps3_toggle_def_of(id)->name, name)) id++;
++        if (id < PS3T_COUNT) {
++            seen[id] = 1;
++            toggle_apply(id, val, 1);
++        } else if (*name) {
++            if (n_seen_extra < PS3_TOGGLE_EXTRA)
++                snprintf(seen_extra[n_seen_extra++], 48, "%s", name);
++            toggle_apply_extra(name, val, 1);
++        }
++    }
++    /* What the file no longer names goes back to the environment. */
++    for (int id = 0; id < PS3T_COUNT; id++)
++        if (!seen[id]) toggle_apply(id, g_ps3_toggles.env_str[id], 0);
++    for (int i = 0; i < g_ps3_toggles.n_extra; i++) {
++        int named = 0;
++        for (int k = 0; k < n_seen_extra && !named; k++)
++            named = !strcmp(seen_extra[k], g_ps3_toggles.extra[i].name);
++        if (!named) toggle_apply_extra(g_ps3_toggles.extra[i].name, "", 0);
++    }
++}
++
++static uint64_t toggles_now_ns(void)
++{
++    return ps3_ft_now();   /* monotonic, the timeline's own clock */
++}
++
++void ps3_toggles_poll(void)
++{
++    static int s_on = -1;              /* -1 not read yet, 0 no file, 1 polling */
++    static char s_path[1024];
++    static uint64_t s_next;
++    static int s_had;                  /* the last stat found the file */
++    static long long s_mt_s, s_mt_ns, s_size, s_ino;
++    if (__builtin_expect(s_on == 0, 1)) return;
++    if (s_on < 0) {
++        const char* e = getenv("PS3_TOGGLE_FILE");
++        if (!e || !*e) { s_on = 0; return; }
++        snprintf(s_path, sizeof s_path, "%s", e);
++        ps3_toggles_seed();
++        s_on = 1;
++        fprintf(stderr, "[toggle] watching %s (every 250 ms)\n", s_path);
++    }
++    const uint64_t now = toggles_now_ns();
++    if (now < s_next) return;
++    s_next = now + TOGGLE_POLL_NS;
++
++    struct stat st;
++    const int have = stat(s_path, &st) == 0;
++    long long mt_s = 0, mt_ns = 0;
++    if (have) {
++        mt_s = (long long)st.st_mtime;
++#if defined(__APPLE__)
++        mt_ns = (long long)st.st_mtimespec.tv_nsec;
++#elif defined(__linux__)
++        mt_ns = (long long)st.st_mtim.tv_nsec;
++#endif
++    }
++    if (have == s_had && (!have || (mt_s == s_mt_s && mt_ns == s_mt_ns &&
++                                    (long long)st.st_size == s_size &&
++                                    (long long)st.st_ino == s_ino)))
++        return;
++    s_had = have;
++    if (have) { s_mt_s = mt_s; s_mt_ns = mt_ns; s_size = (long long)st.st_size; s_ino = (long long)st.st_ino; }
++
++    static char buf[TOGGLE_FILE_MAX + 1];
++    size_t n = 0;
++    if (have) {
++        FILE* f = fopen(s_path, "rb");
++        if (f) { n = fread(buf, 1, TOGGLE_FILE_MAX, f); fclose(f); }
++    }
++    buf[n] = 0;
++    toggles_apply_text(buf);
++}
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -29,7 +29,15 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "../../include/ps3emu/ps3_toggles.h"   /* PS3_TOGGLE_FILE: live knobs */
+ 
++/* Knobs PS3_TOGGLE_FILE can change while the game runs (their watchers only
++ * store; the RSX thread reads). */
++static int s_texhash_full = -1;   /* PS3RECOMP_ENG_TEXHASH_FULL */
++static void eng_texhash_full_set(int id, int on) { (void)id; __atomic_store_n(&s_texhash_full, on != 0, __ATOMIC_RELAXED); }
++static int s_skip_fp_dirty;       /* PS3RECOMP_ENG_SKIP_FP changed: re-read the list */
++static void eng_skip_fp_set(int id, int v) { (void)id; (void)v; __atomic_store_n(&s_skip_fp_dirty, 1, __ATOMIC_RELAXED); }
++
+ /* Guest memory and the RSX offset resolvers, declared the way every backend
+  * that reads guest data declares them (rsx_vertex_fetch.h). */
+ extern u8* vm_base;
+@@ -123,6 +131,7 @@
+     u64 content_hash;
+     u64 sparse_hash;            /* eng_texture_sparse_hash, the per-frame check */
+     u32 last_hash_frame;
++    u32 last_full_frame;        /* the last full content hash (eng_texture_get) */
+     u64 last_use_serial;
+     u32 levels, span;           /* eng_texture_span for these levels */
+     u32 depth;                  /* slices of a 3D texture, else 1 */
+@@ -868,9 +877,17 @@
+  * full hash, which each texture still gets every eighth frame. */
+ static u64 eng_texture_sparse_hash(u32 location, u32 offset, u32 span, int* readable)
+ {
+-    const u8* src = span >= 64 ? eng_guest_ptr(NULL, location, offset, span) : NULL;
++    const u8* src = span ? eng_guest_ptr(NULL, location, offset, span) : NULL;
+     if (!src) { *readable = 0; return 0; }
+     u64 h = 1469598103934665603ull;
++    /* Under 64 bytes there is no 64-byte block to sample: all of it, bytewise.
++     * (This used to report "unreadable", and a tiny texture was then never
++     * hashed again after its first upload.) */
++    if (span < 64) {
++        for (u32 i = 0; i < span; i++) { h ^= src[i]; h *= 1099511628211ull; }
++        *readable = 1;
++        return h;
++    }
+     for (u32 i = 0; i + 64 <= span; i += 2048) {
+         u64 w[8]; memcpy(w, src + i, sizeof w);
+         for (int k = 0; k < 8; k++) h = (h ^ w[k]) * 1099511628211ull;
+@@ -1061,16 +1078,20 @@
+              * Marais, for 4 that changed. Now a sparse check every frame and
+              * the full hash every eighth (staggered by slot), or always for
+              * a small texture. PS3RECOMP_ENG_TEXHASH_FULL=1: full every frame. */
+-            static int full_always = -1;
+-            if (full_always < 0) full_always = getenv("PS3RECOMP_ENG_TEXHASH_FULL") ? 1 : 0;
+-            const u32 slot_ix = (u32)(e - g.textures);
+-            const int full = full_always || span <= 16384u || ((g.frames + slot_ix) & 7u) == 0;
++            if (__builtin_expect(s_texhash_full < 0, 0))
++                ps3_toggle_watch(PS3T_ENG_TEXHASH_FULL, eng_texhash_full_set);
++            const int full_always = __atomic_load_n(&s_texhash_full, __ATOMIC_RELAXED);
++            /* Due by age, not by (frame + slot) & 7: a texture sampled only on
++             * alternate frames could miss its turn for ever. */
++            const int full = full_always || span <= 16384u || g.frames - e->last_full_frame >= 8u;
+             int readable = 0;
+             const u64 th0 = eng_ds_enabled() ? eng_ds_now() : 0;
+             const u64 sparse = eng_texture_sparse_hash(location, offset, span, &readable);
+             u64 hash = e->content_hash;
+-            if (readable && (full || sparse != e->sparse_hash))
++            if (readable && (full || sparse != e->sparse_hash)) {
+                 hash = eng_texture_content_hash(location, offset, span, &readable);
++                e->last_full_frame = g.frames;
++            }
+             if (th0) { ds_th_ns += eng_ds_now() - th0; ds_th_count++;
+                        ds_th_bytes += (full || sparse != e->sparse_hash) ? span : span / 32u;
+                        ds_th_changed += readable && hash != e->content_hash; }
+@@ -1113,6 +1134,7 @@
+     e.remap = remap; e.cubemap = (u32)(cube != 0); e.depth = depth;
+     e.levels = levels; e.span = span;
+     e.last_hash_frame = g.frames;
++    e.last_full_frame = g.frames - (index & 7u);   /* staggered: not all due on one frame */
+     e.last_use_serial = ++g.texture_use_serial;
+     { int readable = 0;
+       e.content_hash = eng_texture_content_hash(location, offset, span, &readable);
+@@ -1924,10 +1946,28 @@
+ static eng_vc_entry s_vc[ENG_VC_SIZE];
+ static u32 s_vc_cursor;
+ 
++/* PS3_TOGGLE_FILE can switch it live: the watcher only records the wish, and
++ * the RSX thread (the cache's only user) acts on it at its next draw. Off
++ * drops every persistent buffer (the backend retires them once the GPU is past
++ * them, as the "full: start over" path does); on starts from an empty cache. */
++static int s_vc_want = -1, s_vc_applied = -2;   /* -2: not used yet */
++static void eng_vc_set(int id, int on) { (void)id; __atomic_store_n(&s_vc_want, on != 0, __ATOMIC_RELAXED); }
++static void eng_vc_drop(eng_vc_entry* e);
++static __attribute__((noinline)) int eng_vc_switch(void)
++{
++    if (__atomic_load_n(&s_vc_want, __ATOMIC_RELAXED) < 0) ps3_toggle_watch(PS3T_ENG_VCACHE, eng_vc_set);
++    const int want = __atomic_load_n(&s_vc_want, __ATOMIC_RELAXED);
++    if (s_vc_applied >= 0) {   /* a change, not the first use */
++        for (u32 i = 0; i < ENG_VC_SIZE; i++) eng_vc_drop(&s_vc[i]);
++        memset(s_vc, 0, sizeof s_vc); s_vc_used = 0;
++    }
++    s_vc_applied = want;
++    return want;
++}
+ static int eng_vc_on(void)
+ {
+-    static int on = -1;
+-    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_VCACHE"); on = e ? atoi(e) != 0 : 1; }
++    int on = s_vc_applied;
++    if (__builtin_expect(on != __atomic_load_n(&s_vc_want, __ATOMIC_RELAXED), 0)) on = eng_vc_switch();
+     return on && g.be->vbuf_create && g.be->draw_vbuf && g.be->vbuf_release;
+ }
+ 
+@@ -2804,7 +2844,12 @@
+      * program has that structural hash (TEXSTATE's fp=). Pipeline numbers
+      * drift between runs with asset streaming; the hash does not. */
+     { static u64 skipfp[8]; static int nskip = -1;
+-      if (nskip < 0) { nskip = 0; const char* e = getenv("PS3RECOMP_ENG_SKIP_FP");
++      /* Re-read when PS3_TOGGLE_FILE changes the list (eng_skip_fp_set). */
++      if (__builtin_expect(nskip < 0 || __atomic_load_n(&s_skip_fp_dirty, __ATOMIC_RELAXED), 0)) {
++          if (nskip < 0) ps3_toggle_watch(PS3T_ENG_SKIP_FP, eng_skip_fp_set);
++          __atomic_store_n(&s_skip_fp_dirty, 0, __ATOMIC_RELAXED);
++          char buf[PS3_TOGGLE_STR]; const char* e = ps3_toggle_str(PS3T_ENG_SKIP_FP, buf, sizeof buf);
++          nskip = 0;
+           while (e && *e && nskip < 8) { skipfp[nskip++] = strtoull(e, (char**)&e, 16); if (*e == ',') e++; else break; } }
+       if (nskip) { const eng_fp_memo* fpm = NULL;
+           const u64 fk = eng_guest_programs(NULL, &fpm) && fpm ? fpm->structural : 0;
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -75,8 +75,8 @@
+ #include "rsx_fp_decompiler.h"
+ #include "rsx_shader_msl.h"
+ #include "rsx_texture_layout.h"
++#include "../../include/ps3emu/ps3_toggles.h"  /* PS3_TOGGLE_FILE: live graphics options */
+ #include "../../include/ps3emu/ps3_ftrace.h"   /* PS3_FTRACE: encode / GPU wait / readback spans */
+-#include "ps3_overlay.h"                       /* the in-game menu and HUD */
+ #include <math.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -116,21 +116,32 @@
+ static int   s_gfx_upscale;            /* asked for (and windowed) */
+ static volatile int s_gfx_upscale_on;  /* still usable: main + render thread */
+ 
++/* PS3_ANISO, PS3_AA and PS3_SHARPEN (and PS3RECOMP_METAL_FPS) can also change
++ * while the game runs, from PS3_TOGGLE_FILE: the watcher marks them dirty and
++ * the next present re-reads them (eng_blit_to_display). A new anisotropy level
++ * keys new samplers; the old ones stay cached, unused. */
++static int s_gfx_dirty;
++static void gfx_option_changed(int id, int v) { (void)id; (void)v; __atomic_store_n(&s_gfx_dirty, 1, __ATOMIC_RELAXED); }
++static void gfx_options_read(void)
++{
++    char buf[PS3_TOGGLE_STR];
++    const char* e = ps3_toggle_str(PS3T_ANISO, buf, sizeof buf);
++    int a = 0;
++    if (*e) a = atoi(e);
++    __atomic_store_n(&s_gfx_aniso, a <= 1 ? 0 : a > 16 ? 16 : a, __ATOMIC_RELAXED);
++    s_gfx_fxaa = !strcasecmp(ps3_toggle_str(PS3T_AA, buf, sizeof buf), "fxaa");
++    e = ps3_toggle_str(PS3T_SHARPEN, buf, sizeof buf);
++    const double v = *e ? strtod(e, NULL) : 0.0;
++    s_gfx_sharpen = !(v > 0.0) ? 0.0f : v > 1.0 ? 1.0f : (float)v;
++}
+ static void gfx_options_load(void)
+ {
+-    const char* e = getenv("PS3_ANISO");
+-    if (e && *e) {
+-        const int a = atoi(e);
+-        s_gfx_aniso = a <= 1 ? 0 : a > 16 ? 16 : a;
+-    }
+-    e = getenv("PS3_AA");
+-    s_gfx_fxaa = (e && !strcasecmp(e, "fxaa"));
+-    e = getenv("PS3_SHARPEN");
+-    if (e && *e) {
+-        const double v = strtod(e, NULL);
+-        s_gfx_sharpen = !(v > 0.0) ? 0.0f : v > 1.0 ? 1.0f : (float)v;
+-    }
+-    e = getenv("PS3_UPSCALE");
++    ps3_toggle_watch(PS3T_ANISO, gfx_option_changed);
++    ps3_toggle_watch(PS3T_AA, gfx_option_changed);
++    ps3_toggle_watch(PS3T_SHARPEN, gfx_option_changed);
++    __atomic_store_n(&s_gfx_dirty, 0, __ATOMIC_RELAXED);
++    gfx_options_read();
++    const char* e = getenv("PS3_UPSCALE");
+     s_gfx_upscale = (e && !strcasecmp(e, "metalfx") && !s_headless);
+     if (e && *e && strcasecmp(e, "metalfx") && strcasecmp(e, "off") && strcmp(e, "0"))
+         fprintf(stderr, "[RSX metal] PS3_UPSCALE=%s unknown (metalfx); off\n", e);
+@@ -209,12 +220,30 @@
+     pthread_mutex_lock(&s_fps_session_lock);
+     s_fps_session=nil;
+     pthread_mutex_unlock(&s_fps_session_lock);
++}
++/* PS3RECOMP_METAL_FPS=1, which PS3_TOGGLE_FILE can switch while the window is
++ * open: the watcher starts or stops the counter on the main queue, and
++ * stopping puts the window's own title back. */
++static int s_fps_want=-1;
++static NSString *s_fps_title0;
++static void fps_start(void);
++static void fps_toggle_changed(int id,int on)
++{
++    (void)id; on=on!=0;
++    const int was=__atomic_exchange_n(&s_fps_want,on,__ATOMIC_RELAXED);
++    if (was<0 || was==on) return;   /* the registration itself, or no change */
++    dispatch_async(dispatch_get_main_queue(),^{
++        if (!s_window || s_headless) return;
++        if (on) fps_start();
++        else { fps_stop(); if (s_fps_title0) s_window.title=s_fps_title0; }
++    });
+ }
+ static void fps_start(void)
+ {
+     fps_stop();
+-    const char *enabled=getenv("PS3RECOMP_METAL_FPS");
+-    if (!enabled || strcmp(enabled,"1") || s_headless || !s_window) return;
++    ps3_toggle_watch(PS3T_METAL_FPS,fps_toggle_changed);
++    if (!ps3_toggle_value(PS3T_METAL_FPS) || s_headless || !s_window) return;
++    if (!s_fps_title0) s_fps_title0=[s_window.title copy];
+     MetalFrameRateSession *session=[MetalFrameRateSession new];
+     pthread_mutex_lock(&s_fps_session_lock);
+     s_fps_session=session;
+@@ -644,8 +673,6 @@
+ static int               s_captured;
+ static NSTimeInterval    s_cap_since;     /* motion before this is the warp, not the player */
+ static id                s_win_delegate;  /* NSWindow.delegate is weak */
+-static volatile int      s_wm_mode_now;   /* WM_*, for the in-game menu (pump keeps it) */
+-static int               s_wm_after_exit = -1;  /* the menu asked for borderless from macOS fullscreen */
+ 
+ /* A window without a title bar cannot become key unless it says it can, and
+  * then no key ever reaches the game in borderless fullscreen. */
+@@ -756,12 +783,7 @@
+ - (void)windowDidResignKey:(NSNotification*)n  { (void)n; mouse_release(); }
+ - (void)windowDidResize:(NSNotification*)n     { (void)n; wm_keep_drawable(); }
+ - (void)windowDidEnterFullScreen:(NSNotification*)n { (void)n; wm_keep_drawable(); }
+-- (void)windowDidExitFullScreen:(NSNotification*)n
+-{
+-    (void)n; wm_keep_drawable();
+-    if (s_wm_after_exit == WM_BORDERLESS) wm_enter_borderless();
+-    s_wm_after_exit = -1;
+-}
++- (void)windowDidExitFullScreen:(NSNotification*)n  { (void)n; wm_keep_drawable(); }
+ - (void)windowWillClose:(NSNotification*)n
+ {
+     (void)n;
+@@ -943,7 +965,6 @@
+     { const char* e = getenv("PS3_VSYNC");
+       if (e && *e) vsync = !(e[0] == '0' && e[1] == 0); }
+     if (@available(macOS 10.13, *)) s_layer.displaySyncEnabled = vsync ? YES : NO;
+-    { extern void rsx_metal_note_vsync(int); rsx_metal_note_vsync(vsync); }
+ 
+     NSView* view = [s_window contentView];
+     [view setWantsLayer:YES];
+@@ -3889,12 +3910,17 @@
+ 
+ static int eng_sampler_slot(const rsx_be_sampler_desc* d)
+ {
+-    const u64 key = (u64)d->min_linear | ((u64)d->mag_linear << 1)
++    const u64 key0 = (u64)d->min_linear | ((u64)d->mag_linear << 1)
+                   | ((u64)d->mip_linear << 2) | ((u64)d->mip_present << 3)
+                   | ((u64)d->wrap_s << 4) | ((u64)d->wrap_t << 8)
+                   | ((u64)d->wrap_r << 12)
+                   | ((u64)(u32)(d->min_lod * 256.0f) << 16)
+                   | ((u64)(u32)(d->max_lod * 256.0f) << 32);
++    /* PS3_ANISO: only where the guest minifies linearly through mips. Part of
++     * the key, so a level set live from PS3_TOGGLE_FILE gets its own samplers
++     * (0, the default, leaves the key as it always was). */
++    const int aniso = (d->min_linear && d->mip_present) ? __atomic_load_n(&s_gfx_aniso, __ATOMIC_RELAXED) : 0;
++    const u64 key = key0 ^ ((u64)(aniso > 1 ? aniso : 0) << 59);
+     for (u32 i = 0; i < s_eng_samp_count; i++)
+         if (s_eng_samp[i].key == key) return (int)i;
+     if (s_eng_samp_count >= ENG_MAX_SAMPLERS) return -1;
+@@ -3912,9 +3938,7 @@
+     sd.tAddressMode = gcm_wrap_to_metal(d->wrap_t);
+     sd.rAddressMode = gcm_wrap_to_metal(d->wrap_r);
+     sd.borderColor  = MTLSamplerBorderColorTransparentBlack;
+-    /* PS3_ANISO: only where the guest minifies linearly through mips. */
+-    if (s_gfx_aniso > 1 && d->min_linear && d->mip_present)
+-        sd.maxAnisotropy = (NSUInteger)s_gfx_aniso;
++    if (aniso > 1) sd.maxAnisotropy = (NSUInteger)aniso;
+     id<MTLSamplerState> s = [s_dev newSamplerStateWithDescriptor:sd];
+     if (!s) return -1;
+     const int slot = (int)s_eng_samp_count++;
+@@ -4880,6 +4904,10 @@
+                                 id<MTLTexture> dst)
+ {
+     if (!src || !dst || !s_eng_helper_lib) return;
++    if (__builtin_expect(__atomic_load_n(&s_gfx_dirty, __ATOMIC_RELAXED), 0)) {   /* PS3_TOGGLE_FILE */
++        __atomic_store_n(&s_gfx_dirty, 0, __ATOMIC_RELAXED);
++        gfx_options_read();
++    }
+     if (s_gfx_fxaa) { id<MTLTexture> t = gfx_fxaa(cb, src); if (t) src = t; }
+     const int scaling = ([src width] != [dst width] || [src height] != [dst height]);
+     if (scaling && __atomic_load_n(&s_gfx_upscale_on, __ATOMIC_ACQUIRE) &&
+@@ -4924,8 +4952,6 @@
+       [e setFragmentBytes:&p length:sizeof p atIndex:0]; }
+     [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+     [e endEncoding];
+-    /* The in-game menu / HUD, over the finished picture at the drawable's size. */
+-    if (__builtin_expect(g_ps3_overlay_active, 0)) ps3_overlay_render((__bridge void*)cb, (__bridge void*)dst);
+ }
+ 
+ /* Encode everything recorded so far and commit it.
+@@ -5262,9 +5288,7 @@
+     if (!src) { eng_encode_and_commit(nil); return; }
+     const u32 nrec = s_eng_rec_count;
+     eng_encode_and_commit(src);
+-    /* PS3_OVERLAY_FORCE_OPEN / _HUD headless: dump the composed target (the
+-     * menu is drawn there, not on the game's surface). */
+-    eng_dump_frame(ps3_overlay_composes_headless() && s_offscreen ? s_offscreen : src);
++    eng_dump_frame(src);
+     if (s_dumptex) { eng_dumptex_write(s_dumptex, s_dumptex_path); s_dumptex = nil; }
+     { static unsigned s_sd_min = 1000; static int s_sd_init; static const char* trig;
+       if (!s_sd_init) { s_sd_init = 1; const char* e = getenv("PS3RECOMP_METAL_SURF_DUMP_MIN");
+@@ -5448,7 +5472,6 @@
+             if (s_gfx_upscale) gfx_upscale_fail("the vtable path has no post passes");
+             s_gfx_upscale = 0;
+         }
+-        ps3_overlay_init((__bridge void*)s_dev, s_headless);
+         fprintf(stderr, "[RSX metal] %s on %s (%ux%u), guest shaders %s, %s path\n",
+                 s_headless ? "headless" : "windowed",
+                 [[s_dev name] UTF8String], s_width, s_height,
+@@ -5461,7 +5484,6 @@
+ void rsx_metal_backend_shutdown(void)
+ {
+     @autoreleasepool {
+-        ps3_overlay_shutdown();
+         if (s_ready) rsx_set_backend(NULL);
+         if (s_eng_active) rsx_draw_engine_shutdown();
+         rsx_draw_engine_set_backend(NULL);
+@@ -5517,19 +5539,6 @@
+                                                 inMode:NSDefaultRunLoopMode
+                                                dequeue:YES];
+             if (!ev) break;
+-            /* The in-game menu (ps3_overlay.mm) first: its keys open it, and
+-             * while it is open it takes the keyboard and the mouse. A mouse
+-             * event it took still goes to AppKit (focus, the title bar). */
+-            {   NSView* v = [s_window contentView];
+-                const NSSize vs = v ? [v bounds].size : NSZeroSize;
+-                const CGSize ds = s_layer ? s_layer.drawableSize : CGSizeZero;
+-                if (ps3_overlay_handle_event((__bridge void*)ev, vs.width, vs.height, ds.width, ds.height)) {
+-                    const NSEventType t = [ev type];
+-                    if (t != NSEventTypeKeyDown && t != NSEventTypeKeyUp && t != NSEventTypeFlagsChanged)
+-                        [NSApp sendEvent:ev];
+-                    continue;
+-                }
+-            }
+             /* The mouse drives the right stick and R1/R2 (cellPad.c). Motion
+              * accumulates as deltas in 1/16 px, which cellPad drains on each
+              * poll; buttons count only inside the game view, so dragging the
+@@ -5644,19 +5653,6 @@
+             }
+             [NSApp sendEvent:ev];
+         }
+-        /* The menu opened (a key here, or L3+R3 seen by cellPad): the game's
+-         * keys and mouse let go, and the cursor is free for the menu. */
+-        {   static int was_open;
+-            const int open = ps3_overlay_menu_open();
+-            if (open && !was_open) {
+-                extern volatile uint32_t g_pad_host_keys[4];
+-                for (int i = 0; i < 4; i++) g_pad_host_keys[i] = 0;
+-                extern volatile uint32_t g_pad_mouse_buttons;
+-                g_pad_mouse_buttons = 0;
+-                mouse_release();
+-            }
+-            was_open = open; }
+-        s_wm_mode_now = s_wm_borderless ? WM_BORDERLESS : wm_native_fullscreen() ? WM_FULLSCREEN : WM_WINDOWED;
+         /* No key-ups arrive while another app has focus: release everything. */
+         if (![NSApp isActive]) {
+             extern volatile uint32_t g_pad_host_keys[4];
+@@ -5776,7 +5772,6 @@
+             encode_draw(enc, &rec->u.draw, &ps);
+         }
+         if (enc) [enc endEncoding];
+-        if (__builtin_expect(g_ps3_overlay_active, 0)) ps3_overlay_render((__bridge void*)cb, (__bridge void*)target);
+ 
+         if (drawable) { fps_track_drawable(drawable); [cb presentDrawable:drawable]; }
+ 
+@@ -5834,92 +5829,4 @@
+ u32 rsx_metal_backend_guest_draws(void)
+ {
+     return s_eng_active ? rsx_draw_engine_guest_draws() : s_last_guest_draws;
+-}
+-
+-/* ---- live settings for the in-game menu (ps3_overlay.mm) -------------------
+- * The options above are read once at init; the menu changes them while the
+- * game runs. The render thread reads s_gfx_* at every present; the window's
+- * state belongs to the main thread, so those setters hop onto it. */
+-float rsx_metal_gfx_sharpen(void)          { return s_gfx_sharpen; }
+-void  rsx_metal_gfx_set_sharpen(float v)   { s_gfx_sharpen = !(v > 0.0f) ? 0.0f : v > 1.0f ? 1.0f : v; }
+-int   rsx_metal_gfx_fxaa(void)             { return s_gfx_fxaa; }
+-void  rsx_metal_gfx_set_fxaa(int on)       { s_gfx_fxaa = on != 0; }
+-int   rsx_metal_gfx_aniso(void)            { return s_gfx_aniso; }
+-/* MetalFX: 0 off, 1 on, -1 not possible here (headless, vtable path, no
+- * MetalFX in this build); asked for but given up shows as off. */
+-int rsx_metal_gfx_upscale(void)
+-{
+-#if GFX_HAVE_METALFX
+-    if (s_headless || !s_eng_active) return -1;
+-    return __atomic_load_n(&s_gfx_upscale_on, __ATOMIC_ACQUIRE) ? 1 : 0;
+-#else
+-    return -1;
+-#endif
+-}
+-void rsx_metal_gfx_set_upscale(int on)
+-{
+-    if (rsx_metal_gfx_upscale() < 0) return;
+-    s_gfx_upscale = on != 0;
+-    __atomic_store_n(&s_gfx_upscale_on, s_gfx_upscale, __ATOMIC_RELEASE);
+-    /* the next pump resizes the drawable (wm_keep_drawable) */
+-}
+-
+-/* Cumulative present timings (see eng_pt_report): in-flight wait, nextDrawable,
+- * encode, commit in ns, and the presents they cover. */
+-void rsx_metal_present_times(unsigned long long ns[4], unsigned* n)
+-{
+-    for (int i = 0; i < 4; i++) ns[i] = s_pt_ns[i];
+-    *n = s_pt_n;
+-}
+-
+-#if !TARGET_OS_IPHONE
+-static volatile int s_vsync_on = 1;
+-int  rsx_metal_vsync(void) { return s_layer ? s_vsync_on : -1; }
+-void rsx_metal_set_vsync(int on)
+-{
+-    if (!s_layer) return;
+-    s_vsync_on = on != 0;
+-    dispatch_async(dispatch_get_main_queue(), ^{
+-        if (@available(macOS 10.13, *)) if (s_layer) s_layer.displaySyncEnabled = s_vsync_on ? YES : NO;
+-    });
+ }
+-/* 0 windowed, 1 macOS fullscreen, 2 borderless (WM_*); -1 headless. */
+-int rsx_metal_window_mode(void) { return s_window ? s_wm_mode_now : -1; }
+-void rsx_metal_set_window_mode(int mode)
+-{
+-    if (!s_window || mode < WM_WINDOWED || mode > WM_BORDERLESS) return;
+-    dispatch_async(dispatch_get_main_queue(), ^{
+-        if (!s_window) return;
+-        if (mode != WM_WINDOWED) s_wm_fs_style = mode;   /* what Cmd+F enters from now on */
+-        if (s_wm_borderless) {
+-            if (mode == WM_BORDERLESS) return;
+-            wm_leave_borderless();
+-            if (mode == WM_FULLSCREEN)
+-                dispatch_async(dispatch_get_main_queue(), ^{
+-                    if (s_window && !wm_native_fullscreen()) [s_window toggleFullScreen:nil];
+-                });
+-        } else if (wm_native_fullscreen()) {
+-            if (mode == WM_FULLSCREEN) return;
+-            s_wm_after_exit = mode;            /* borderless once the animation is over */
+-            [s_window toggleFullScreen:nil];
+-        } else if (mode == WM_BORDERLESS) {
+-            wm_enter_borderless();
+-        } else if (mode == WM_FULLSCREEN) {
+-            [s_window toggleFullScreen:nil];
+-        }
+-    });
+-}
+-#else
+-int  rsx_metal_vsync(void) { return -1; }
+-void rsx_metal_set_vsync(int on) { (void)on; }
+-int  rsx_metal_window_mode(void) { return -1; }
+-void rsx_metal_set_window_mode(int mode) { (void)mode; }
+-#endif
+-void rsx_metal_note_vsync(int on)
+-{
+-#if !TARGET_OS_IPHONE
+-    s_vsync_on = on != 0;
+-#else
+-    (void)on;
+-#endif
+-}
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -20,6 +20,7 @@
+ #include "spu_lockstep.h"
+ #include "spu_interp.h"    /* spu_lifted_fn / spu_lifted_lookup -- defined below */
+ #include "ps3emu/ps3_ftrace.h"
++#include "ps3emu/ps3_toggles.h"   /* PS3_TOGGLE_FILE: live knobs */
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -1905,16 +1906,27 @@
+  * single hottest SPU leaf in a New Marais profile (~6% of SPU samples) for a
+  * check that almost never matches. */
+ uint8_t g_spu_stack_reset_hint[1024];
++/* PS3_SPU_STACK_HINT=0: every slot set, i.e. the full check on every dispatch
++ * as before the hint table (for an A/B). Live from PS3_TOGGLE_FILE: the
++ * dispatchers read the table while this rewrites it, so no byte a registered
++ * entry owns is ever cleared, not even for a moment -- off only sets bytes,
++ * on clears the others and (re)sets the owned ones. */
++static void spu_stack_hint_set(int id, int on)
++{
++    (void)id;
++    if (!on) { memset(g_spu_stack_reset_hint, 1, sizeof g_spu_stack_reset_hint); return; }
++    uint8_t own[1024] = { 0 };
++    for (unsigned i = 0; i < s_stack_reset_count; ++i)
++        own[(s_stack_reset[i].entry >> 2) & 1023u] = 1;
++    for (unsigned i = 0; i < 1024u; ++i) g_spu_stack_reset_hint[i] = own[i];
++}
+ void spu_register_stack_reset_entry(uint32_t entry, int image_id)
+ {
+     if (s_stack_reset_count < 16) {
+         s_stack_reset[s_stack_reset_count].entry = entry & SPU_LS_MASK;
+         s_stack_reset[s_stack_reset_count++].image_id = image_id;
+         g_spu_stack_reset_hint[((entry & SPU_LS_MASK) >> 2) & 1023u] = 1;
+-        /* PS3_SPU_STACK_HINT=0: every slot set, i.e. the full check on every
+-         * dispatch as before the hint table (for an A/B). */
+-        { const char* e = getenv("PS3_SPU_STACK_HINT");
+-          if (e && *e == '0') memset(g_spu_stack_reset_hint, 1, sizeof g_spu_stack_reset_hint); }
++        ps3_toggle_watch(PS3T_SPU_STACK_HINT, spu_stack_hint_set);
+     }
+ }
+ 
+@@ -2595,6 +2607,11 @@
+                 ctx->image_id, ctx->pc & SPU_LS_MASK); }
+     return 0;
+ }
++
++/* PS3_SPU_STUB_MICRO (below): -1 until first use, then 0/1; PS3_TOGGLE_FILE
++ * can switch it live. */
++static int s_micro = -1;
++static void spu_stub_micro_set(int id, int on) { (void)id; __atomic_store_n(&s_micro, on != 0, __ATOMIC_RELAXED); }
+ 
+ /* The full resolver. spu_indirect_branch (below) takes the common case itself
+  * and comes here for everything else. */
+@@ -2929,9 +2946,9 @@
+                * costs far less per instruction than the full interpreter's
+                * per-step bookkeeping and hands anything else to it.
+                * PS3_SPU_STUB_MICRO=0: the full interpreter as before. */
+-              static int s_micro = -1;
+-              if (s_micro < 0) { const char* e = getenv("PS3_SPU_STUB_MICRO"); s_micro = !(e && *e == '0'); }
+-              if (s_micro && p >= 0x3F000u) {
++              if (__builtin_expect(__atomic_load_n(&s_micro, __ATOMIC_RELAXED) < 0, 0))
++                  ps3_toggle_watch(PS3T_SPU_STUB_MICRO, spu_stub_micro_set);
++              if (__atomic_load_n(&s_micro, __ATOMIC_RELAXED) && p >= 0x3F000u) {
+                   /* It ran (and possibly handed off to the interpreter) either
+                    * way: a 0 is a stop or a runaway, not "try again". */
+                   const int ran = spu_smc_microstep(ctx);
+@@ -3390,15 +3407,20 @@
+  * LBP_HLE_JOBDONE diagnostics (the overlay itself is switched by the GET hook,
+  * or on a lookup miss, which still goes slow). PS3_SPU_FASTJOB=0 restores the
+  * old routing. */
++static int s_job_slow = -1;
++static void spu_fastjob_set(int id, int fast)   /* PS3_TOGGLE_FILE can switch it live */
++{
++    (void)id;
++    static int diag = -1;
++    if (diag < 0) diag = getenv("SPU_JOBTRACE") || getenv("SPU_JOBEXEC") || getenv("LBP_HLE_JOBDONE");
++    __atomic_store_n(&s_job_slow, !fast || diag, __ATOMIC_RELAXED);
++}
+ static int spu_job_slow_routing(void)
+ {
+-    static int v = -1;
+-    if (v < 0) {
+-        const char* e = getenv("PS3_SPU_FASTJOB");
+-        v = (e && *e == '0') || getenv("SPU_JOBTRACE") || getenv("SPU_JOBEXEC") ||
+-            getenv("LBP_HLE_JOBDONE");
+-    }
+-    return v;
++    const int v = __atomic_load_n(&s_job_slow, __ATOMIC_RELAXED);
++    if (__builtin_expect(v >= 0, 1)) return v;
++    ps3_toggle_watch(PS3T_SPU_FASTJOB, spu_fastjob_set);
++    return __atomic_load_n(&s_job_slow, __ATOMIC_RELAXED);
+ }
+ 
+ void spu_indirect_branch(spu_context* ctx)
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -7,6 +7,7 @@
+  * place -- later milestones only replace the bodies. */
+ #include "spu_context.h"
+ #include "../../include/ps3emu/log_first.h"   /* PS3_LOG_FIRST */
++#include "../../include/ps3emu/ps3_toggles.h" /* PS3_TOGGLE_FILE: live knobs */
+ #include <setjmp.h>
+ #include <pthread.h>   /* SPU_IRQSTAT counters */
+ #include <time.h>
+@@ -52,12 +53,22 @@
+ /* For the drain's inline copy of the plain path below. */
+ extern uint8_t g_spu_stack_reset_hint[1024];   /* spu_channels.c */
+ extern void spu_check_stack_reset(spu_context*, void (*)(spu_context*));
+-static int s_tlc_plain = -1;   /* 1: none of spu_task_launch_check's diagnostics is set */
+-static int spu_tlc_plain_init(void)
++/* 1: none of spu_task_launch_check's diagnostics is set and the inline copy is
++ * on (PS3_SPU_DRAIN_INLINE=0 calls the function on every step, as before the
++ * copy; PS3_TOGGLE_FILE can switch it live). */
++static int s_tlc_plain = -1;
++static void spu_drain_inline_set(int id, int on)
+ {
+-    return (getenv("SPU_NO_LS0_END") || getenv("SPU_EXITTRACE") ||
+-            getenv("SPU_STEPTRACE") || getenv("SPU_JOBDRAIN")) ? 0 : 1;
++    (void)id;
++    static int diag = -1;
++    if (diag < 0) diag = (getenv("SPU_NO_LS0_END") || getenv("SPU_EXITTRACE") ||
++                          getenv("SPU_STEPTRACE") || getenv("SPU_JOBDRAIN")) ? 1 : 0;
++    __atomic_store_n(&s_tlc_plain, !diag && on, __ATOMIC_RELAXED);
+ }
++static void spu_tlc_plain_init(void)
++{
++    ps3_toggle_watch(PS3T_SPU_DRAIN_INLINE, spu_drain_inline_set);
++}
+ static __attribute__((noinline)) void spu_task_launch_check_job_end(spu_context* ctx)
+ {
+     static int _n = 0;
+@@ -542,14 +553,14 @@
+             if (g_yz_lockstep_on) yz_lockstep_tick(ctx);   /* 0 = off: skip the call per step */
+             /* spu_task_launch_check's no-diagnostics path, inline: the call on
+              * every drain step was ~2% of SPU samples on its own. */
+-            if (__builtin_expect(s_tlc_plain > 0, 1) && !g_pm_flow_ctx) {
++            if (__builtin_expect(__atomic_load_n(&s_tlc_plain, __ATOMIC_RELAXED) > 0, 1) && !g_pm_flow_ctx) {
+                 if (g_spu_stack_reset_hint[(ctx->pc >> 2) & 1023u])
+                     spu_check_stack_reset(ctx, fn);
+                 if (ctx->steps++ && (ctx->pc & SPU_LS_MASK) == 0 &&
+                     !ctx->policy_mode && ctx->image_id > 0)
+                     spu_task_launch_check_job_end(ctx);
+             } else {
+-                if (s_tlc_plain < 0) s_tlc_plain = spu_tlc_plain_init();
++                if (__atomic_load_n(&s_tlc_plain, __ATOMIC_RELAXED) < 0) spu_tlc_plain_init();
+                 spu_task_launch_check(ctx, (void*)fn);
+             }
+             if (ctx->int_enable && !ctx->irq_saved && (spu_ev_get(ctx) & ctx->event_mask)) {
