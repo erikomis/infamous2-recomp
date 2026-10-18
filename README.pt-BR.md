@@ -197,6 +197,12 @@ faixas pretas quando a janela tem outro formato.
 | `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | como o jogo abre: em janela (padrão), na tela cheia do macOS (um Space só dele) ou em tela cheia sem bordas (cobre a tela no lugar, sem barra de menus nem Dock, troca de app na hora) |
 | `PS3_WINDOW_SIZE=<l>x<a>` | o tamanho da janela em pontos, p. ex. `1920x1080` (padrão 1280x720, reduzido para caber na tela) |
 | `PS3_WINDOW_ICON=game\|<arquivo>\|none` | o ícone no Dock: por padrão o placeholder original do launcher (`infamous2-lle/window_icon.png`, sem arte da Sony); `game` usa o `PS3_GAME/ICON0.PNG` da sua própria cópia |
+| `PS3_DISPLAY=<n>\|<nome>` | a tela em que o jogo abre, que a tela cheia e a sem bordas passam a cobrir: `1` é a da barra de menus, `2` a seguinte, ou o nome da tela como aparece nos Ajustes do Sistema (`DELL U2720Q`; sem diferenciar maiúsculas, ou só um pedaço). Padrão: a tela principal |
+| `PS3_VSYNC=0` | apresenta os quadros sem esperar a atualização da tela (menos atraso, pode rasgar a imagem em tela cheia). O ritmo de 30 fps do jogo vem do próprio relógio de vblank e não muda |
+| `PS3_AUDIO_VOLUME=<0..100>` | volume geral (padrão 100). Aplicado ao que o Mac toca, numa curva que soa uniforme: 50 é cerca de −12 dB |
+| `PS3_AUDIO_DEVICE=<nome>` | a saída de áudio, pelo nome nos ajustes de Som (sem diferenciar maiúsculas, ou só um pedaço: `AirPods`); não encontrada ou sem valor, a padrão do sistema (que o jogo acompanha quando muda) |
+| `PS3_RUMBLE=0` | sem vibração no controle. Ligada por padrão: a vibração do jogo chega a controles DualSense, DualShock 4 e Xbox pelo SDL |
+| `PS3_RUMBLE_STRENGTH=<0..200>` | intensidade da vibração em porcentagem (padrão 100); acima de 100 reforça as vibrações fracas, limitado ao máximo dos motores. `PS3_RUMBLE_LOG=1` mostra cada pedido que o jogo faz |
 
 Saves e troféus ficam em `~/Library/Application Support/infamous2-recomp/gamedata`
 (Linux: `~/.local/share/infamous2-recomp`), não importa de qual pasta o jogo é aberto;

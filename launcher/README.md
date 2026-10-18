@@ -68,10 +68,17 @@ roadmap).
   or port -> RPCS3, export the port's slots to a `.zip` or import one, delete
   a slot, and a list of backups to restore or delete. Every destructive
   action asks first. Details below ("Saves").
+  inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
+  and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
+  rumbles the controller through the Gamepad API.
 - **Settings / Configurações**: game language (`PS3_LANG`), light pass and
   SSAO on the GPU, the occlusion-volume skip, a gamma override, the window
-  mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the Dock icon
-  (`PS3_WINDOW_ICON=game`), the install folder and extra environment
+  mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the screen it opens
+  on (`PS3_DISPLAY`; the list is AppKit's screen names, read through
+  `osascript`) and vsync (`PS3_VSYNC=0`), the Dock icon
+  (`PS3_WINDOW_ICON=game`), master volume and audio output
+  (`PS3_AUDIO_VOLUME`, `PS3_AUDIO_DEVICE`; the outputs come from
+  `system_profiler SPAudioDataType`), the install folder and extra environment
   variables; shows the equivalent command line. UI in Brazilian Portuguese
   (default) and English.
 
