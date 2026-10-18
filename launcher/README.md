@@ -23,10 +23,9 @@ roadmap).
      of exactly those formulae, output shown in the window. Without
      Homebrew the app shows the official install command and brew.sh.
    - RPCS3 (decrypts the copy once) and the PS3 firmware inside it: not
-     bundled; the app explains and links to rpcs3.net. (`rebuild.py` can
-     also do without RPCS3, given the player's key file and `--firmware
-     PS3UPDAT.PUP`; the launcher does not offer that yet: no key-file or
-     PUP picker.)
+     bundled; the app explains and links to rpcs3.net. Or, without RPCS3:
+     the player's own key file and the firmware as a `dev_flash` folder or
+     Sony's `PS3UPDAT.PUP` (Install > More options > Decryption, below).
 3. **Game folder**: pick RPCS3's `NPUA80638` folder (or RPCS3's data
    folder). If the game is installed in RPCS3 it is already filled in. The
    licence is found on its own: the app reads the content id from
@@ -42,11 +41,12 @@ roadmap).
 - **Home / Início**: cover and title from the installed copy, version and
   build date, **Play/Jogar** (and Stop), the most recent save (title, progress,
   date), shortcuts to the Saves screen, the saves folder and the game log.
-  Play first backs up the saves (see Saves).
+  Play first backs up the saves (see Saves). Below it, **Report a problem**
+  (see below): Play in diagnostic mode, Capture this frame, Create .zip.
 - **Install / Instalar**, three steps: the machine's requirements (with the
   installs above), the game folder (licence found automatically; PKGs, the
-  `.rap`, the install folder and the DLC key under "More options"), and the
-  rebuild. **Check** runs `rebuild.py --dry-run` (requirements and plan,
+  `.rap`, the install folder, the decryption and the DLC key under "More
+  options"), and the rebuild. **Check** runs `rebuild.py --dry-run` (requirements and plan,
   changes nothing); **Install** runs the rebuild with a progress bar, time
   estimate, step list and log; **Cancel** stops it and the tools it started.
 - **Controls / Controles**: a table of the PS3 controls with their key,
@@ -78,7 +78,10 @@ roadmap).
   `osascript`) and vsync (`PS3_VSYNC=0`), the Dock icon
   (`PS3_WINDOW_ICON=game`), master volume and audio output
   (`PS3_AUDIO_VOLUME`, `PS3_AUDIO_DEVICE`; the outputs come from
-  `system_profiler SPAudioDataType`), the install folder and extra environment
+  `system_profiler SPAudioDataType`), the frame-rate counter in the game
+  window's title (`PS3RECOMP_METAL_FPS=1`: display fps, the game's own
+  submission rate and frame times, once a second, also as `[RSX FPS]` lines
+  in the log), the install folder and extra environment
   variables; shows the equivalent command line. UI in Brazilian Portuguese
   (default) and English.
 
@@ -110,8 +113,52 @@ launcher (Rust, src-tauri/src/lib.rs)
   variable is passed so the screen's values are the ones that apply.
 - The optional RAP key field (DLC only) is passed to `rebuild.py` in
   `PS3_RAP_KEY` for that run and never stored.
+- **Decryption without RPCS3** (Install > More options): the method
+  (`--decrypt-with auto|python|rpcs3`, default auto: the key file when one is
+  chosen), the player's key file (`--keys`, scetool format) and the firmware
+  (`--firmware`: a `dev_flash` folder, its `sys/external`, any folder with the
+  three `.sprx`, or `PS3UPDAT.PUP`, from which the "pup" step extracts them;
+  that needs the key file's PKG keys). Empty firmware = RPCS3's `dev_flash`.
+  The three are remembered in `launcher.json` (the key file's path only; the
+  app never reads or copies the keys itself). They go to both the
+  requirements check (`--check-json`, rerun when they change, so a missing
+  key file or the keys it lacks are listed with a "Choose the key file"
+  button) and the run (`--dry-run` and the rebuild). The launcher drops an
+  inherited `$PS3_KEYS`, so the screen is the only source. No key ships with
+  the app or the repository.
 - A GUI app on macOS starts with a minimal `PATH`; the launcher puts
   `/opt/homebrew/bin` and `/usr/local/bin` in front for the rebuild and the game.
+
+## Report a problem
+
+`src-tauri/src/report.rs`. **Play in diagnostic mode** starts the game as
+Play does, plus the variables of `infamous2-lle/tools/play_dump.sh` pointed
+at a new folder `…/infamous2-recomp/reports/<UTC time>/`: the texture log
+(`PS3RECOMP_ENG_TEXLOG`), every pipeline's shaders with `manifest.txt`
+(`shaders/`), the pass log on request (`PS3RECOMP_METAL_PASS_LOG=2`, flushed),
+the whole frame every 120 presents (`frame.ppm`), the trigger file
+(`PS3RECOMP_METAL_DUMP_TRIGGER=<report>/.dump-now`) and the FPS line. Unlike
+`play_dump.sh` it sets `PS3RECOMP_METAL_SURF_DUMP_MIN=2000000000`, so the
+first world frame is not dumped on its own: only captures are. The game's
+log goes to `<report>/game.log` (Home's "Open game log" follows it), and
+`system.txt` gets the macOS version, Mac model, CPU, memory, GPU, the
+build's version and commits, and the variables `run.sh` was given (home
+folder as `~`). A normal Play is unchanged.
+
+- **Capture this frame** (while that game runs) touches the trigger: at its
+  next present the game removes it and writes every render target to
+  `surf/f<present>_h<handle>.ppm` and that frame's pass log to the log. The
+  launcher also keeps the latest `frame.ppm` as `shots/shot<n>.ppm` and
+  notes the capture in `captures.txt`. The card shows the count of captures,
+  surfaces and shaders and the folder's size, and "waiting" until the game
+  has taken the capture.
+- **Create .zip** writes `reports/infamous2-report-<id>.zip` (and shows it):
+  every file of the folder, the PPMs as PNG (converted in Rust, Sub filter +
+  deflate; a capture is ~130-280 surfaces, ~150-340 MB as PPM), text files
+  with the home folder's path replaced by `~`, and the optional description
+  as `notes.txt`. **Open folder** and **Open an issue on GitHub** sit next
+  to it. The last report (this session's, or the newest on disk) stays
+  available after the game closes.
 
 ## Saves
 
@@ -275,5 +322,8 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
   signed and not notarized, and the Windows installers are unsigned.
 - Building and playing on Windows and Linux: the app installs there but the
   game's renderer and window are macOS-only so far.
+- "Capture this frame" is a button in the launcher, so the player switches
+  windows (Cmd+Tab) to press it; an in-game hotkey needs the runtime (or a
+  global shortcut in the app). Old report folders are not cleaned up yet.
 - Homebrew itself is not installed by the app (it needs the administrator
   password in Terminal); the app shows the command.

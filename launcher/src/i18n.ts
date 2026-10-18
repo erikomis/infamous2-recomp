@@ -27,6 +27,29 @@ const en = {
   "home.backedUp": " Saves backed up first ({id}).",
   "home.backupFailed": " The saves backup before playing failed: {e}",
   "home.manageSaves": "Manage saves",
+  "home.startedDiag": "Started in diagnostic mode. Report folder: {dir}",
+
+  "report.title": "Report a problem",
+  "report.hintIdle":
+    "Something looks or sounds wrong? Start the game in diagnostic mode, go to the spot, come back to this window and click Capture this frame: the game saves that frame's render targets, its draw list and the shaders, next to its log. Then create a .zip and attach it to an issue. The game runs a little slower in this mode; the normal Play is unchanged.",
+  "report.hintLive":
+    "Go to the spot that looks wrong, then click Capture this frame here (Cmd+Tab back to this window). Each click captures the next frame the game draws; capture as many as you like, then close the game.",
+  "report.hintNotDiag":
+    "The game was started with the normal Play, so it cannot capture frames. Stop it and start it again with Play in diagnostic mode.",
+  "report.play": "Play in diagnostic mode",
+  "report.capture": "Capture this frame",
+  "report.notes": "What went wrong (optional, goes into the .zip)",
+  "report.zip": "Create .zip",
+  "report.open": "Open folder",
+  "report.showZip": "Show the .zip",
+  "report.issue": "Open an issue on GitHub",
+  "report.privacy":
+    "The .zip holds the game's log, the captured frames (as PNG), the shaders, your notes and a short system summary (macOS version, Mac model, GPU, the port's version and the settings). Your home folder's path shows as ~. No save, licence or game file goes in it.",
+  "report.state": "Report {id}: {captures} capture(s), {surfaces} surfaces, {shaders} shaders, {size} on disk.",
+  "report.pending": " Waiting for the game to draw the next frame…",
+  "report.captured": "Capture {n} requested.",
+  "report.zipping": "Creating the .zip (converting the frames to PNG)…",
+  "report.zipped": "Created {file} ({size}).",
 
   "nav.saves": "Saves",
   "saves.title": "Saves",
@@ -102,6 +125,18 @@ const en = {
   "install.rap": "License (.rap)",
   "install.pick": "Choose…",
   "install.out": "Install folder",
+  "install.decrypt": "Decryption",
+  "install.decryptAuto": "Automatic (the key file when one is chosen, otherwise RPCS3)",
+  "install.decryptPython": "Key file, without RPCS3",
+  "install.decryptRpcs3": "RPCS3",
+  "install.decryptHint": "Both write the same files. Without RPCS3 the requirements list shows what the key file still lacks.",
+  "install.keys": "Key file",
+  "install.keysHint":
+    "Your own key file, in scetool's format. It is read only on this computer and only its location is remembered. No key ships with this app or the project: you provide it.",
+  "install.firmware": "PS3 firmware",
+  "install.pickPup": "PUP…",
+  "install.firmwareHint":
+    "Empty: the firmware installed in RPCS3. Otherwise a dev_flash folder (or any folder with liblv2, libsysmodule and libsre .sprx), or Sony's PS3UPDAT.PUP itself, from which the three modules are extracted (needs the key file's PKG keys).",
   "install.rapKey": "RAP key (optional, DLC only)",
   "install.rapKeyHint":
     "Only to unlock the bonus DLC. Not stored; passed to the script for this run. The base game does not need it.",
@@ -133,7 +168,7 @@ const en = {
   "step.venv": "Python environment",
   "step.game": "Import the game copy",
   "step.pup": "Extract the firmware (PUP)",
-  "step.decrypt": "Decrypt (RPCS3)",
+  "step.decrypt": "Decrypt the EBOOT and the firmware",
   "step.port": "Port sources",
   "step.firmware": "Translate the firmware",
   "step.ppu": "Translate the PPU code",
@@ -164,6 +199,9 @@ const en = {
   "settings.displayHint": "The window resizes freely and the image stays 16:9 with black bars. In game, Cmd+F or Option+Return toggles fullscreen and Cmd+Ctrl+F toggles macOS fullscreen. Borderless covers the screen in place and switches apps instantly.",
   "settings.windowSize": "Window size",
   "settings.windowSizeDefault": "1280 × 720 (default)",
+  "settings.showFps": "Show the frame rate (fps)",
+  "settings.showFpsHint":
+    "The game window's title shows the fps on screen and the game's own frame rate, with frame times, once per second (also in the game log).",
   "settings.gameIcon": "Your copy's icon in the Dock",
   "settings.gameIconHint": "Off: the launcher's own icon. On: ICON0.PNG from your installed copy.",
   "settings.screen": "Screen",
@@ -245,7 +283,7 @@ const en = {
 
   "prereq.title": "What this computer needs",
   "prereq.lead":
-    "Free tools that turn your copy into a native build. The app can install what is missing (with your OK); RPCS3 and the PS3 firmware you get from their official sites.",
+    "Free tools that turn your copy into a native build. The app can install what is missing (with your OK); RPCS3 and the PS3 firmware you get from their official sites, or decrypt with your own key file instead (More options in step 2).",
   "prereq.checking": "Checking…",
   "prereq.error": "Could not run the checks: {e}",
   "prereq.allOk": "all set",
@@ -268,9 +306,14 @@ const en = {
   "prereq.getRpcs3": "Download RPCS3",
   "prereq.howFirmware": "How to install the firmware",
   "prereq.hint.rpcs3":
-    "RPCS3 (free PS3 emulator) is used once, to decrypt your copy with your licence. Install it in Applications. It is not bundled with this app.",
+    "RPCS3 (free PS3 emulator) is used once, to decrypt your copy with your licence. Install it in Applications. It is not bundled with this app. Or decrypt without it, with your own key file (More options > Decryption).",
   "prereq.hint.firmware":
-    "Download the PS3 system software (PS3UPDAT.PUP) from playstation.com and install it in RPCS3: File > Install Firmware.",
+    "Download the PS3 system software (PS3UPDAT.PUP) from playstation.com and install it in RPCS3 (File > Install Firmware), or choose the PUP or a dev_flash folder under More options.",
+  "prereq.hint.keys":
+    "Decrypting without RPCS3 needs your own key file with the keys listed here. Choose it under More options, or set the decryption back to RPCS3.",
+  "prereq.chooseKeys": "Choose the key file…",
+  "prereq.chooseFirmware": "Choose the firmware…",
+  "prereq.withoutRpcs3": "Decrypt without RPCS3…",
   "prereq.hint.clt": "Apple's free compiler package.",
   "prereq.hint.disk": "Free some space on this disk, or choose another install folder.",
   "prereq.name.host": "System",
@@ -284,7 +327,8 @@ const en = {
   "prereq.name.glslang": "glslang",
   "prereq.name.spirv-cross": "SPIRV-Cross",
   "prereq.name.rpcs3": "RPCS3",
-  "prereq.name.firmware": "PS3 firmware (in RPCS3)",
+  "prereq.name.firmware": "PS3 firmware",
+  "prereq.name.keys": "Key file",
   "prereq.name.disk": "Disk space",
   "prereq.name.patch": "Toolkit patch",
   "prereq.name.toolkit": "Toolkit",
@@ -293,7 +337,7 @@ const en = {
   "game.lead":
     "Pick the game's folder: RPCS3's NPUA80638 folder (or RPCS3's data folder). The licence (.rap) is found on its own when it is in RPCS3, next to the copy or in Downloads.",
   "game.pick": "Choose the game folder…",
-  "game.more": "More options (PKG files, licence, install folder, DLC)",
+  "game.more": "More options (PKG files, licence, install folder, decryption without RPCS3, DLC)",
   "game.pkgs": "{n} PKG file(s)",
   "game.notGame": "No inFAMOUS 2 (NPUA80638) in this folder",
   "game.rapFound": "Licence: {rap}",
@@ -332,6 +376,29 @@ const ptBR: Partial<Record<Key, string>> = {
   "home.backedUp": " Backup dos saves feito antes ({id}).",
   "home.backupFailed": " O backup dos saves antes de jogar falhou: {e}",
   "home.manageSaves": "Gerenciar saves",
+  "home.startedDiag": "Aberto em modo de diagnóstico. Pasta do relatório: {dir}",
+
+  "report.title": "Reportar um problema",
+  "report.hintIdle":
+    "Algo aparece ou soa errado? Abra o jogo em modo de diagnóstico, vá até o lugar, volte para esta janela e clique em Capturar este quadro: o jogo salva os render targets daquele quadro, a lista de desenhos e os shaders, junto com o log. Depois crie um .zip e anexe numa issue. Nesse modo o jogo fica um pouco mais lento; o Jogar normal não muda.",
+  "report.hintLive":
+    "Vá até o lugar que está errado e clique em Capturar este quadro aqui (Cmd+Tab volta para esta janela). Cada clique captura o próximo quadro que o jogo desenhar; capture quantos quiser e depois feche o jogo.",
+  "report.hintNotDiag":
+    "O jogo foi aberto pelo Jogar normal, então não captura quadros. Feche e abra de novo com Jogar em modo de diagnóstico.",
+  "report.play": "Jogar em modo de diagnóstico",
+  "report.capture": "Capturar este quadro",
+  "report.notes": "O que deu errado (opcional, vai no .zip)",
+  "report.zip": "Criar .zip",
+  "report.open": "Abrir pasta",
+  "report.showZip": "Mostrar o .zip",
+  "report.issue": "Abrir uma issue no GitHub",
+  "report.privacy":
+    "O .zip leva o log do jogo, os quadros capturados (em PNG), os shaders, as suas notas e um resumo curto do sistema (versão do macOS, modelo do Mac, GPU, versão do port e as configurações). O caminho da sua pasta pessoal aparece como ~. Nenhum save, licença ou arquivo do jogo vai nele.",
+  "report.state": "Relatório {id}: {captures} captura(s), {surfaces} superfícies, {shaders} shaders, {size} em disco.",
+  "report.pending": " Esperando o jogo desenhar o próximo quadro…",
+  "report.captured": "Captura {n} pedida.",
+  "report.zipping": "Criando o .zip (convertendo os quadros para PNG)…",
+  "report.zipped": "Criado {file} ({size}).",
 
   "nav.saves": "Saves",
   "saves.title": "Saves",
@@ -407,6 +474,18 @@ const ptBR: Partial<Record<Key, string>> = {
   "install.rap": "Licença (.rap)",
   "install.pick": "Escolher…",
   "install.out": "Pasta de instalação",
+  "install.decrypt": "Descriptografia",
+  "install.decryptAuto": "Automática (o arquivo de chaves quando houver um, senão o RPCS3)",
+  "install.decryptPython": "Arquivo de chaves, sem o RPCS3",
+  "install.decryptRpcs3": "RPCS3",
+  "install.decryptHint": "As duas gravam os mesmos arquivos. Sem o RPCS3, a lista de requisitos mostra o que ainda falta no arquivo de chaves.",
+  "install.keys": "Arquivo de chaves",
+  "install.keysHint":
+    "O seu próprio arquivo de chaves, no formato do scetool. Ele é lido só neste computador e só a localização dele fica guardada. Nenhuma chave vem com este app ou com o projeto: quem fornece é você.",
+  "install.firmware": "Firmware do PS3",
+  "install.pickPup": "PUP…",
+  "install.firmwareHint":
+    "Vazio: o firmware instalado no RPCS3. Ou uma pasta dev_flash (ou qualquer pasta com liblv2, libsysmodule e libsre .sprx), ou o próprio PS3UPDAT.PUP da Sony, de onde os três módulos são extraídos (precisa das chaves de PKG no arquivo de chaves).",
   "install.rapKey": "Chave RAP (opcional, só para o DLC)",
   "install.rapKeyHint":
     "Só para liberar o DLC bônus. Não é salva; vai para o script só nesta execução. O jogo base não precisa dela.",
@@ -438,7 +517,7 @@ const ptBR: Partial<Record<Key, string>> = {
   "step.venv": "Ambiente Python",
   "step.game": "Importar a cópia do jogo",
   "step.pup": "Extrair o firmware (PUP)",
-  "step.decrypt": "Descriptografar (RPCS3)",
+  "step.decrypt": "Descriptografar o EBOOT e o firmware",
   "step.port": "Fontes do port",
   "step.firmware": "Traduzir o firmware",
   "step.ppu": "Traduzir o código PPU",
@@ -469,6 +548,9 @@ const ptBR: Partial<Record<Key, string>> = {
   "settings.displayHint": "A janela muda de tamanho livremente e a imagem fica em 16:9 com faixas pretas. No jogo, Cmd+F ou Option+Return liga/desliga a tela cheia e Cmd+Ctrl+F a tela cheia do macOS. Sem bordas cobre a tela no lugar e troca de app na hora.",
   "settings.windowSize": "Tamanho da janela",
   "settings.windowSizeDefault": "1280 × 720 (padrão)",
+  "settings.showFps": "Mostrar a taxa de quadros (fps)",
+  "settings.showFpsHint":
+    "O título da janela do jogo mostra o fps na tela e a taxa de quadros do próprio jogo, com os tempos de quadro, uma vez por segundo (também no log do jogo).",
   "settings.gameIcon": "Ícone da sua cópia no Dock",
   "settings.gameIconHint": "Desligado: o ícone do próprio launcher. Ligado: o ICON0.PNG da sua cópia instalada.",
   "settings.screen": "Tela",
@@ -550,7 +632,7 @@ const ptBR: Partial<Record<Key, string>> = {
 
   "prereq.title": "O que este computador precisa",
   "prereq.lead":
-    "Ferramentas gratuitas que transformam a sua cópia num build nativo. O app instala o que faltar (com a sua permissão); o RPCS3 e o firmware do PS3 vêm dos sites oficiais.",
+    "Ferramentas gratuitas que transformam a sua cópia num build nativo. O app instala o que faltar (com a sua permissão); o RPCS3 e o firmware do PS3 vêm dos sites oficiais, ou dá para descriptografar com o seu próprio arquivo de chaves (Mais opções no passo 2).",
   "prereq.checking": "Verificando…",
   "prereq.error": "Não foi possível verificar: {e}",
   "prereq.allOk": "tudo pronto",
@@ -573,14 +655,20 @@ const ptBR: Partial<Record<Key, string>> = {
   "prereq.getRpcs3": "Baixar o RPCS3",
   "prereq.howFirmware": "Como instalar o firmware",
   "prereq.hint.rpcs3":
-    "O RPCS3 (emulador de PS3 gratuito) é usado uma vez, para descriptografar a sua cópia com a sua licença. Instale em Aplicativos. Ele não vem junto com este app.",
+    "O RPCS3 (emulador de PS3 gratuito) é usado uma vez, para descriptografar a sua cópia com a sua licença. Instale em Aplicativos. Ele não vem junto com este app. Ou descriptografe sem ele, com o seu próprio arquivo de chaves (Mais opções > Descriptografia).",
   "prereq.hint.firmware":
-    "Baixe o software do sistema do PS3 (PS3UPDAT.PUP) em playstation.com e instale no RPCS3: File > Install Firmware.",
+    "Baixe o software do sistema do PS3 (PS3UPDAT.PUP) em playstation.com e instale no RPCS3 (File > Install Firmware), ou escolha o PUP ou uma pasta dev_flash em Mais opções.",
+  "prereq.hint.keys":
+    "Descriptografar sem o RPCS3 precisa do seu próprio arquivo de chaves com as chaves listadas aqui. Escolha em Mais opções, ou volte a descriptografia para o RPCS3.",
+  "prereq.chooseKeys": "Escolher o arquivo de chaves…",
+  "prereq.chooseFirmware": "Escolher o firmware…",
+  "prereq.withoutRpcs3": "Descriptografar sem o RPCS3…",
   "prereq.hint.clt": "Pacote de compilador gratuito da Apple.",
   "prereq.hint.disk": "Libere espaço neste disco ou escolha outra pasta de instalação.",
   "prereq.name.host": "Sistema",
   "prereq.name.compiler": "Compilador C/C++",
-  "prereq.name.firmware": "Firmware do PS3 (no RPCS3)",
+  "prereq.name.firmware": "Firmware do PS3",
+  "prereq.name.keys": "Arquivo de chaves",
   "prereq.name.disk": "Espaço em disco",
   "prereq.name.patch": "Patch do toolkit",
 
@@ -588,7 +676,7 @@ const ptBR: Partial<Record<Key, string>> = {
   "game.lead":
     "Escolha a pasta do jogo: a pasta NPUA80638 do RPCS3 (ou a pasta de dados do RPCS3). A licença (.rap) é encontrada sozinha quando está no RPCS3, junto da cópia ou em Downloads.",
   "game.pick": "Escolher a pasta do jogo…",
-  "game.more": "Mais opções (arquivos PKG, licença, pasta de instalação, DLC)",
+  "game.more": "Mais opções (arquivos PKG, licença, pasta de instalação, descriptografia sem o RPCS3, DLC)",
   "game.pkgs": "{n} arquivo(s) PKG",
   "game.notGame": "Nenhum inFAMOUS 2 (NPUA80638) nesta pasta",
   "game.rapFound": "Licença: {rap}",
