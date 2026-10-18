@@ -13,6 +13,7 @@
       <button class="nav active" data-view="home" data-i18n="nav.home">Início</button>
       <button class="nav" data-view="install" data-i18n="nav.install">Instalar</button>
       <button class="nav" data-view="controls" data-i18n="nav.controls">Controles</button>
+      <button class="nav" data-view="saves" data-i18n="nav.saves">Saves</button>
       <button class="nav" data-view="settings" data-i18n="nav.settings">Configurações</button>
       <div class="spacer"></div>
       <label class="small" for="ui-lang" data-i18n="app.lang">Idioma do app</label>
@@ -54,6 +55,7 @@
             <h3 data-i18n="home.lastSave">Último save</h3>
             <div id="save-info" class="muted"></div>
             <div class="row">
+              <button id="go-saves" class="link" data-i18n="home.manageSaves">Gerenciar saves</button>
               <button id="open-saves" class="link" data-i18n="home.openSaves">Abrir pasta de saves</button>
               <button id="open-log" class="link" data-i18n="home.openLog">Abrir log do jogo</button>
             </div>
@@ -223,6 +225,50 @@
           <div class="slider"><input id="mouse-dz" type="range" min="0" max="120" step="1" /><output id="mouse-dz-out"></output></div>
           <label class="check"><input id="mouse-capture" type="checkbox" /> <span data-i18n="settings.mouseCapture"></span></label>
           <p class="hint" data-i18n="settings.mouseCaptureHint"></p>
+        </fieldset>
+      </section>
+
+      <!-- Saves ------------------------------------------------------------>
+      <section id="view-saves" class="view">
+        <div class="row"><h1 data-i18n="saves.title">Saves</h1><span id="saves-saved" class="pill hidden" data-i18n="settings.saved">Salvo</span></div>
+        <p class="muted" data-i18n="saves.lead"></p>
+        <div id="saves-busy" class="banner hidden">
+          <strong data-i18n="saves.busyTitle"></strong>
+          <p data-i18n="saves.busyBody"></p>
+        </div>
+        <div class="row">
+          <button id="saves-backup-all" class="primary" data-i18n="saves.backupAll">Fazer backup de tudo</button>
+          <button id="saves-export-zip" data-i18n="saves.exportZip">Exportar .zip…</button>
+          <button id="saves-import-zip" data-i18n="saves.importZip">Importar .zip…</button>
+          <button id="saves-refresh" class="link" data-i18n="saves.refresh">Atualizar</button>
+        </div>
+        <p id="saves-msg" class="small"></p>
+        <div class="columns saves-cols">
+          <div>
+            <div class="row col-head">
+              <h3 data-i18n="saves.port">Este port</h3>
+              <button id="saves-open-port" class="link small" data-i18n="saves.openFolder">Abrir pasta</button>
+            </div>
+            <div id="saves-port" class="slots"></div>
+          </div>
+          <div>
+            <div class="row col-head">
+              <h3 data-i18n="saves.rpcs3">RPCS3</h3>
+              <span id="saves-user-wrap" class="row hidden"><span class="small muted" data-i18n="saves.user">Usuário</span><select id="saves-user" class="small-select"></select></span>
+              <button id="saves-open-rpcs3" class="link small" data-i18n="saves.openFolder">Abrir pasta</button>
+            </div>
+            <p id="saves-rpcs3-open" class="small hint-warn hidden" data-i18n="saves.rpcs3Open"></p>
+            <div id="saves-rpcs3" class="slots"></div>
+          </div>
+        </div>
+
+        <fieldset>
+          <legend data-i18n="saves.backups">Backups</legend>
+          <label for="saves-keep" data-i18n="saves.keep">Backups automáticos antes de Jogar a manter</label>
+          <input id="saves-keep" type="number" min="0" max="100" step="1" class="num" />
+          <p class="hint" data-i18n="saves.keepHint"></p>
+          <ul id="saves-backups" class="list backups"></ul>
+          <div class="row"><button id="saves-open-backups" class="link" data-i18n="saves.openFolder">Abrir pasta</button></div>
         </fieldset>
       </section>
 

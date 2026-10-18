@@ -5,8 +5,11 @@
 //! starts comes from the player's own install folder.
 
 mod input_map;
+mod saves;
+mod zipfile;
 
 use input_map::{Bindings, InputEnv};
+use saves::{read_sfo, BackupMeta, Side, Slot};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -64,6 +67,9 @@ pub struct Settings {
     /// Remembered inputs of the install screen.
     pub game_paths: Vec<String>,
     pub rap_path: String,
+    /// Automatic backups of the saves made before each "Play" that are kept
+    /// (the newest ones); 0 turns them off.
+    pub save_backups_keep: u32,
 }
 
 impl Default for Settings {
@@ -89,6 +95,7 @@ impl Default for Settings {
             extra_env: String::new(),
             game_paths: Vec::new(),
             rap_path: String::new(),
+            save_backups_keep: 10,
         }
     }
 }
@@ -268,43 +275,6 @@ fn resolve_install(dir: &Path) -> Result<InstallInfo, String> {
     })
 }
 
-/// PARAM.SFO, binary (the game's) or the KEY=VALUE text the runtime writes
-/// for saves.
-fn read_sfo(path: &Path) -> Option<BTreeMap<String, String>> {
-    let d = fs::read(path).ok()?;
-    let mut out = BTreeMap::new();
-    if d.len() >= 20 && &d[..4] == b"\0PSF" {
-        let u32le = |o: usize| -> Option<u32> {
-            Some(u32::from_le_bytes(d.get(o..o + 4)?.try_into().ok()?))
-        };
-        let u16le = |o: usize| -> Option<u16> {
-            Some(u16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?))
-        };
-        let (kt, dt, n) = (u32le(8)? as usize, u32le(12)? as usize, u32le(16)? as usize);
-        for k in 0..n.min(256) {
-            let e = 20 + 16 * k;
-            let (ko, fmt, len, off) = (u16le(e)? as usize, u16le(e + 2)?, u32le(e + 4)? as usize, u32le(e + 12)? as usize);
-            let key_bytes = d.get(kt + ko..)?;
-            let key_end = key_bytes.iter().position(|&b| b == 0)?;
-            let key = String::from_utf8_lossy(&key_bytes[..key_end]).into_owned();
-            let val = d.get(dt + off..dt + off + len)?;
-            let v = if fmt == 0x404 && len >= 4 {
-                u32::from_le_bytes(val[..4].try_into().ok()?).to_string()
-            } else {
-                String::from_utf8_lossy(val).trim_end_matches('\0').to_string()
-            };
-            out.insert(key, v);
-        }
-    } else {
-        for line in String::from_utf8_lossy(&d).lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                out.insert(k.trim().to_string(), v.trim().to_string());
-            }
-        }
-    }
-    Some(out)
-}
-
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveInfo {
@@ -316,36 +286,36 @@ pub struct SaveInfo {
     folder: String,
 }
 
-/// The most recent save in the folder run.sh points windowed play at.
-fn last_save(extra_env: &str) -> Option<SaveInfo> {
-    let root = parse_env_lines(extra_env)
+/// The port's gamedata: PS3_GAMEDATA_ROOT from the extra variables, else
+/// the folder run.sh points windowed play at.
+fn gamedata_root(extra_env: &str) -> PathBuf {
+    parse_env_lines(extra_env)
         .into_iter()
         .find(|(k, _)| k == "PS3_GAMEDATA_ROOT")
         .map(|(_, v)| PathBuf::from(v))
-        .unwrap_or_else(|| data_root().join("gamedata"));
-    let saves = root.join("dev_hdd0/home/00000001/savedata");
-    let mut best: Option<SaveInfo> = None;
-    for e in fs::read_dir(&saves).ok()?.flatten() {
-        let sfo_path = e.path().join("PARAM.SFO");
-        let modified = fs::metadata(e.path().join("STATE"))
-            .or_else(|_| fs::metadata(&sfo_path))
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let Some(sfo) = read_sfo(&sfo_path) else { continue };
-        if best.as_ref().map_or(true, |b| modified > b.modified) {
-            best = Some(SaveInfo {
-                title: sfo.get("TITLE").cloned().unwrap_or_default(),
-                subtitle: sfo.get("SUB_TITLE").cloned().unwrap_or_default(),
-                detail: sfo.get("DETAIL").cloned().unwrap_or_default(),
-                modified,
-                folder: e.path().to_string_lossy().into_owned(),
-            });
-        }
+        .unwrap_or_else(|| data_root().join("gamedata"))
+}
+
+/// Where the saves manager works: the port's gamedata, RPCS3's users and
+/// `<data>/save-backups`.
+fn save_locations(s: &Settings) -> saves::Locations {
+    saves::Locations {
+        port_root: gamedata_root(&s.extra_env),
+        rpcs3_home: rpcs3_dir().join("dev_hdd0/home"),
+        backups: data_root().join("save-backups"),
     }
-    best
+}
+
+/// The most recent save in the port's gamedata.
+fn last_save(s: &Settings) -> Option<SaveInfo> {
+    saves::list_slots(&save_locations(s), Side::Port, false)
+        .into_iter()
+        .max_by_key(|x| x.modified)
+        .map(|x| SaveInfo { title: x.title, subtitle: x.subtitle, detail: x.detail, modified: x.modified, folder: x.path })
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 fn data_url(path: &str, mime: &str) -> Option<String> {
@@ -685,7 +655,7 @@ async fn get_status(app: AppHandle, state: State<'_, AppState>) -> Result<Status
         install_error,
         icon,
         background,
-        last_save: last_save(&s.extra_env),
+        last_save: last_save(&s),
         game_running: state.game.lock().unwrap().is_some(),
         rebuild_running: state.rebuild.lock().unwrap().is_some(),
         rebuild_script: rebuild_script(&app).map(|p| p.to_string_lossy().into_owned()),
@@ -1165,8 +1135,18 @@ fn launch_preview(settings: Settings) -> Result<String, String> {
     Ok(s.join(" "))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayStarted {
+    log: String,
+    /// The backup of the saves made just before (none when nothing changed
+    /// since the last one, or when they are turned off).
+    backup: Option<String>,
+    backup_error: Option<String>,
+}
+
 #[tauri::command]
-fn play(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+fn play(app: AppHandle, state: State<'_, AppState>) -> Result<PlayStarted, String> {
     require_supported_host()?;
     let mut slot = state.game.lock().unwrap();
     if slot.is_some() {
@@ -1182,6 +1162,12 @@ fn play(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let log_path = logs.join("game.log");
     let log = fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
+
+    // the saves as they are now, before the game can touch them
+    let (backup, backup_error) = match saves::backup_before_play(&save_locations(&s), s.save_backups_keep, now_secs()) {
+        Ok(b) => (b.map(|b| b.id), None),
+        Err(e) => (None, Some(e)),
+    };
 
     // run.sh is the single source of the defaults; the settings only override.
     let mut cmd = Command::new("/bin/sh");
@@ -1206,7 +1192,7 @@ fn play(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
         *a.state::<AppState>().game.lock().unwrap() = None;
         let _ = a.emit("game-exit", code);
     });
-    Ok(log_path.to_string_lossy().into_owned())
+    Ok(PlayStarted { log: log_path.to_string_lossy().into_owned(), backup, backup_error })
 }
 
 #[tauri::command]
@@ -1235,8 +1221,125 @@ fn reveal(path: String) -> Result<(), String> {
 fn log_paths() -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
     m.insert("game".into(), data_root().join("logs/game.log").to_string_lossy().into_owned());
-    m.insert("saves".into(), data_root().join("gamedata").to_string_lossy().into_owned());
+    m.insert("saves".into(), gamedata_root(&load_settings_file().extra_env).to_string_lossy().into_owned());
     m
+}
+
+// ---------------------------------------------------------------------------
+// Saves
+// ---------------------------------------------------------------------------
+
+/// A process with this exact name is running (the game started from a
+/// terminal, RPCS3).
+fn process_running(name: &str) -> bool {
+    if cfg!(unix) {
+        Command::new("pgrep")
+            .args(["-x", name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    } else {
+        false
+    }
+}
+
+const GAME_PROCESS: &str = "Infamous2Recomp";
+
+/// Run a saves operation with the game held off: refused while the game
+/// runs (the one the launcher started, or one started from a terminal), and
+/// "Play" waits for it to finish.
+fn with_saves<T>(state: &State<'_, AppState>, f: impl FnOnce(&saves::Locations) -> Result<T, String>) -> Result<T, String> {
+    let game = state.game.lock().unwrap();
+    if game.is_some() || process_running(GAME_PROCESS) {
+        return Err("the game is running: close it before changing saves".into());
+    }
+    let r = f(&save_locations(&load_settings_file()));
+    drop(game);
+    r
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavesOverview {
+    port: Vec<Slot>,
+    rpcs3: Vec<Slot>,
+    rpcs3_users: Vec<String>,
+    backups: Vec<BackupMeta>,
+    port_dir: String,
+    rpcs3_dir: String,
+    backups_dir: String,
+    game_running: bool,
+    rpcs3_running: bool,
+}
+
+#[tauri::command]
+async fn saves_overview(state: State<'_, AppState>) -> Result<SavesOverview, String> {
+    let loc = save_locations(&load_settings_file());
+    Ok(SavesOverview {
+        port: saves::list_slots(&loc, Side::Port, true),
+        rpcs3: saves::list_slots(&loc, Side::Rpcs3, true),
+        rpcs3_users: saves::rpcs3_users(&loc),
+        backups: saves::list_backups(&loc),
+        port_dir: loc.port_savedata().to_string_lossy().into_owned(),
+        rpcs3_dir: loc.rpcs3_home.to_string_lossy().into_owned(),
+        backups_dir: loc.backups.to_string_lossy().into_owned(),
+        game_running: state.game.lock().unwrap().is_some() || process_running(GAME_PROCESS),
+        rpcs3_running: process_running("rpcs3") || process_running("RPCS3"),
+    })
+}
+
+/// Back up one slot, or every slot of that side (and the port's trophies).
+#[tauri::command]
+async fn saves_backup(state: State<'_, AppState>, side: Side, user: String, slot: Option<String>) -> Result<Option<BackupMeta>, String> {
+    with_saves(&state, |loc| {
+        let one = slot.map(|s| vec![s]);
+        saves::create_backup(loc, side, &user, one.as_deref(), one.is_none(), "manual", now_secs())
+    })
+}
+
+#[tauri::command]
+async fn saves_restore(state: State<'_, AppState>, id: String, slot: Option<String>) -> Result<saves::Report, String> {
+    with_saves(&state, |loc| saves::restore_backup(loc, &id, slot.as_deref(), now_secs()))
+}
+
+#[tauri::command]
+async fn saves_delete_backup(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    with_saves(&state, |loc| saves::delete_backup(loc, &id))
+}
+
+#[tauri::command]
+async fn saves_import_rpcs3(state: State<'_, AppState>, user: String, slot: String) -> Result<saves::Report, String> {
+    with_saves(&state, |loc| saves::import_from_rpcs3(loc, &user, &slot, now_secs()))
+}
+
+#[tauri::command]
+async fn saves_export_rpcs3(state: State<'_, AppState>, slot: String, user: String) -> Result<saves::Report, String> {
+    with_saves(&state, |loc| saves::export_to_rpcs3(loc, &slot, &user, now_secs()))
+}
+
+#[tauri::command]
+async fn saves_delete_slot(state: State<'_, AppState>, side: Side, user: String, slot: String) -> Result<BackupMeta, String> {
+    with_saves(&state, |loc| saves::delete_slot(loc, side, &user, &slot, now_secs()))
+}
+
+/// The port's slots (all, or one) in a .zip at `dest` (".zip" added).
+#[tauri::command]
+async fn saves_export_zip(state: State<'_, AppState>, slots: Option<Vec<String>>, dest: String) -> Result<String, String> {
+    let mut dest = PathBuf::from(dest.trim());
+    if dest.as_os_str().is_empty() {
+        return Err("no file chosen".into());
+    }
+    if !dest.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
+        dest.as_mut_os_string().push(".zip");
+    }
+    with_saves(&state, |loc| saves::export_zip(loc, slots.as_deref(), &dest, now_secs()))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn saves_import_zip(state: State<'_, AppState>, path: String) -> Result<saves::Report, String> {
+    with_saves(&state, |loc| saves::import_zip(loc, Path::new(path.trim()), now_secs()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1263,7 +1366,16 @@ pub fn run() {
             play,
             stop_game,
             reveal,
-            log_paths
+            log_paths,
+            saves_overview,
+            saves_backup,
+            saves_restore,
+            saves_delete_backup,
+            saves_import_rpcs3,
+            saves_export_rpcs3,
+            saves_delete_slot,
+            saves_export_zip,
+            saves_import_zip
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");
