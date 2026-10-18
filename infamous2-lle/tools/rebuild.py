@@ -97,7 +97,7 @@ PUP_EXTRACT = os.path.join(HERE, 'pup_extract.py')
 
 # Port files copied into <out>/infamous2-lle (the build's sources and tools).
 PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
-              'ssao_gpu.c', 'ssao_gpu.h', 'run.sh', 'config.toml',
+              'edge_watch.c', 'ssao_gpu.c', 'ssao_gpu.h', 'run.sh', 'config.toml',
               'window_icon.png')   # the Dock icon run.sh points the game at
 # Data files of the tools, copied with their *.py / *.sh into <out>/infamous2-lle/tools.
 TOOL_DATA = ('log_triage_known.txt',)   # log_triage.py's known-harmless lines
