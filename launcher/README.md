@@ -42,7 +42,17 @@ roadmap).
 - **Home / Início**: cover and title from the installed copy, version and
   build date, **Play/Jogar** (and Stop), the most recent save (title, progress,
   date), shortcuts to the Saves screen, the saves folder and the game log.
-  Play first backs up the saves (see Saves).
+  Play first backs up the saves (see Saves). An **Updates** card says when
+  the installed game was built from other port sources than the app carries
+  (install.json's `port_commit` against the bundled `BUILD_INFO.json`, or the
+  checkout's `git` HEAD in development) and offers **Rebuild the game**, which
+  runs the Install screen's rebuild (only the steps whose inputs changed run
+  again); and, from GitHub's latest published release
+  (`api.github.com/repos/erikomis/infamous2-recomp/releases/latest`, once per
+  session through `curl`, again on "Check again"; drafts and pre-releases are
+  skipped), when a newer app version is out, with a link to it.
+  `INFAMOUS2_NO_UPDATE_CHECK=1` turns the online check off
+  (`src-tauri/src/update.rs`).
 - **Install / Instalar**, three steps: the machine's requirements (with the
   installs above), the game folder (licence found automatically; PKGs, the
   `.rap`, the install folder and the DLC key under "More options"), and the
