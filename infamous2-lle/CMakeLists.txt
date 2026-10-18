@@ -233,6 +233,60 @@ if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
     target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
 endif()
 
+# ---------------------------------------------------------------------------
+# macOS: an app bundle, so the system treats the game as a game
+# ---------------------------------------------------------------------------
+# Game Mode (macOS 14+: CPU/GPU priority, half the Bluetooth latency for
+# controllers and AirPods) turns on for a fullscreen, frontmost app that
+# gamepolicyd labels a game, and it labels one from the bundle's Info.plist
+# (LSSupportsGameMode, or LSApplicationCategoryType = games). A bare executable
+# never qualifies, not even with an Info.plist embedded in __TEXT,__info_plist:
+# measured on macOS 27, only the bundle was "Found game". So the build writes
+#
+#   build/Infamous2Recomp.app/Contents/MacOS/Infamous2Recomp
+#   build/Infamous2Recomp -> Infamous2Recomp.app/Contents/MacOS/Infamous2Recomp
+#
+# The symlink keeps every script that runs build/Infamous2Recomp working, and
+# a run through it still has the bundle's identity (also measured). It is
+# started directly, never through `open`, so the environment, stdout/stderr
+# and the parent process stay what run.sh and the launcher expect.
+# macos_host.m: App Nap off and USER_INTERACTIVE QoS for the port's threads.
+if(APPLE)
+    enable_language(OBJC)
+    target_sources(${PROJECT_NAME} PRIVATE macos_host.m)
+    set_source_files_properties(macos_host.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(${PROJECT_NAME} PRIVATE "-framework Foundation")
+
+    # The bundle icon (Finder, Game Mode's menu) is the Dock placeholder that
+    # run.sh also hands the window; sips ships with macOS.
+    set(GAME_ICNS "${CMAKE_CURRENT_BINARY_DIR}/Infamous2Recomp.icns")
+    add_custom_command(OUTPUT "${GAME_ICNS}"
+        COMMAND sips -s format icns "${CMAKE_CURRENT_SOURCE_DIR}/window_icon.png"
+                --out "${GAME_ICNS}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/window_icon.png"
+        COMMENT "Making the bundle icon")
+    target_sources(${PROJECT_NAME} PRIVATE "${GAME_ICNS}")
+    set_source_files_properties("${GAME_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.erikomis.infamous2recomp.game"
+        MACOSX_BUNDLE_BUNDLE_NAME "Infamous2Recomp"
+        MACOSX_BUNDLE_EXECUTABLE_NAME "${PROJECT_NAME}"
+        MACOSX_BUNDLE_ICON_FILE "Infamous2Recomp.icns"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
+    # A build directory from before the bundle holds the old executable at
+    # this path; the link replaces it.
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}"
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${PROJECT_NAME}.app/Contents/MacOS/${PROJECT_NAME}"
+                "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}"
+        VERBATIM)
+endif()
+
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${RECOMP_DIR}"                            # the generated ppu_recomp.h
     "${PS3RECOMP_DIR}/include"
@@ -315,4 +369,4 @@ endif()
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
-install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin BUNDLE DESTINATION .)

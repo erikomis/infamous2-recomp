@@ -42,6 +42,14 @@
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #include <pthread.h>
+/* macos_host.m: App Nap off for the run; USER_INTERACTIVE QoS with PS3_QOS=1. */
+extern "C" void infamous2_host_begin_activity(void);
+extern "C" int  infamous2_host_qos_enabled(void);
+extern "C" void infamous2_host_qos_self(void);
+#else
+static inline void infamous2_host_begin_activity(void) {}
+static inline int  infamous2_host_qos_enabled(void) { return 0; }
+static inline void infamous2_host_qos_self(void) {}
 #endif
 
 #include <stdint.h>
@@ -200,6 +208,9 @@ static void present_guest_frame(void)
 
 static DWORD WINAPI frame_clock(LPVOID)
 {
+    /* PS3_QOS=1: this thread walks the FIFO, encodes the draws and presents --
+     * half of every frame. It starts at QOS_CLASS_DEFAULT like any pthread. */
+    infamous2_host_qos_self();
     const char* title = getenv("PS3_TITLE");
     if (!title || !*title) title = "ps3recomp";
 
@@ -376,6 +387,18 @@ int main(int argc, char** argv)
 
     printf("=== ps3recomp game runner ===\n");
 
+    /* Before any thread exists: keep macOS from App-Napping or timer-throttling
+     * the run, and with PS3_QOS=1 put the main thread (the guest's own when
+     * headless) at USER_INTERACTIVE; the PPU/SPU threads then do the same at
+     * their entry. */
+    infamous2_host_begin_activity();
+    infamous2_host_qos_self();
+#if defined(__APPLE__)
+    printf("[host] App Nap off; thread QoS %s\n", infamous2_host_qos_enabled()
+           ? "USER_INTERACTIVE for PPU/SPU/RSX threads (PS3_QOS=1)"
+           : "left at the system default (PS3_QOS=1 raises it)");
+#endif
+
     if (!alloc_guest_vm()) {
         fprintf(stderr, "ERROR: could not allocate the guest address space\n");
         return 1;
@@ -446,6 +469,7 @@ int main(int argc, char** argv)
         pthread_t th;
         auto body = [](void* a) -> void* {
             boot_args* b = (boot_args*)a;
+            infamous2_host_qos_self();   /* the guest's main thread */
             b->rc = ppu_run(b->entry, STACK_TOP);
             __atomic_store_n(&b->done, 1, __ATOMIC_RELEASE);
             CFRunLoopStop(CFRunLoopGetMain());
