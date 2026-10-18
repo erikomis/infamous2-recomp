@@ -1,0 +1,37 @@
+# Known-harmless log lines for log_triage.py (read next to it; --known picks
+# another file). One entry per line:
+#
+#     <category> | <pattern> | <why it is harmless>
+#
+# <category> is the triage category the line was sorted into (crash, stall,
+# shader, texture, spu, unimplemented, syscall, fs, audio, draw, other) or
+# "any". <pattern> is a Python regular expression searched in the raw log
+# line. A matching line still counts, but under "Expected" instead of the
+# problem lists, and never in the top issues. Keep the reason short and
+# concrete: whoever reads the triage must be able to tell why it is fine.
+
+# File system: things the game probes for and copes without.
+fs | /patch/psarc/[^' ]*\.psarc | no game patch is installed in the port's VFS: the game probes patch1..3 and the language patches, then reads the base psarcs
+fs | ugc_message\.sprig | user-generated-content message cache; written only after an online session
+fs | download_manifest\.dat | the PSN download manifest; absent without DLC downloads
+fs | /USRDIR/dlc/ | DLC is not installed
+
+# GPU / FIFO: the waits every boot shows.
+stall | ref stuck at 0x[0-9A-F]+ for 2 s: .*labels 134/135/136/137 = 1/1/2/2$ | the loading wait before the first world frame: the game parks the FIFO while it streams the city (nearly every run, 2026-10)
+
+# Unimplemented or stubbed, and harmless for this title.
+unimplemented | lv2_syscall 871 \(stub\) | sys_ss_access_control_engine (a debug/QA check); the game ignores the result
+
+# SPU
+spu | \[spu-smc\] microstep .* handing to the interpreter | self-modifying SPU code the lifter cannot see: interpreted, correct, just slower
+spu | \[POISON-DMA\] .* hitregion=0 haspoison=1 | a detector left from another title (0xC708C708 vcall crash); inFAMOUS 2's light-job data contains that word (every run)
+spu | \[spu\] img=100 (?:branched into|interpreting) unlifted LS 0x3FEC0 | libsre kernel code loaded at run time (LS 0x3FEC0): interpreted, every run
+
+# Syscall failures (LV2_ERRDBG) that are part of normal waits.
+syscall | syscall (92|107|113|130|85)\(.*\) -> 0x8001000B | ETIMEDOUT from a wait that was given a timeout
+syscall | syscall (93|99|103|131|86|123|148)\(.*\) -> 0x8001000A | EBUSY from a try-lock/try-wait: the caller polls
+syscall | syscall (801|808|805)\(.*\) -> 0x80010006 | ENOENT from a file probe; the file-system lines name the path
+
+# Network: the port runs offline.
+other | \[cellNetCtl\] GetState\(\) -> error NOT_INITIALIZED \(offline mode\) | the port runs offline; the game shows its offline path
+other | \[sceNp\] ManagerGetStatus\(\) -> OFFLINE | the port runs offline
