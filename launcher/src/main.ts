@@ -77,6 +77,9 @@ interface Status {
   defaultInstallDir: string;
   hostSupported: boolean;
   os: string;
+  /** The .app the launcher runs from (macOS), and whether it has the custom Finder icon. */
+  appBundle: string | null;
+  finderIcon: boolean;
 }
 interface CheckItem {
   level: "ok" | "warn" | "fail";
@@ -224,6 +227,7 @@ function applyLang(l: Lang) {
   }
   sel.value = settings.gameLang;
   renderHome();
+  if (status) renderFinderIcon();
   renderProgress();
   renderPrereqs();
   renderGame(lastSearch);
@@ -347,6 +351,7 @@ function bindSettings() {
   bindRange("audio-volume", "audioVolume", (v) => `${Math.round(v)}%`);
   bindRange("rumble-strength", "rumbleStrength", (v) => `${Math.round(v)}%`);
   $("rumble-test").addEventListener("click", testRumble);
+  $("finder-icon").addEventListener("click", toggleFinderIcon);
 
   const gl = $<HTMLSelectElement>("game-lang");
   gl.addEventListener("change", () => {
@@ -487,12 +492,36 @@ async function testRumble() {
   }
 }
 
+/** "Use as the app's Finder icon": the square icon made from the copy's
+ * ICON0.PNG on the installed .app (macOS; not in a development build). */
+function renderFinderIcon(msg?: string) {
+  const can = !!status?.appBundle && status.os === "macos" && (!!status.icon || status.finderIcon);
+  show($("finder-icon-row"), can);
+  $("finder-icon").textContent = t(status?.finderIcon ? "settings.finderIconUnset" : "settings.finderIconSet");
+  $("finder-icon-msg").textContent = msg ?? t("settings.finderIconHint");
+}
+
+async function toggleFinderIcon() {
+  if (!status) return;
+  const btn = $<HTMLButtonElement>("finder-icon");
+  btn.disabled = true;
+  try {
+    status.finderIcon = await invoke<boolean>("finder_icon", { set: !status.finderIcon });
+    renderFinderIcon(t("settings.finderIconDone"));
+  } catch (e) {
+    renderFinderIcon(t("settings.finderIconFailed", { e: String(e) }));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ---- home ---------------------------------------------------------------------
 async function refreshStatus() {
   status = await invoke<Status>("get_status");
   gameRunning = status.gameRunning;
   rebuildRunning = status.rebuildRunning || rebuildRunning;
   renderHome();
+  renderFinderIcon();
   refreshUpdates();
 }
 
