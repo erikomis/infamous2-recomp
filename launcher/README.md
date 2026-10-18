@@ -60,7 +60,9 @@ roadmap).
   once to `~/Library/Application Support/infamous2-recomp/input.toml`, which
   Play passes as `PS3_INPUT_MAP` (format: the main README, "Playing"). Below
   it, the mouse options: camera on/off, sensitivity, vertical and horizontal
-  inversion, dead zone, cursor capture (`PS3_MOUSE*`).
+  inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
+  and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
+  rumbles the controller through the Gamepad API.
 - **Saves**: the game's save slots (`BCUS98125*`, `NPUA80638*`) in the port
   and in RPCS3 side by side (RPCS3 user picker when there are several), each
   with its icon, title, progress, date, size and whether its STATE matches
@@ -68,9 +70,6 @@ roadmap).
   or port -> RPCS3, export the port's slots to a `.zip` or import one, delete
   a slot, and a list of backups to restore or delete. Every destructive
   action asks first. Details below ("Saves").
-  inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
-  and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
-  rumbles the controller through the Gamepad API.
 - **Settings / Configurações**: game language (`PS3_LANG`), light pass and
   SSAO on the GPU, the occlusion-volume skip, a gamma override, the window
   mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the screen it opens
@@ -267,8 +266,8 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
 
 ## Not done yet
 
-- Fullscreen/borderless and resolution: the runtime has no switch for them
-  yet (the macOS window's green button gives fullscreen).
+- Internal resolution: the game renders at 720p (window modes, size, screen
+  and vsync are in Settings).
 - The game still reads its options from environment variables; the plan is a
   `config.toml` the launcher writes and the game reads (see the roadmap).
 - Signing: no certificates are configured yet, so macOS builds are ad-hoc

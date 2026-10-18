@@ -15,8 +15,9 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 
 > [!WARNING]
 > **Em desenvolvimento, ainda não dá para jogar do começo ao fim.** O jogo roda
-> do boot até as primeiras missões de New Marais, a 7–16 fps (o original roda a
-> 30), só no macOS com Apple Silicon, e montar exige recompilar tudo a partir
+> do boot até as primeiras missões de New Marais, agora no limite de 30 fps do
+> próprio jogo nas execuções sem janela (falta confirmar em janela), só no macOS
+> com Apple Silicon, e montar exige recompilar tudo a partir
 > da sua cópia (não há executável pronto). O que falta está no
 > [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md).
 

@@ -14,8 +14,8 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 
 > [!WARNING]
 > **Work in progress, not playable from start to finish yet.** The game runs
-> from boot to the first missions in New Marais at 7–16 fps (the original runs
-> at 30), only on Apple Silicon macOS, and building it means recompiling
+> from boot to the first missions in New Marais, now at the game's own 30 fps
+> cap in headless runs (still to confirm in a window), only on Apple Silicon macOS, and building it means recompiling
 > everything from your own copy (there is no prebuilt executable). What is
 > missing is in [ROADMAP.md](ROADMAP.md).
 
