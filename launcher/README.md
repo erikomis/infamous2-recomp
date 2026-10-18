@@ -25,7 +25,8 @@ roadmap).
    - RPCS3 (decrypts the copy once) and the PS3 firmware inside it: not
      bundled; the app explains and links to rpcs3.net. Or, without RPCS3:
      the player's own key file and the firmware as a `dev_flash` folder or
-     Sony's `PS3UPDAT.PUP` (Install > More options > Decryption, below).
+     Sony's `PS3UPDAT.PUP` (Advanced > Install / rebuild > More options >
+     Decryption, below).
 3. **Game folder**: pick RPCS3's `NPUA80638` folder (or RPCS3's data
    folder). If the game is installed in RPCS3 it is already filled in. The
    licence is found on its own: the app reads the content id from
@@ -34,32 +35,71 @@ roadmap).
    the copy, and in Downloads, Desktop and Documents. Only when none is
    found does it ask for the `.rap` (under "More options", with PKG files,
    the install folder and the DLC key).
-4. **Install**, then **Play** on the Home screen.
+4. **Install** (Advanced > Install / rebuild; the app opens there while the
+   game is not installed), then **Play** on Home.
 
 ## Screens
 
-- **Home / Início**: cover and title from the installed copy, version and
-  build date, **Play/Jogar** (and Stop), the most recent save (title, progress,
-  date), shortcuts to the Saves screen, the saves folder and the game log.
-  Play first backs up the saves (see Saves). Below it, **Report a problem**
-  (see below): Play in diagnostic mode, Capture this frame, Create .zip.
-  An **Updates** card says when
-  the installed game was built from other port sources than the app carries
-  (install.json's `port_commit` against the bundled `BUILD_INFO.json`, or the
-  checkout's `git` HEAD in development) and offers **Rebuild the game**, which
-  runs the Install screen's rebuild (only the steps whose inputs changed run
-  again); and, from GitHub's latest published release
-  (`api.github.com/repos/erikomis/infamous2-recomp/releases/latest`, once per
-  session through `curl`, again on "Check again"; drafts and pre-releases are
-  skipped), when a newer app version is out, with a link to it.
-  `INFAMOUS2_NO_UPDATE_CHECK=1` turns the online check off
-  (`src-tauri/src/update.rs`).
-- **Install / Instalar**, three steps: the machine's requirements (with the
-  installs above), the game folder (licence found automatically; PKGs, the
-  `.rap`, the install folder, the decryption and the DLC key under "More
-  options"), and the rebuild. **Check** runs `rebuild.py --dry-run` (requirements and plan,
-  changes nothing); **Install** runs the rebuild with a progress bar, time
-  estimate, step list and log; **Cancel** stops it and the tools it started.
+The look: dark only, near-black with electric cyan (Cole's lightning) as the
+accent and warm orange for warnings and running states; headings and the side
+nav in **Oswald** (SIL Open Font License, bundled in `src/assets/fonts/` with
+`OFL.txt`, no CDN: the app works offline). A left sidebar with the title and
+six pages; settings are rows with the text on the left and a switch, list or
+slider on the right, under cyan section headers with a thin rule.
+
+**Settings are saved the moment they change** (`launcher.json`,
+`input.toml`) and apply the next time the game starts: the sidebar's
+"Saved automatically" dot and each page's "Applies on the next Play" chip
+light up on every save. There is no pending-changes Save button on purpose:
+Play, the Updates card's rebuild and the requirements check all read
+`launcher.json`, so unsaved edits would silently not apply.
+
+Screenshots (1280×800, mocked backend, no game art: the fallback hero):
+
+| | |
+|---|---|
+| ![Home](docs/screenshots/home.png) | ![Graphics](docs/screenshots/graphics.png) |
+| ![Performance](docs/screenshots/performance.png) | ![Game](docs/screenshots/game.png) |
+| ![Controls](docs/screenshots/controls.png) | ![Advanced: install](docs/screenshots/advanced-install.png) |
+| ![Advanced: game log](docs/screenshots/advanced-log.png) | ![Home, diagnostic game running](docs/screenshots/home-running.png) |
+
+More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
+
+- **Home / Início**: a hero with the player's own art when it is there
+  (`PIC1.PNG` behind, `ICON0.PNG` as the cover, read by `get_status` from the
+  install, or from the game folder chosen in Install before the first rebuild;
+  nothing ships with the app), else a plain styled title; the
+  "NPUA80638 · version 01.03" line, build date and port commit; a big
+  **Play/Jogar** (Stop in orange while the game runs; **Capture this frame**
+  next to it when the game was started in diagnostic mode). A bar under it
+  when there is news from Updates (rebuild needed, newer app). Then three
+  cards: **Quick settings** (display mode, upscaling, vsync, fps counter: the
+  same settings as the Graphics/Performance pages, kept in sync), **Last
+  save** (title, progress, date; manage saves, saves folder) and **Status**
+  (installed/running/diagnostic, version, build, port commit, folder; links to
+  the log viewer, the log file and Updates). A strip at the bottom leads to
+  Report a problem. Play first backs up the saves (see Saves).
+- **Graphics / Gráficos**: Display (window mode `PS3_WINDOW_MODE`, size
+  `PS3_WINDOW_SIZE`, screen `PS3_DISPLAY` from AppKit's screen names through
+  `osascript`, the Dock icon `PS3_WINDOW_ICON=game`) and Image quality
+  (MetalFX upscaling `PS3_UPSCALE`, FXAA `PS3_AA`, sharpening `PS3_SHARPEN`,
+  anisotropic filtering `PS3_ANISO`, all passed only when not off; gamma
+  override `PS3_DISPLAY_GAMMA`).
+- **Performance / Desempenho**: GPU acceleration (light pass and SSAO on the
+  GPU), Fixes (the occlusion-volume skip), Frame pacing (vsync `PS3_VSYNC=0`;
+  the frame-rate counter `PS3RECOMP_METAL_FPS=1`: display fps, the game's own
+  submission rate and frame times in the game window's title once a second,
+  also as `[RSX FPS]` lines in the log).
+- **Game / Jogo**: game language (`PS3_LANG`), audio (master volume
+  `PS3_AUDIO_VOLUME`, output `PS3_AUDIO_DEVICE` from `system_profiler
+  SPAudioDataType`), the install folder, and the **saves manager**: the game's
+  save slots (`BCUS98125*`, `NPUA80638*`) in the port and in RPCS3 side by
+  side (RPCS3 user picker when there are several), each with its icon, title,
+  progress, date, size and whether its STATE matches the other side's. Back up
+  one slot or everything, copy a slot RPCS3 -> port or port -> RPCS3, export
+  the port's slots to a `.zip` or import one, delete a slot, and a list of
+  backups to restore or delete. Every destructive action asks first. Details
+  below ("Saves").
 - **Controls / Controles**: a table of the PS3 controls with their key,
   mouse button and controller button. Click a cell and press what should
   drive it (a key, a mouse button or the wheel, a controller button, or pick
@@ -74,28 +114,34 @@ roadmap).
   inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
   and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
   rumbles the controller through the Gamepad API.
-- **Saves**: the game's save slots (`BCUS98125*`, `NPUA80638*`) in the port
-  and in RPCS3 side by side (RPCS3 user picker when there are several), each
-  with its icon, title, progress, date, size and whether its STATE matches
-  the other side's. Back up one slot or everything, copy a slot RPCS3 -> port
-  or port -> RPCS3, export the port's slots to a `.zip` or import one, delete
-  a slot, and a list of backups to restore or delete. Every destructive
-  action asks first. Details below ("Saves").
-- **Settings / Configurações**: game language (`PS3_LANG`), light pass and
-  SSAO on the GPU, the occlusion-volume skip, a gamma override, anisotropic
-  filtering, FXAA, sharpening and MetalFX upscaling (`PS3_ANISO`, `PS3_AA`,
-  `PS3_SHARPEN`, `PS3_UPSCALE`, passed only when not off), the window
-  mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the screen it opens
-  on (`PS3_DISPLAY`; the list is AppKit's screen names, read through
-  `osascript`) and vsync (`PS3_VSYNC=0`), the Dock icon
-  (`PS3_WINDOW_ICON=game`), master volume and audio output
-  (`PS3_AUDIO_VOLUME`, `PS3_AUDIO_DEVICE`; the outputs come from
-  `system_profiler SPAudioDataType`), the frame-rate counter in the game
-  window's title (`PS3RECOMP_METAL_FPS=1`: display fps, the game's own
-  submission rate and frame times, once a second, also as `[RSX FPS]` lines
-  in the log), the install folder and extra environment
-  variables; shows the equivalent command line. UI in Brazilian Portuguese
-  (default) and English.
+- **Advanced / Avançado**, five tabs:
+  - **Install / rebuild**, three steps: the machine's requirements (with the
+    installs above; a compact grid once everything is in place), the game
+    folder (licence found automatically; PKGs, the `.rap`, the install folder,
+    the decryption and the DLC key under "More options"), and the rebuild.
+    **Check** runs `rebuild.py --dry-run` (requirements and plan, changes
+    nothing); **Install** runs the rebuild with a progress bar, time estimate,
+    step list and log; **Cancel** stops it and the tools it started.
+  - **Updates**: whether the installed game was built from other port sources
+    than the app carries (install.json's `port_commit` against the bundled
+    `BUILD_INFO.json`, or the checkout's `git` HEAD in development), with
+    **Rebuild the game**, which runs the Install tab's rebuild (only the steps
+    whose inputs changed run again); and, from GitHub's latest published
+    release (`api.github.com/repos/erikomis/infamous2-recomp/releases/latest`,
+    once per session through `curl`, again on "Check again"; drafts and
+    pre-releases are skipped), whether a newer app version is out, with a link
+    to it. `INFAMOUS2_NO_UPDATE_CHECK=1` turns the online check off
+    (`src-tauri/src/update.rs`).
+  - **Game log**: the end of the log the last game this app started wrote
+    (`logs/game.log`, or the report folder's in diagnostic mode; at most the
+    last 512 KB, cut at a line), read by `read_game_log`. Followed every 2 s
+    while the tab is open, a text filter, "warnings and errors only",
+    warnings in orange and errors in red, copy, show in Finder.
+  - **Report a problem**: see below.
+  - **Environment**: extra environment variables, the equivalent command line,
+    and Restore defaults.
+- UI in Brazilian Portuguese (default) and English (sidebar), English as the
+  fallback for a missing string.
 
 ## How it fits together
 
@@ -125,7 +171,7 @@ launcher (Rust, src-tauri/src/lib.rs)
   variable is passed so the screen's values are the ones that apply.
 - The optional RAP key field (DLC only) is passed to `rebuild.py` in
   `PS3_RAP_KEY` for that run and never stored.
-- **Decryption without RPCS3** (Install > More options): the method
+- **Decryption without RPCS3** (Advanced > Install / rebuild > More options): the method
   (`--decrypt-with auto|python|rpcs3`, default auto: the key file when one is
   chosen), the player's key file (`--keys`, scetool format) and the firmware
   (`--firmware`: a `dev_flash` folder, its `sys/external`, any folder with the
@@ -143,7 +189,8 @@ launcher (Rust, src-tauri/src/lib.rs)
 
 ## Report a problem
 
-`src-tauri/src/report.rs`. **Play in diagnostic mode** starts the game as
+`src-tauri/src/report.rs`, in Advanced > Report a problem (Home's hero also
+shows **Capture this frame** while such a game runs). **Play in diagnostic mode** starts the game as
 Play does, plus the variables of `infamous2-lle/tools/play_dump.sh` pointed
 at a new folder `…/infamous2-recomp/reports/<UTC time>/`: the texture log
 (`PS3RECOMP_ENG_TEXLOG`), every pipeline's shaders with `manifest.txt`
@@ -152,7 +199,8 @@ the whole frame every 120 presents (`frame.ppm`), the trigger file
 (`PS3RECOMP_METAL_DUMP_TRIGGER=<report>/.dump-now`) and the FPS line. Unlike
 `play_dump.sh` it sets `PS3RECOMP_METAL_SURF_DUMP_MIN=2000000000`, so the
 first world frame is not dumped on its own: only captures are. The game's
-log goes to `<report>/game.log` (Home's "Open game log" follows it), and
+log goes to `<report>/game.log` (Home's "Open game log" and the log viewer
+follow it), and
 `system.txt` gets the macOS version, Mac model, CPU, memory, GPU, the
 build's version and commits, and the variables `run.sh` was given (home
 folder as `~`). A normal Play is unchanged.
@@ -226,6 +274,13 @@ npm run tauri build      # .app and .dmg in src-tauri/target/release/bundle/
 npm run typecheck        # frontend only
 (cd src-tauri && cargo test)
 ```
+
+The screenshots in `docs/screenshots/` come from the built frontend in a
+plain browser with a fake backend: `npm run build && npx vite preview --port
+4173`, then load the page with `scripts/ui-mock.js` injected before it (for
+example Playwright's `page.addInitScript({ path: "scripts/ui-mock.js" })`, at
+1280×800). `window.__UI_MOCK__ = { running: true }` or `{ notInstalled: true }`
+in an earlier init script shows those states. The mock has no game art.
 
 In development the launcher finds `rebuild.py` relative to its own sources
 (`../../infamous2-lle/tools/rebuild.py` from `src-tauri`); `INFAMOUS2_REPO=<repo>`
@@ -327,7 +382,7 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
 ## Not done yet
 
 - Internal resolution: the game renders at 720p (window modes, size, screen
-  and vsync are in Settings).
+  and vsync are in Graphics and Performance).
 - The game still reads its options from environment variables; the plan is a
   `config.toml` the launcher writes and the game reads (see the roadmap).
 - Signing: no certificates are configured yet, so macOS builds are ad-hoc
@@ -339,3 +394,8 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
   global shortcut in the app). Old report folders are not cleaned up yet.
 - Homebrew itself is not installed by the app (it needs the administrator
   password in Terminal); the app shows the command.
+- From the God of War III PC launcher, not done yet: a "Play" shortcut or
+  executable that starts the game straight away with the saved settings (needs
+  a `--play` mode in the app), an in-game overlay menu, button-prompt icon
+  styles, mods, "Add to Steam", downloading and installing app updates, a GUI
+  scale option.
