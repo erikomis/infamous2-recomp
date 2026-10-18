@@ -279,6 +279,47 @@ when the window has another one.
 | Cmd+F or Option+Return | fullscreen on/off (borderless with `PS3_WINDOW_MODE=borderless`, macOS fullscreen otherwise) |
 | Cmd+Ctrl+F | macOS fullscreen on/off |
 | Esc / Cmd | release the mouse |
+| F1 (fn+F1 on a Mac keyboard), Insert or Cmd+, ; L3+R3 on a controller | the in-game menu (below) |
+
+### In-game menu
+
+F1 (fn+F1 on a Mac keyboard, where F1 is the brightness key), Insert (Help on
+older Mac keyboards) or Cmd+, opens and closes it; on a controller, press L3
+and R3 (both sticks) together. Esc or ○ also closes it, L1/R1 switch tabs, the
+D-pad/left stick and ✕ work the controls, and the mouse clicks. While it is
+open the game gets no input (its pad, keys and mouse are held neutral and the
+cursor is released), but it keeps running: pause it first with START if
+needed. One stick click alone still reaches the game as before; while both
+are held down neither does. `PS3_OVERLAY_PAD=0` turns the
+controller combo off, `PS3_OVERLAY=0` the whole menu.
+
+| Tab | What it changes, live |
+| --- | --- |
+| Image | the gamma override (or the game's own brightness), sharpening, FXAA, MetalFX upscaling, vsync, window / macOS fullscreen / borderless; anisotropic filtering applies at the next start |
+| Audio | master volume |
+| Controls | vibration on/off and strength, mouse sensitivity and vertical/horizontal inversion |
+| Performance | a small HUD in a corner that stays when the menu is closed: fps, frame time with a graph, CPU cores in use and threads busy (≥ 80% of a core: here mostly the SPU threads), the RSX's Metal encode time and the GPU wait per frame; corner, opacity and graph are options |
+
+What the menu changes is saved when it closes, to
+`~/Library/Application Support/infamous2-recomp/overlay.ini` (`run.sh` sets
+`PS3_OVERLAY_INI` to it for windowed play; `PS3_OVERLAY_INI=` keeps changes to
+the session). The file holds only what was changed in the menu, as lines with
+the same names and values as the variables (`PS3_SHARPEN=0.40`,
+`PS3_AUDIO_VOLUME=70`, `PS3_OVERLAY_HUD=1`, ...). Precedence at start:
+
+1. a variable set when the game starts wins (the shell, or the launcher, which
+   passes only the settings it has away from their defaults);
+2. otherwise the menu's line in `overlay.ini`;
+3. otherwise the built-in default (and, for the mouse, `[mouse]` in the
+   controls file).
+
+The menu marks a setting whose variable was set with an orange "env": a change
+applies at once, but the variable wins again the next time. To let the menu's
+value stick, put the launcher's setting back to its default. A small notice in
+the corner says when the settings were saved. Headless runs never read the
+file and draw nothing; `PS3_OVERLAY_FORCE_OPEN=1` / `PS3_OVERLAY_HUD=1` draw
+the menu / HUD there too, into the frames `tools/capture.sh` keeps (a test
+switch).
 
 | Variable | What it does |
 | --- | --- |
