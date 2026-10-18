@@ -472,7 +472,7 @@ fn replace_dir(dest: &Path, fill: impl FnOnce(&Path) -> Result<(), String>) -> R
 }
 
 /// UTC "YYYYMMDD-HHMMSS" for backup folder names.
-fn stamp(secs: u64) -> String {
+pub(crate) fn stamp(secs: u64) -> String {
     let (y, m, d) = zipfile::civil_from_days((secs / 86_400) as i64);
     let r = secs % 86_400;
     format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", r / 3600, r % 3600 / 60, r % 60)

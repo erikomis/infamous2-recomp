@@ -5,6 +5,7 @@
 //! starts comes from the player's own install folder.
 
 mod input_map;
+mod report;
 mod saves;
 mod zipfile;
 
@@ -74,11 +75,19 @@ pub struct Settings {
     /// PS3_RUMBLE=0 when off; PS3_RUMBLE_STRENGTH in percent (0-200).
     pub rumble: bool,
     pub rumble_strength: u32,
+    /// PS3RECOMP_METAL_FPS=1: display and game fps in the window title.
+    pub show_fps: bool,
     /// Extra KEY=VALUE lines (diagnostics), one per line; '#' starts a comment.
     pub extra_env: String,
     /// Remembered inputs of the install screen.
     pub game_paths: Vec<String>,
     pub rap_path: String,
+    /// Decryption without RPCS3: the player's own key file (rebuild.py
+    /// --keys), the firmware (--firmware: a dev_flash folder or
+    /// PS3UPDAT.PUP; empty = RPCS3's) and the method (--decrypt-with).
+    pub keys_path: String,
+    pub firmware_path: String,
+    pub decrypt_with: String,
     /// Automatic backups of the saves made before each "Play" that are kept
     /// (the newest ones); 0 turns them off.
     pub save_backups_keep: u32,
@@ -110,9 +119,13 @@ impl Default for Settings {
             audio_device: String::new(),
             rumble: true,
             rumble_strength: 100,
+            show_fps: false,
             extra_env: String::new(),
             game_paths: Vec::new(),
             rap_path: String::new(),
+            keys_path: String::new(),
+            firmware_path: String::new(),
+            decrypt_with: "auto".into(),
             save_backups_keep: 10,
         }
     }
@@ -166,6 +179,11 @@ fn settings_path() -> PathBuf {
 /// windowed runs at the same file.
 fn input_map_path() -> PathBuf {
     data_root().join("input.toml")
+}
+
+/// "Report a problem" folders (report.rs).
+fn reports_dir() -> PathBuf {
+    data_root().join("reports")
 }
 
 /// The controls file as "Play" passes it (see `launch_env`).
@@ -365,6 +383,12 @@ pub struct AppState {
     rebuild: Mutex<Option<u32>>,
     game: Mutex<Option<u32>>,
     setup: Mutex<Option<u32>>,
+    /// The report folder of the game started in diagnostic mode (kept after
+    /// it closes, for "Open folder" and "Create .zip"), and whether that game
+    /// is still running.
+    report: Mutex<Option<(PathBuf, bool)>>,
+    /// Where the last game this launcher started writes its output.
+    last_log: Mutex<Option<PathBuf>>,
 }
 
 /// A GUI app on macOS starts with a bare PATH; Homebrew's tools (cmake,
@@ -576,6 +600,9 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
         set("PS3_RUMBLE", "0".into());
     } else if s.rumble_strength != 100 {
         set("PS3_RUMBLE_STRENGTH", s.rumble_strength.min(200).to_string());
+    }
+    if s.show_fps {
+        set("PS3RECOMP_METAL_FPS", "1".into()); // exactly "1" (rsx_metal_backend.m)
     }
     env.extend(parse_env_lines(&s.extra_env));
     env
@@ -973,8 +1000,10 @@ fn brew_formula(check: &str) -> Option<&'static str> {
 
 const BREW_ALLOWED: &[&str] = &["python@3.12", "cmake", "ninja", "sdl2", "glslang", "spirv-cross"];
 
+/// `decrypt`: the Install screen's decryption choices, so the list shows
+/// what this method needs (RPCS3, or the key file and what it lacks).
 #[tauri::command]
-async fn check_prereqs(app: AppHandle) -> Prereqs {
+async fn check_prereqs(app: AppHandle, decrypt: Option<DecryptOptions>) -> Prereqs {
     let mut p = Prereqs {
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
@@ -1002,13 +1031,13 @@ async fn check_prereqs(app: AppHandle) -> Prereqs {
         p.error = Some("no Python to run the checks yet".into());
         return p;
     };
-    let out = Command::new(&python)
-        .arg(&script)
-        .arg("--check-json")
-        .env("PATH", tool_path())
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output();
+    let mut cmd = Command::new(&python);
+    cmd.arg(&script).arg("--check-json");
+    if let Err(e) = apply_decrypt(&mut cmd, &decrypt.unwrap_or_default()) {
+        p.error = Some(e);
+        return p;
+    }
+    let out = cmd.env("PATH", tool_path()).stdin(Stdio::null()).stderr(Stdio::piped()).output();
     let out = match out {
         Ok(o) => o,
         Err(e) => {
@@ -1148,6 +1177,45 @@ fn open_url(url: String) -> Result<(), String> {
     cmd.arg(&url).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// How rebuild.py decrypts: RPCS3, or tools/decrypt_self.py with the
+/// player's own key file (no keys ship with the app or the repository).
+#[derive(Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DecryptOptions {
+    /// --keys: a key file in scetool's format.
+    keys: String,
+    /// --firmware: a dev_flash folder (or its sys/external) or PS3UPDAT.PUP;
+    /// empty = RPCS3's dev_flash.
+    firmware: String,
+    /// --decrypt-with: "auto" (the key file when one is given), "python" or "rpcs3".
+    decrypt_with: String,
+}
+
+/// The rebuild.py arguments for `o` (both for --check-json and the run).
+fn decrypt_args(o: &DecryptOptions) -> Result<Vec<String>, String> {
+    let mut a = Vec::new();
+    match o.decrypt_with.trim() {
+        "" | "auto" => {}
+        m @ ("python" | "rpcs3") => a.extend(["--decrypt-with".to_string(), m.to_string()]),
+        m => return Err(format!("{m}: not a decryption method (auto, python, rpcs3)")),
+    }
+    for (flag, v) in [("--keys", &o.keys), ("--firmware", &o.firmware)] {
+        let v = v.trim();
+        if !v.is_empty() {
+            a.extend([flag.to_string(), v.to_string()]);
+        }
+    }
+    Ok(a)
+}
+
+/// rebuild.py with the decryption the screen shows: its $PS3_KEYS default
+/// is dropped, so an empty key field means no key file.
+fn apply_decrypt(cmd: &mut Command, o: &DecryptOptions) -> Result<(), String> {
+    cmd.args(decrypt_args(o)?);
+    cmd.env_remove("PS3_KEYS");
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RebuildRequest {
@@ -1158,6 +1226,8 @@ pub struct RebuildRequest {
     force: bool,
     /// Optional, only for the DLC step; passed in the environment, never stored.
     rap_key: Option<String>,
+    #[serde(default)]
+    decrypt: DecryptOptions,
 }
 
 #[tauri::command]
@@ -1186,6 +1256,7 @@ fn start_rebuild(app: AppHandle, state: State<'_, AppState>, req: RebuildRequest
     if req.force {
         cmd.arg("--force");
     }
+    apply_decrypt(&mut cmd, &req.decrypt)?;
     cmd.arg("--nice").arg("10"); // the machine stays usable while it compiles
     cmd.env("PATH", tool_path());
     match req.rap_key.as_deref().map(str::trim) {
@@ -1252,10 +1323,15 @@ pub struct PlayStarted {
     /// since the last one, or when they are turned off).
     backup: Option<String>,
     backup_error: Option<String>,
+    /// Diagnostic mode: the report folder.
+    report: Option<String>,
 }
 
+/// `diagnostic`: start the game with play_dump.sh's dump variables pointed
+/// at a new report folder (its log goes there too); "Capture this frame"
+/// then dumps the frame on screen. Without it, the usual Play.
 #[tauri::command]
-fn play(app: AppHandle, state: State<'_, AppState>) -> Result<PlayStarted, String> {
+fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) -> Result<PlayStarted, String> {
     require_supported_host()?;
     let mut slot = state.game.lock().unwrap();
     if slot.is_some() {
@@ -1266,9 +1342,19 @@ fn play(app: AppHandle, state: State<'_, AppState>) -> Result<PlayStarted, Strin
     if !Path::new(&inst.executable).is_file() {
         return Err(format!("{}: not built", inst.executable));
     }
-    let logs = data_root().join("logs");
-    fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
-    let log_path = logs.join("game.log");
+    let report_dir = if diagnostic.unwrap_or(false) {
+        Some(report::create(&reports_dir(), &saves::stamp(now_secs()))?)
+    } else {
+        None
+    };
+    let log_path = match &report_dir {
+        Some(d) => d.join(report::LOG),
+        None => {
+            let logs = data_root().join("logs");
+            fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+            logs.join("game.log")
+        }
+    };
     let log = fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
 
@@ -1288,20 +1374,146 @@ fn play(app: AppHandle, state: State<'_, AppState>) -> Result<PlayStarted, Strin
         .stdin(Stdio::null())
         .stdout(log)
         .stderr(log2);
-    for (k, v) in launch_env(&s, &inst, &input_env()) {
+    let mut env = launch_env(&s, &inst, &input_env());
+    if let Some(d) = &report_dir {
+        env.extend(report::env(d)); // after the extra variables: the report's paths win
+    }
+    for (k, v) in &env {
         cmd.env(k, v);
     }
     own_process_group(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("{}: {e}", inst.run_sh))?;
     *slot = Some(child.id());
     drop(slot);
+    *state.last_log.lock().unwrap() = Some(log_path.clone());
+    if let Some(d) = &report_dir {
+        *state.report.lock().unwrap() = Some((d.clone(), true));
+        // the machine and the build, for whoever reads the report (system_profiler takes a moment)
+        let (d, inst, now) = (d.clone(), inst.clone(), now_secs());
+        thread::spawn(move || {
+            let _ = fs::write(d.join(report::SYSTEM), system_info(&inst, &env, now));
+        });
+    }
     let a = app.clone();
     thread::spawn(move || {
         let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-        *a.state::<AppState>().game.lock().unwrap() = None;
+        let st = a.state::<AppState>();
+        *st.game.lock().unwrap() = None;
+        if let Some((_, live)) = st.report.lock().unwrap().as_mut() {
+            *live = false;
+        }
         let _ = a.emit("game-exit", code);
     });
-    Ok(PlayStarted { log: log_path.to_string_lossy().into_owned(), backup, backup_error })
+    Ok(PlayStarted {
+        log: log_path.to_string_lossy().into_owned(),
+        backup,
+        backup_error,
+        report: report_dir.map(|d| d.to_string_lossy().into_owned()),
+    })
+}
+
+fn command_line(program: &str, args: &[&str]) -> String {
+    command_stdout(Command::new(program).args(args)).map(|s| s.trim().to_string()).unwrap_or_default()
+}
+
+/// UTC "YYYY-MM-DD HH:MM:SS".
+fn utc_text(secs: u64) -> String {
+    let st = saves::stamp(secs);
+    format!("{}-{}-{} {}:{}:{}", &st[0..4], &st[4..6], &st[6..8], &st[9..11], &st[11..13], &st[13..15])
+}
+
+/// system.txt: what a report's reader needs to know about the machine, the
+/// build and the settings (the variables run.sh got), with the home folder
+/// shown as ~.
+fn system_info(inst: &InstallInfo, env: &[(String, String)], now: u64) -> String {
+    let mut t = String::new();
+    let mut line = |k: &str, v: &str| {
+        if !v.is_empty() {
+            t.push_str(&format!("{k}: {v}\n"));
+        }
+    };
+    line("report", &utc_text(now));
+    line("launcher", env!("CARGO_PKG_VERSION"));
+    line("os", &format!("{} {}", std::env::consts::OS, std::env::consts::ARCH));
+    if cfg!(target_os = "macos") {
+        line("macos", &format!("{} ({})", command_line("sw_vers", &["-productVersion"]), command_line("sw_vers", &["-buildVersion"])));
+        line("model", &command_line("sysctl", &["-n", "hw.model"]));
+        line("cpu", &command_line("sysctl", &["-n", "machdep.cpu.brand_string"]));
+        let mem = command_line("sysctl", &["-n", "hw.memsize"]).parse::<u64>().unwrap_or(0);
+        if mem > 0 {
+            line("memory", &format!("{} GB", mem >> 30));
+        }
+        let gpus = command_stdout(Command::new("/usr/sbin/system_profiler").args(["SPDisplaysDataType", "-json"]))
+            .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+            .map(|v| {
+                v["SPDisplaysDataType"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|g| g["sppci_model"].as_str().map(|m| match g["sppci_cores"].as_str() {
+                        Some(c) => format!("{m} ({c} cores)"),
+                        None => m.to_string(),
+                    }))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        line("gpu", &gpus);
+    }
+    line("game", format!("{} {}", inst.title, inst.app_ver).trim());
+    line("install", &inst.layout);
+    line("built", &inst.built_at);
+    line("port commit", &inst.port_commit);
+    line("toolkit commit", &inst.toolkit_commit);
+    t.push_str("\nenvironment given to run.sh:\n");
+    for (k, v) in env {
+        t.push_str(&format!("  {k}={}\n", shell_quote(v)));
+    }
+    let home = home().to_string_lossy().into_owned();
+    if home.len() > 1 {
+        t = t.replace(&home, "~");
+    }
+    t
+}
+
+/// The report this launcher started last (or the newest one on disk).
+fn current_report(state: &State<'_, AppState>) -> Option<(PathBuf, bool)> {
+    let r = state.report.lock().unwrap().clone();
+    r.or_else(|| report::latest(&reports_dir()).map(|d| (d, false)))
+}
+
+#[tauri::command]
+fn report_info(state: State<'_, AppState>) -> Option<report::Info> {
+    current_report(&state).map(|(d, live)| report::info(&d, live))
+}
+
+/// "Capture this frame": only while the game started in diagnostic mode runs.
+#[tauri::command]
+fn report_capture(state: State<'_, AppState>) -> Result<report::Info, String> {
+    let game = state.game.lock().unwrap().is_some();
+    match state.report.lock().unwrap().clone() {
+        Some((d, true)) if game => {
+            report::capture(&d, &utc_text(now_secs()))?;
+            Ok(report::info(&d, true))
+        }
+        _ => Err("the game was not started in diagnostic mode".into()),
+    }
+}
+
+/// Pack the current report into `<reports>/infamous2-report-<id>.zip`, with
+/// the player's description (if any) as notes.txt.
+#[tauri::command]
+async fn report_zip(state: State<'_, AppState>, notes: Option<String>) -> Result<report::Info, String> {
+    let (dir, live) = current_report(&state).ok_or("no report yet: start the game in diagnostic mode first")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(n) = notes.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            fs::write(dir.join(report::NOTES), format!("{n}\n")).map_err(|e| e.to_string())?;
+        }
+        report::pack(&dir, &report::zip_path(&dir), &home().to_string_lossy())?;
+        Ok(report::info(&dir, live))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1327,9 +1539,10 @@ fn reveal(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn log_paths() -> BTreeMap<String, String> {
+fn log_paths(state: State<'_, AppState>) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
-    m.insert("game".into(), data_root().join("logs/game.log").to_string_lossy().into_owned());
+    let log = state.last_log.lock().unwrap().clone().unwrap_or_else(|| data_root().join("logs/game.log"));
+    m.insert("game".into(), log.to_string_lossy().into_owned());
     m.insert("saves".into(), gamedata_root(&load_settings_file().extra_env).to_string_lossy().into_owned());
     m
 }
@@ -1485,7 +1698,10 @@ pub fn run() {
             saves_delete_slot,
             saves_export_zip,
             saves_import_zip,
-            list_outputs
+            list_outputs,
+            report_info,
+            report_capture,
+            report_zip
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");
@@ -1604,6 +1820,34 @@ mod tests {
         assert_eq!(env.get("PS3_RUMBLE").map(String::as_str), Some("0"));
         assert!(!env.contains_key("PS3_RUMBLE_STRENGTH")); // off: the strength is moot
         assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("0"));
+        assert!(!env.contains_key("PS3RECOMP_METAL_FPS"));
+        s.show_fps = true;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3RECOMP_METAL_FPS").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn decryption_arguments() {
+        let o = |keys: &str, firmware: &str, m: &str| DecryptOptions { keys: keys.into(), firmware: firmware.into(), decrypt_with: m.into() };
+        assert!(decrypt_args(&DecryptOptions::default()).unwrap().is_empty());
+        assert!(decrypt_args(&o("", "", "auto")).unwrap().is_empty());
+        assert_eq!(
+            decrypt_args(&o(" /k/keys ", "/d/PS3UPDAT.PUP", "python")).unwrap(),
+            ["--decrypt-with", "python", "--keys", "/k/keys", "--firmware", "/d/PS3UPDAT.PUP"]
+        );
+        assert_eq!(decrypt_args(&o("", "/f/dev_flash", "rpcs3")).unwrap(), ["--decrypt-with", "rpcs3", "--firmware", "/f/dev_flash"]);
+        assert!(decrypt_args(&o("", "", "--force")).is_err());
+        // the request from the window: no "decrypt" at all is the old behaviour
+        let r: RebuildRequest = serde_json::from_str(r#"{"games":[],"rap":"","out":"","dryRun":true,"force":false,"rapKey":null}"#).unwrap();
+        assert!(decrypt_args(&r.decrypt).unwrap().is_empty());
+        let r: RebuildRequest = serde_json::from_str(
+            r#"{"games":[],"rap":"","out":"","dryRun":true,"force":false,"decrypt":{"keys":"/k","firmware":"","decryptWith":"python"}}"#,
+        )
+        .unwrap();
+        assert_eq!(decrypt_args(&r.decrypt).unwrap(), ["--decrypt-with", "python", "--keys", "/k"]);
+        // an old launcher.json without the new fields
+        let s: Settings = serde_json::from_str(r#"{"uiLang":"en"}"#).unwrap();
+        assert_eq!((s.decrypt_with.as_str(), s.show_fps, s.keys_path.as_str()), ("auto", false, ""));
     }
 
     #[test]
