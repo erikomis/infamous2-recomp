@@ -46,6 +46,14 @@ pub struct Settings {
     /// PS3_DISPLAY_GAMMA when set; otherwise the game's own brightness setting.
     pub gamma_override: bool,
     pub gamma: f32,
+    /// PS3_ANISO: anisotropic filtering, 0 (off), 2, 4, 8 or 16.
+    pub aniso: u32,
+    /// PS3_AA: "" (off) or "fxaa".
+    pub aa: String,
+    /// PS3_SHARPEN: contrast-adaptive sharpening, 0 (off) to 1.
+    pub sharpen: f32,
+    /// PS3_UPSCALE: "" (off) or "metalfx" (macOS 13+).
+    pub upscale: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
     /// PS3_MOUSE_DEADZONE.
     pub mouse: bool,
@@ -95,6 +103,10 @@ impl Default for Settings {
             skip_occlusion: true,
             gamma_override: false,
             gamma: 1.0,
+            aniso: 0,
+            aa: String::new(),
+            sharpen: 0.0,
+            upscale: String::new(),
             mouse: true,
             mouse_sens: 1.0,
             mouse_invert_y: false,
@@ -522,6 +534,19 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if s.gamma_override {
         set("PS3_DISPLAY_GAMMA", format!("{:.2}", s.gamma.clamp(0.8, 1.2)));
+    }
+    // Graphics options: only what differs from the game's own output.
+    if s.aniso > 1 {
+        set("PS3_ANISO", s.aniso.min(16).to_string());
+    }
+    if s.aa == "fxaa" {
+        set("PS3_AA", "fxaa".into());
+    }
+    if s.sharpen >= 0.005 {
+        set("PS3_SHARPEN", format!("{:.2}", s.sharpen.min(1.0)));
+    }
+    if s.upscale == "metalfx" {
+        set("PS3_UPSCALE", "metalfx".into());
     }
     if let Some(p) = &input.path {
         set("PS3_INPUT_MAP", p.clone());
@@ -1604,6 +1629,45 @@ mod tests {
         assert_eq!(env.get("PS3_RUMBLE").map(String::as_str), Some("0"));
         assert!(!env.contains_key("PS3_RUMBLE_STRENGTH")); // off: the strength is moot
         assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("0"));
+    }
+
+    #[test]
+    fn env_graphics_options() {
+        let inst = InstallInfo {
+            layout: "install".into(),
+            title: String::new(),
+            app_ver: String::new(),
+            port_dir: "/p".into(),
+            run_sh: "/p/run.sh".into(),
+            executable: "/p/build/x".into(),
+            vfs: "/v".into(),
+            dev_flash: String::new(),
+            icon: String::new(),
+            background: String::new(),
+            built_at: String::new(),
+            port_commit: String::new(),
+            toolkit_commit: String::new(),
+        };
+        let none = InputEnv::default();
+        let mut s = Settings::default();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        for k in ["PS3_ANISO", "PS3_AA", "PS3_SHARPEN", "PS3_UPSCALE"] {
+            assert!(!env.contains_key(k), "{k} is a default and must stay out");
+        }
+        s.aniso = 32;
+        s.aa = "fxaa".into();
+        s.sharpen = 0.5;
+        s.upscale = "metalfx".into();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_ANISO").map(String::as_str), Some("16"));
+        assert_eq!(env.get("PS3_AA").map(String::as_str), Some("fxaa"));
+        assert_eq!(env.get("PS3_SHARPEN").map(String::as_str), Some("0.50"));
+        assert_eq!(env.get("PS3_UPSCALE").map(String::as_str), Some("metalfx"));
+        s.aniso = 1;
+        s.sharpen = 0.0;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert!(!env.contains_key("PS3_ANISO"));
+        assert!(!env.contains_key("PS3_SHARPEN"));
     }
 
     #[test]

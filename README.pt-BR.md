@@ -199,6 +199,10 @@ faixas pretas quando a janela tem outro formato.
 | `PS3_WINDOW_ICON=game\|<arquivo>\|none` | o ícone no Dock: por padrão o placeholder original do launcher (`infamous2-lle/window_icon.png`, sem arte da Sony); `game` usa o `PS3_GAME/ICON0.PNG` da sua própria cópia |
 | `PS3_DISPLAY=<n>\|<nome>` | a tela em que o jogo abre, que a tela cheia e a sem bordas passam a cobrir: `1` é a da barra de menus, `2` a seguinte, ou o nome da tela como aparece nos Ajustes do Sistema (`DELL U2720Q`; sem diferenciar maiúsculas, ou só um pedaço). Padrão: a tela principal |
 | `PS3_VSYNC=0` | apresenta os quadros sem esperar a atualização da tela (menos atraso, pode rasgar a imagem em tela cheia). O ritmo de 30 fps do jogo vem do próprio relógio de vblank e não muda |
+| `PS3_ANISO=2\|4\|8\|16` | filtragem anisotrópica: chão e paredes vistos de lado ficam nítidos. Só mudam as texturas do jogo com mipmaps. Padrão desligada |
+| `PS3_AA=fxaa` | FXAA na imagem de 1280x720 do jogo, antes de qualquer ampliação. Padrão desligado |
+| `PS3_SHARPEN=<0..1>` | nitidez adaptativa ao contraste (estilo AMD CAS) na resolução de saída; 0 (padrão) desliga |
+| `PS3_UPSCALE=metalfx` | ampliação espacial MetalFX de 1280x720 para o tamanho em pixels da janela (macOS 13+), em vez de só esticar a imagem. Onde não houver MetalFX, volta ao caminho normal com uma linha no log. Padrão desligada |
 | `PS3_AUDIO_VOLUME=<0..100>` | volume geral (padrão 100). Aplicado ao que o Mac toca, numa curva que soa uniforme: 50 é cerca de −12 dB |
 | `PS3_AUDIO_DEVICE=<nome>` | a saída de áudio, pelo nome nos ajustes de Som (sem diferenciar maiúsculas, ou só um pedaço: `AirPods`); não encontrada ou sem valor, a padrão do sistema (que o jogo acompanha quando muda) |
 | `PS3_RUMBLE=0` | sem vibração no controle. Ligada por padrão: a vibração do jogo chega a controles DualSense, DualShock 4 e Xbox pelo SDL |

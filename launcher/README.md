@@ -72,7 +72,9 @@ roadmap).
   and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
   rumbles the controller through the Gamepad API.
 - **Settings / Configurações**: game language (`PS3_LANG`), light pass and
-  SSAO on the GPU, the occlusion-volume skip, a gamma override, the window
+  SSAO on the GPU, the occlusion-volume skip, a gamma override, anisotropic
+  filtering, FXAA, sharpening and MetalFX upscaling (`PS3_ANISO`, `PS3_AA`,
+  `PS3_SHARPEN`, `PS3_UPSCALE`, passed only when not off), the window
   mode and size (`PS3_WINDOW_MODE`, `PS3_WINDOW_SIZE`), the screen it opens
   on (`PS3_DISPLAY`; the list is AppKit's screen names, read through
   `osascript`) and vsync (`PS3_VSYNC=0`), the Dock icon
