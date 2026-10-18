@@ -97,18 +97,36 @@ interface Prereqs {
   ok: boolean;
   error: string | null;
 }
-/** A "Report a problem" folder (src-tauri/src/report.rs). */
+/** A debug session's folder (src-tauri/src/report.rs). */
 interface ReportInfo {
   dir: string;
   id: string;
   live: boolean;
+  debug: boolean;
   captures: number;
   pending: boolean;
   surfaces: number;
   shaders: number;
   bytes: number;
+  logBytes: number;
+  duration: number | null;
+  exit: string | null;
+  stopped: boolean;
+  crashReport: boolean;
   zip: string | null;
   zipBytes: number;
+  triage: Triage | null;
+}
+/** What the launcher shows of log_triage.py's triage.json. */
+interface Triage {
+  errors: number;
+  warnings: number;
+  expected: number;
+  captures: number;
+  stale: boolean;
+  md: string;
+  top: { category: string; severity: string; title: string; count: number; first: number | null; last: number | null }[];
+  categories: [string, number][];
 }
 interface LicenceSearch {
   gameDir: string | null;
@@ -131,7 +149,7 @@ const progress = new RebuildProgress();
 
 // ---- navigation ----------------------------------------------------------------
 // Pages: home, graphics, performance, game, controls, advanced; Advanced has
-// tabs (install, updates, log, diagnostics, env). Older names still work.
+// tabs (install, updates, log, diagnostics = debug mode, env). Older names still work.
 const LEGACY: Record<string, [string, string?]> = {
   install: ["advanced", "install"],
   settings: ["graphics"],
@@ -600,10 +618,12 @@ $("open-log").addEventListener("click", async () => {
   invoke("reveal", { path: p.game });
 });
 
-// ---- report a problem (diagnostic mode, src-tauri/src/report.rs) ---------------------
+// ---- debug mode (report a problem, src-tauri/src/report.rs) ---------------------------
 let report: ReportInfo | null = null;
 let reportPoll = 0;
-let zipping = false;
+let sessions: ReportInfo[] = [];
+/** Sessions with an action running: id -> "zip" | "triage". */
+const busy = new Map<string, string>();
 const URL_ISSUE = "https://github.com/erikomis/infamous2-recomp/issues/new";
 
 async function refreshReport() {
@@ -613,13 +633,14 @@ async function refreshReport() {
     report = null;
   }
   renderReport();
-  // follow the dumps while the diagnostic game runs
+  // follow the dumps while the debug game runs
   const live = !!report?.live && gameRunning;
   if (live && !reportPoll) reportPoll = window.setInterval(refreshReport, 2000);
   if (!live && reportPoll) {
     window.clearInterval(reportPoll);
     reportPoll = 0;
   }
+  if (advancedTab === "diagnostics") refreshSessions();
 }
 
 function renderReport() {
@@ -631,12 +652,9 @@ function renderReport() {
   show($("report-capture"), live);
   show($("hero-capture"), live);
   renderStatusList();
-  show($("report-done"), !!r);
-  show($("report-show-zip"), !!r?.zip);
-  $<HTMLButtonElement>("report-zip").disabled = zipping;
-  $("report-state").textContent = r
+  $("report-state").textContent = r && live
     ? t("report.state", { id: r.id, captures: r.captures, surfaces: r.surfaces, shaders: r.shaders, size: human(r.bytes) }) +
-      (r.pending && live ? t("report.pending") : "")
+      (r.pending ? t("report.pending") : "")
     : "";
 }
 
@@ -655,24 +673,137 @@ async function captureFrame() {
 }
 $("report-capture").addEventListener("click", captureFrame);
 $("hero-capture").addEventListener("click", captureFrame);
-$("report-open").addEventListener("click", () => report && invoke("reveal", { path: report.dir }));
-$("report-show-zip").addEventListener("click", () => report?.zip && invoke("reveal", { path: report.zip }));
 $("report-issue").addEventListener("click", () => invoke("open_url", { url: URL_ISSUE }));
-$("report-zip").addEventListener("click", async () => {
-  const msg = $("report-msg");
-  zipping = true;
-  msg.textContent = t("report.zipping");
-  renderReport();
+$("report-refresh").addEventListener("click", () => refreshSessions());
+listen("report-changed", () => refreshSessions());
+
+async function refreshSessions() {
   try {
-    report = await invoke<ReportInfo>("report_zip", { notes: $<HTMLTextAreaElement>("report-notes").value });
-    msg.textContent = t("report.zipped", { file: report.zip ?? "", size: human(report.zipBytes) });
-    if (report.zip) invoke("reveal", { path: report.zip });
+    sessions = await invoke<ReportInfo[]>("report_list");
+  } catch (e) {
+    $("report-msg").textContent = String(e);
+  }
+  renderSessions();
+}
+
+/** "20261018-120000" (UTC) -> the local date and time. */
+function sessionTime(id: string): string {
+  const m = id.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
+  if (!m) return id;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  return d.toLocaleString(lang(), { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** Seconds -> m:ss or h:mm:ss. */
+function clock(secs: number | null): string {
+  if (secs == null) return "-";
+  const s = Math.round(secs);
+  const h = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(h ? 2 : 1, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = ""): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text) e.textContent = text;
+  return e;
+}
+
+function sessionEnd(r: ReportInfo): [string, string] {
+  if (r.live && gameRunning) return [t("report.live"), "accent"];
+  if (!r.debug) return [t("report.oldReport"), "muted-pill"];
+  if (r.stopped) return [t("report.stopped"), "muted-pill"];
+  if (r.exit && r.exit !== "code=0") return [t("report.crashed", { exit: r.exit }), "bad"];
+  return [t("report.ended"), "muted-pill"];
+}
+
+function renderSessions() {
+  const ul = $("report-sessions");
+  ul.replaceChildren();
+  show($("report-none"), sessions.length === 0);
+  for (const r of sessions) {
+    const li = el("li", "session");
+    const head = el("div", "row session-head");
+    head.append(el("strong", "", sessionTime(r.id)));
+    if (r.duration != null) head.append(el("span", "small muted", clock(r.duration)));
+    const [end, cls] = sessionEnd(r);
+    head.append(el("span", `pill ${cls}`, end));
+    if (r.crashReport) head.append(el("span", "pill bad", t("report.crashReport")));
+    li.append(head);
+    li.append(el("div", "small muted", t("report.rowMeta", { captures: r.captures, log: human(r.logBytes), size: human(r.bytes) })));
+
+    const tr = r.triage;
+    const sum = el("div", "session-triage");
+    if (!tr) {
+      sum.append(el("span", "small muted", t("report.triageNone")));
+    } else {
+      const counts = el("div", "row");
+      counts.append(el("span", tr.errors ? "pill bad" : "pill muted-pill", t("report.triageCounts", tr as unknown as Record<string, number>)));
+      for (const [c, n] of tr.categories) counts.append(el("span", "pill warn", `${t(`cat.${c}` as Key)} ${n}`));
+      if (tr.stale) counts.append(el("span", "small warn-text", t("report.stale")));
+      sum.append(counts);
+      if (!tr.top.length) sum.append(el("p", "small muted", t("report.clean")));
+      else {
+        const ol = el("ol", "issues");
+        for (const g of tr.top.slice(0, 8)) {
+          const item = el("li", `sev-${g.severity}`);
+          item.append(el("span", "pill muted-pill", t(`cat.${g.category}` as Key)), " ");
+          item.append(el("span", "issue-title", g.title));
+          item.append(el("span", "small muted", ` ×${g.count} · ${t("report.at", { first: clock(g.first), last: clock(g.last) })}`));
+          ol.append(item);
+        }
+        sum.append(ol);
+      }
+    }
+    li.append(sum);
+
+    const act = el("div", "row");
+    const work = busy.get(r.id);
+    const analyse = el("button", "", t(work === "triage" ? "report.analysing" : "report.analyse"));
+    analyse.disabled = !!work;
+    analyse.addEventListener("click", () => sessionAction(r, "triage"));
+    const zip = el("button", "", t("report.zip") + (work === "zip" ? "…" : ""));
+    zip.disabled = !!work || (r.live && gameRunning);
+    zip.addEventListener("click", () => sessionAction(r, "zip"));
+    const open = el("button", "link", t("report.open"));
+    open.addEventListener("click", () => invoke("reveal", { path: r.dir }));
+    act.append(analyse, zip, open);
+    if (tr) {
+      const md = el("button", "link", t("report.openTriage"));
+      md.addEventListener("click", () => invoke("reveal", { path: tr.md }));
+      act.append(md);
+    }
+    if (r.zip) {
+      const z = el("button", "link", t("report.showZip"));
+      z.addEventListener("click", () => invoke("reveal", { path: r.zip! }));
+      act.append(z);
+    }
+    li.append(act);
+    ul.append(li);
+  }
+}
+
+async function sessionAction(r: ReportInfo, what: "triage" | "zip") {
+  const msg = $("report-msg");
+  busy.set(r.id, what);
+  msg.textContent = t(what === "zip" ? "report.zipping" : "report.analysing");
+  renderSessions();
+  try {
+    const got =
+      what === "zip"
+        ? await invoke<ReportInfo>("report_zip", { id: r.id, notes: $<HTMLTextAreaElement>("report-notes").value })
+        : await invoke<ReportInfo>("report_triage", { id: r.id });
+    sessions = sessions.map((s) => (s.id === got.id ? got : s));
+    msg.textContent = what === "zip" ? t("report.zipped", { file: got.zip ?? "", size: human(got.zipBytes) }) : "";
+    if (what === "zip" && got.zip) invoke("reveal", { path: got.zip });
   } catch (e) {
     msg.textContent = String(e);
   }
-  zipping = false;
-  renderReport();
-});
+  busy.delete(r.id);
+  renderSessions();
+}
 
 // ---- install: 1. prerequisites ---------------------------------------------------
 const URL_RPCS3 = "https://rpcs3.net/download";
