@@ -396,7 +396,7 @@ pub struct AppState {
     rebuild: Mutex<Option<u32>>,
     game: Mutex<Option<u32>>,
     setup: Mutex<Option<u32>>,
-    /// The report folder of the game started in diagnostic mode (kept after
+    /// The report folder of the game started in debug mode (kept after
     /// it closes, for "Open folder" and "Create .zip"), and whether that game
     /// is still running.
     report: Mutex<Option<(PathBuf, bool)>>,
@@ -1375,9 +1375,12 @@ pub struct PlayStarted {
     report: Option<String>,
 }
 
-/// `diagnostic`: start the game with play_dump.sh's dump variables pointed
-/// at a new report folder (its log goes there too); "Capture this frame"
-/// then dumps the frame on screen. Without it, the usual Play.
+/// `diagnostic`: debug mode. Start the game with play_dump.sh's dump
+/// variables and the problem logs (report::DEBUG_ENV) pointed at a new report
+/// folder (its log goes there too), and keep its session index
+/// (report::EVENTS): the start, a tick every 2 s, the captures, the exit and
+/// a crash report. "Capture this frame" then dumps the frame on screen.
+/// Without it, the usual Play.
 #[tauri::command]
 fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) -> Result<PlayStarted, String> {
     require_supported_host()?;
@@ -1434,23 +1437,32 @@ fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) ->
     *slot = Some(child.id());
     drop(slot);
     *state.last_log.lock().unwrap() = Some(log_path.clone());
+    let started = now_secs();
     if let Some(d) = &report_dir {
         *state.report.lock().unwrap() = Some((d.clone(), true));
+        session_event(d, "start", &format!("pid={}", child.id()));
         // the machine and the build, for whoever reads the report (system_profiler takes a moment)
-        let (d, inst, now) = (d.clone(), inst.clone(), now_secs());
+        let (d2, inst, now) = (d.clone(), inst.clone(), started);
         thread::spawn(move || {
-            let _ = fs::write(d.join(report::SYSTEM), system_info(&inst, &env, now));
+            let _ = fs::write(d2.join(report::SYSTEM), system_info(&inst, &env, now));
         });
+        spawn_ticker(app.clone(), d.clone());
     }
     let a = app.clone();
+    let session = report_dir.clone();
     thread::spawn(move || {
-        let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        let status = child.wait();
+        let code = status.as_ref().ok().and_then(|s| s.code()).unwrap_or(-1);
         let st = a.state::<AppState>();
         *st.game.lock().unwrap() = None;
         if let Some((_, live)) = st.report.lock().unwrap().as_mut() {
             *live = false;
         }
         let _ = a.emit("game-exit", code);
+        if let Some(d) = session {
+            session_exit(&d, status.ok(), started);
+            let _ = a.emit("report-changed", ());
+        }
     });
     Ok(PlayStarted {
         log: log_path.to_string_lossy().into_owned(),
@@ -1458,6 +1470,73 @@ fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) ->
         backup_error,
         report: report_dir.map(|d| d.to_string_lossy().into_owned()),
     })
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// One line in a debug session's index (errors only cost the line).
+fn session_event(dir: &Path, kind: &str, detail: &str) {
+    let ms = now_ms();
+    let _ = report::event(dir, ms, &utc_text(ms / 1000), kind, detail);
+}
+
+/// While the debug game runs: a tick every 2 s with the log's size (so the
+/// triage can put a time on every line), and "taken" once the game has
+/// consumed a capture's trigger.
+fn spawn_ticker(app: AppHandle, dir: PathBuf) {
+    thread::spawn(move || {
+        let mut pending = false;
+        loop {
+            thread::sleep(std::time::Duration::from_secs(2));
+            let live = matches!(app.state::<AppState>().report.lock().unwrap().as_ref(), Some((d, true)) if *d == dir);
+            if !live {
+                break;
+            }
+            let now_pending = dir.join(report::TRIGGER).exists();
+            if pending && !now_pending {
+                session_event(&dir, "taken", "");
+            }
+            pending = now_pending;
+            session_event(&dir, "tick", "");
+        }
+    });
+}
+
+/// The end of a debug session: the exit status, and for a crash (any end
+/// the player did not ask for with Stop) the macOS crash report, which
+/// ReportCrash writes a few seconds after the process is gone.
+fn session_exit(dir: &Path, status: Option<std::process::ExitStatus>, started: u64) {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.and_then(|s| s.signal())
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let code = status.and_then(|s| s.code());
+    let detail = match (code, signal) {
+        (Some(c), _) => format!("code={c}"),
+        (None, Some(sig)) => format!("signal={sig}"),
+        _ => "unknown".into(),
+    };
+    session_event(dir, "exit", &detail);
+    let stopped = fs::read_to_string(dir.join(report::EVENTS)).is_ok_and(|t| t.contains("\tstop\t"));
+    let crashed = signal.is_some() || code.is_some_and(|c| c != 0);
+    if !crashed || stopped || !cfg!(target_os = "macos") {
+        return;
+    }
+    let diag = home().join("Library/Logs/DiagnosticReports");
+    for _ in 0..20 {
+        if let Some(p) = report::find_crash_report(&diag, exe_name(), started) {
+            if fs::copy(&p, dir.join(report::CRASH)).is_ok() {
+                session_event(dir, "crash-report", &format!("file={}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+            }
+            return;
+        }
+        thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 fn command_line(program: &str, args: &[&str]) -> String {
@@ -1535,28 +1614,112 @@ fn report_info(state: State<'_, AppState>) -> Option<report::Info> {
     current_report(&state).map(|(d, live)| report::info(&d, live))
 }
 
-/// "Capture this frame": only while the game started in diagnostic mode runs.
+/// "Capture this frame": only while the game started in debug mode runs.
 #[tauri::command]
 fn report_capture(state: State<'_, AppState>) -> Result<report::Info, String> {
     let game = state.game.lock().unwrap().is_some();
     match state.report.lock().unwrap().clone() {
         Some((d, true)) if game => {
-            report::capture(&d, &utc_text(now_secs()))?;
+            let ms = now_ms();
+            report::capture(&d, &utc_text(ms / 1000), ms)?;
             Ok(report::info(&d, true))
         }
-        _ => Err("the game was not started in diagnostic mode".into()),
+        _ => Err("the game was not started in debug mode".into()),
     }
 }
 
-/// Pack the current report into `<reports>/infamous2-report-<id>.zip`, with
-/// the player's description (if any) as notes.txt.
+/// A report by id, or the current one.
+fn report_dir(state: &State<'_, AppState>, id: Option<&str>) -> Result<(PathBuf, bool), String> {
+    let cur = current_report(state);
+    match id {
+        Some(id) => {
+            let d = report::by_id(&reports_dir(), id)?;
+            let live = cur.is_some_and(|(c, live)| live && c == d);
+            Ok((d, live))
+        }
+        None => cur.ok_or_else(|| "no report yet: start the game in debug mode first".into()),
+    }
+}
+
+/// log_triage.py: next to the sources in a development checkout, in the
+/// app's bundled port, or in the install's own copy of the tools.
+fn triage_script(app: &AppHandle) -> Option<PathBuf> {
+    let mut cands = Vec::new();
+    if let Some(r) = std::env::var_os("INFAMOUS2_REPO") {
+        cands.push(PathBuf::from(r).join("infamous2-lle/tools/log_triage.py"));
+    }
+    cands.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../infamous2-lle/tools/log_triage.py"));
+    if let Ok(res) = app.path().resource_dir() {
+        cands.push(res.join("port/infamous2-lle/tools/log_triage.py"));
+    }
+    if let Ok(inst) = resolve_install(Path::new(&load_settings_file().install_dir)) {
+        cands.push(Path::new(&inst.port_dir).join("tools/log_triage.py"));
+    }
+    cands.into_iter().find(|p| p.is_file()).map(|p| p.canonicalize().unwrap_or(p))
+}
+
+/// Run log_triage.py on a report folder (it writes triage.md / triage.json there).
+fn run_triage(app: &AppHandle, dir: &Path) -> Result<(), String> {
+    let script = triage_script(app).ok_or("log_triage.py not found (rebuild or update the app)")?;
+    let py = find_python().ok_or("no Python 3 found (Advanced > Install lists what is missing)")?;
+    let out = Command::new(py)
+        .arg("-I")
+        .arg(&script)
+        .arg(dir)
+        .arg("--quiet")
+        .env("PATH", tool_path())
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{}: {e}", script.display()))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr);
+        Err(format!("log_triage.py: {}", err.trim().lines().last().unwrap_or("failed")))
+    }
+}
+
+/// Advanced > Report a problem: the debug sessions on disk, newest first.
 #[tauri::command]
-async fn report_zip(state: State<'_, AppState>, notes: Option<String>) -> Result<report::Info, String> {
-    let (dir, live) = current_report(&state).ok_or("no report yet: start the game in diagnostic mode first")?;
+async fn report_list(state: State<'_, AppState>) -> Result<Vec<report::Info>, String> {
+    let cur = current_report(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        report::list(&reports_dir(), 40)
+            .into_iter()
+            .map(|d| {
+                let live = cur.as_ref().is_some_and(|(c, live)| *live && *c == d);
+                report::info(&d, live)
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// "Analyse": run log_triage.py on a session and return its summary.
+#[tauri::command]
+async fn report_triage(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<report::Info, String> {
+    let (dir, live) = report_dir(&state, Some(&id))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_triage(&app, &dir)?;
+        Ok(report::info(&dir, live))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Pack a report (by id, or the current one) into
+/// `<reports>/infamous2-report-<id>.zip`, with the player's description (if
+/// any) as notes.txt and a fresh triage (when Python is there; the .zip is
+/// made without it otherwise).
+#[tauri::command]
+async fn report_zip(app: AppHandle, state: State<'_, AppState>, id: Option<String>, notes: Option<String>) -> Result<report::Info, String> {
+    let (dir, live) = report_dir(&state, id.as_deref())?;
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(n) = notes.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
             fs::write(dir.join(report::NOTES), format!("{n}\n")).map_err(|e| e.to_string())?;
         }
+        let _ = run_triage(&app, &dir);
         report::pack(&dir, &report::zip_path(&dir), &home().to_string_lossy())?;
         Ok(report::info(&dir, live))
     })
@@ -1567,6 +1730,9 @@ async fn report_zip(state: State<'_, AppState>, notes: Option<String>) -> Result
 #[tauri::command]
 fn stop_game(state: State<'_, AppState>) {
     if let Some(pid) = *state.game.lock().unwrap() {
+        if let Some((d, true)) = state.report.lock().unwrap().clone() {
+            session_event(&d, "stop", ""); // the player ended it: not a crash
+        }
         kill_tree(pid);
     }
 }
@@ -1587,7 +1753,7 @@ fn reveal(path: String) -> Result<(), String> {
 }
 
 /// The game's log: the one the last game this launcher started writes to (a
-/// report folder's in diagnostic mode), else the usual logs/game.log.
+/// report folder's in debug mode), else the usual logs/game.log.
 fn game_log_path(state: &State<'_, AppState>) -> PathBuf {
     state.last_log.lock().unwrap().clone().unwrap_or_else(|| data_root().join("logs/game.log"))
 }
@@ -1804,6 +1970,8 @@ pub fn run() {
             saves_import_zip,
             list_outputs,
             report_info,
+            report_list,
+            report_triage,
             report_capture,
             report_zip
         ])

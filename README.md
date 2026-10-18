@@ -99,8 +99,16 @@ Advanced.
   vibration; **audio** volume and output; **game language** (the ones your
   copy ships).
 - **Saves:** list, back up, restore, import/export with RPCS3, `.zip`.
-- **Report a problem:** play in diagnostic mode, capture a frame, make a
-  `.zip` for an issue; **game log viewer** that follows the log live.
+- **Debug mode** (Advanced > Debug mode): play normally while the game logs
+  what goes wrong (missing functions, shader/texture failures, GPU stalls,
+  SPU faults, audio falling behind, files it cannot open, frame-rate drops)
+  and keeps a timed index of the session; press **Capture this frame** when
+  something looks wrong. Afterwards **Analyse** runs
+  `infamous2-lle/tools/log_triage.py` on the session and lists the top
+  issues (also in `triage.md` in the session folder, for a developer or an
+  agent to go through), and **Create .zip** packs it all for an issue.
+  Details in [launcher/README.md](launcher/README.md#debug-mode-report-a-problem).
+  Plus a **game log viewer** that follows the log live.
 - **Updates card:** tells when a newer release is out or the installed game
   is older than the app's sources, and offers a rebuild.
 

@@ -80,6 +80,9 @@ jobs:
       - name: pup_extract.py self-test
         run: python -I infamous2-lle/tools/pup_extract.py --selftest
 
+      - name: log_triage.py self-test
+        run: python -I infamous2-lle/tools/log_triage.py --selftest
+
       - name: rebuild.py and rap2rifkey.py start
         run: |
           python -I infamous2-lle/tools/rebuild.py --help > /dev/null
