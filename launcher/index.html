@@ -226,6 +226,15 @@
           <label class="check"><input id="mouse-capture" type="checkbox" /> <span data-i18n="settings.mouseCapture"></span></label>
           <p class="hint" data-i18n="settings.mouseCaptureHint"></p>
         </fieldset>
+
+        <fieldset>
+          <legend data-i18n="settings.rumbleTitle">Vibração</legend>
+          <label class="check"><input id="rumble-on" type="checkbox" /> <span data-i18n="settings.rumble"></span></label>
+          <label data-i18n="settings.rumbleStrength">Intensidade</label>
+          <div class="slider"><input id="rumble-strength" type="range" min="0" max="200" step="10" /><output id="rumble-strength-out"></output></div>
+          <p class="hint" data-i18n="settings.rumbleHint"></p>
+          <div class="row"><button id="rumble-test" data-i18n="settings.rumbleTest">Testar</button><span id="rumble-test-msg" class="small muted"></span></div>
+        </fieldset>
       </section>
 
       <!-- Saves ------------------------------------------------------------>
@@ -309,8 +318,22 @@
             <option value="1920x1080">1920 × 1080</option>
             <option value="2560x1440">2560 × 1440</option>
           </select>
+          <label for="screen" data-i18n="settings.screen">Tela</label>
+          <select id="screen"></select>
+          <p class="hint" data-i18n="settings.screenHint"></p>
+          <label class="check"><input id="vsync" type="checkbox" /> <span data-i18n="settings.vsync"></span></label>
+          <p class="hint" data-i18n="settings.vsyncHint"></p>
           <label class="check"><input id="game-icon" type="checkbox" /> <span data-i18n="settings.gameIcon"></span></label>
           <p class="hint" data-i18n="settings.gameIconHint"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="settings.audio">Áudio</legend>
+          <label data-i18n="settings.volume">Volume</label>
+          <div class="slider"><input id="audio-volume" type="range" min="0" max="100" step="1" /><output id="audio-volume-out"></output></div>
+          <label for="audio-device" data-i18n="settings.audioDevice">Saída de áudio</label>
+          <select id="audio-device"></select>
+          <p class="hint" data-i18n="settings.audioHint"></p>
         </fieldset>
 
 

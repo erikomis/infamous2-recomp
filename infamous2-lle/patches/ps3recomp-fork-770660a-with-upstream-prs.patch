@@ -314,6 +314,189 @@ index 0000000..bfa9c6d
 +#endif
 +
 +#endif
+diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
+index d2f8c67..cbcd738 100644
+--- a/libs/audio/cellAudio.c
++++ b/libs/audio/cellAudio.c
+@@ -20,6 +20,7 @@
+ #include <stdlib.h>
+ #include <stdint.h>
+ #include <math.h>
++#include <ctype.h>
+ 
+ /* Event-queue push/lookup (runtime/syscalls/sys_event.c). Forward-declared
+  * rather than including sys_event.h to avoid pulling PPU context/syscall
+@@ -160,10 +161,75 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+  * Host audio output backend
+  * -----------------------------------------------------------------------*/
+ 
++/* PS3_AUDIO_VOLUME=0..100: the host's master volume in percent (100 = the
++ * title's own mix, unchanged). Applied to the final mix just before the
++ * device, on a squared curve so the slider sounds even (50 is about -12 dB,
++ * 25 about -24 dB); 0 is silence. Like PS3_AUDIO_MUTE it only touches what the
++ * host plays, never what the title sees. */
++static float audio_volume_gain(const char* e)
++{
++    if (!e || !*e) return 1.0f;
++    char* end = NULL;
++    double v = strtod(e, &end);
++    if (end == e || v != v) return 1.0f;
++    if (v < 0) v = 0;
++    if (v > 100) v = 100;
++    return (float)((v / 100.0) * (v / 100.0));
++}
++
+ #if AUDIO_BACKEND_SDL2
+ 
+ static SDL_AudioDeviceID s_sdl_audio_dev = 0;
+ 
++/* Case-insensitive strstr (ASCII), for audio_match_device. */
++static const char* audio_find_nocase(const char* hay, const char* needle)
++{
++    for (; *hay; hay++) {
++        size_t k = 0;
++        while (needle[k] && hay[k] &&
++               tolower((unsigned char)hay[k]) == tolower((unsigned char)needle[k])) k++;
++        if (!needle[k]) return hay;
++    }
++    return NULL;
++}
++
++/* PS3_AUDIO_DEVICE=<name>: which output device the host plays to. The name
++ * is matched exactly first, then ignoring case, then as a part of a device's
++ * name ("AirPods" finds "Erik's AirPods Pro"); unset or no match = the
++ * system default output (which SDL follows when it changes). SDL backend
++ * only; WASAPI keeps the default endpoint. Returns the index of the device
++ * in names[], or -1. */
++static int audio_match_device(const char* want, const char* const* names, int n)
++{
++    if (!want || !*want) return -1;
++    for (int i = 0; i < n; i++) if (names[i] && !strcmp(names[i], want)) return i;
++    for (int i = 0; i < n; i++)
++        if (names[i] && strlen(names[i]) == strlen(want) && audio_find_nocase(names[i], want) == names[i])
++            return i;
++    for (int i = 0; i < n; i++) if (names[i] && audio_find_nocase(names[i], want)) return i;
++    return -1;
++}
++
++/* The SDL output device PS3_AUDIO_DEVICE names, or NULL for the default. */
++static const char* audio_sdl_pick_device(void)
++{
++    static char picked[256];
++    const char* want = getenv("PS3_AUDIO_DEVICE");
++    if (!want || !*want) return NULL;
++    const char* names[32];
++    int n = SDL_GetNumAudioDevices(0);
++    if (n > 32) n = 32;
++    for (int i = 0; i < n; i++) names[i] = SDL_GetAudioDeviceName(i, 0);
++    const int k = audio_match_device(want, names, n < 0 ? 0 : n);
++    if (k < 0) {
++        printf("[cellAudio] PS3_AUDIO_DEVICE=%s: no such output, using the default. Outputs:\n", want);
++        for (int i = 0; i < n; i++) printf("[cellAudio]   %s\n", names[i] ? names[i] : "?");
++        return NULL;
++    }
++    snprintf(picked, sizeof picked, "%s", names[k]);
++    return picked;
++}
++
+ static int audio_backend_init(void)
+ {
+     if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
+@@ -181,11 +247,18 @@ static int audio_backend_init(void)
+     want.samples  = CELL_AUDIO_BLOCK_SAMPLES;
+     want.callback = NULL; /* We'll use SDL_QueueAudio */
+ 
+-    s_sdl_audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
++    const char* dev = audio_sdl_pick_device();
++    s_sdl_audio_dev = SDL_OpenAudioDevice(dev, 0, &want, &have, 0);
++    if (s_sdl_audio_dev == 0 && dev) {
++        printf("[cellAudio] cannot open \"%s\" (%s), using the default output\n", dev, SDL_GetError());
++        dev = NULL;
++        s_sdl_audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
++    }
+     if (s_sdl_audio_dev == 0) {
+         printf("[cellAudio] SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+         return -1;
+     }
++    printf("[cellAudio] output: %s\n", dev ? dev : "system default");
+ 
+     SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */
+     return 0;
+@@ -416,7 +489,9 @@ static inline float ld_be_f32(const float* p)
+  *   PS3_AUDIO_MUTE=1  silence the HOST output only; the title still sees a
+  *                     working device and every mix/pacing path runs as normal
+  *                     (unlike PS3_NO_AUDIO, which changes what the guest does).
+- *                     AUDIO_WAV still records the real mix. */
++ *                     AUDIO_WAV still records the real mix.
++ *   PS3_AUDIO_VOLUME  0..100, the host's master volume (audio_volume_gain);
++ *                     AUDIO_WAV records the mix before it too. */
+ static void audio_submit_mix(void)
+ {
+     { static FILE* _wf = (FILE*)-1;
+@@ -424,6 +499,13 @@ static void audio_submit_mix(void)
+       if (_wf) { fwrite(s_mix_buffer, sizeof(float), CELL_AUDIO_BLOCK_SAMPLES * 2, _wf); fflush(_wf); } }
+     { static int mute = -1; if (mute < 0) mute = getenv("PS3_AUDIO_MUTE") ? 1 : 0;
+       if (mute) memset(s_mix_buffer, 0, sizeof(s_mix_buffer)); }
++    { static float gain = -1.0f;
++      if (gain < 0) {
++          gain = audio_volume_gain(getenv("PS3_AUDIO_VOLUME"));
++          if (gain != 1.0f) printf("[cellAudio] PS3_AUDIO_VOLUME=%s: gain %.3f\n", getenv("PS3_AUDIO_VOLUME"), gain);
++      }
++      if (gain != 1.0f)
++          for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) s_mix_buffer[i] *= gain; }
+     audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
+ }
+ 
+diff --git a/libs/audio/tests/test_audio_settings.c b/libs/audio/tests/test_audio_settings.c
+new file mode 100644
+index 0000000..41bae2d
+--- /dev/null
++++ b/libs/audio/tests/test_audio_settings.c
+@@ -0,0 +1,44 @@
++/* PS3_AUDIO_VOLUME's gain curve and PS3_AUDIO_DEVICE's name matching.
++ * macOS: clang -std=gnu17 -I include -I /opt/homebrew/include
++ *   libs/audio/tests/test_audio_settings.c -L /opt/homebrew/lib -lSDL2
++ *   -Wl,-dead_strip -o /tmp/test_audio_settings && /tmp/test_audio_settings
++ */
++#include "../cellAudio.c"
++#include <assert.h>
++
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++
++int main(void)
++{
++    assert(audio_volume_gain(NULL) == 1.0f);
++    assert(audio_volume_gain("") == 1.0f);
++    assert(audio_volume_gain("loud") == 1.0f);
++    assert(audio_volume_gain("100") == 1.0f);
++    assert(audio_volume_gain("150") == 1.0f);
++    assert(audio_volume_gain("0") == 0.0f);
++    assert(audio_volume_gain("-5") == 0.0f);
++    assert(fabsf(audio_volume_gain("50") - 0.25f) < 1e-6f);
++    assert(fabsf(audio_volume_gain("25") - 0.0625f) < 1e-6f);
++
++    const char* names[] = { "MacBook Pro Speakers", "Erik's AirPods Pro", "External Headphones", "DELL U2720Q" };
++    assert(audio_match_device(NULL, names, 4) == -1);
++    assert(audio_match_device("", names, 4) == -1);
++    assert(audio_match_device("External Headphones", names, 4) == 2);
++    assert(audio_match_device("dell u2720q", names, 4) == 3);
++    assert(audio_match_device("airpods", names, 4) == 1);
++    assert(audio_match_device("Speakers", names, 4) == 0);
++    assert(audio_match_device("HDMI", names, 4) == -1);
++    const char* dup[] = { "Headphones 2", "Headphones" };
++    assert(audio_match_device("headphones", dup, 2) == 1);   /* a whole name beats a part */
++    printf("test_audio_settings: ok\n");
++    return 0;
++}
 diff --git a/libs/filesystem/edat.c b/libs/filesystem/edat.c
 index 64f0ff5..edb4ac5 100644
 --- a/libs/filesystem/edat.c
@@ -667,7 +850,7 @@ index d403baf..76c5505 100644
 +
  #endif /* PS3RECOMP_CELL_GEM_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 621d53e..bfaacb3 100644
+index 621d53e..21772cb 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -10,6 +10,7 @@
@@ -686,7 +869,7 @@ index 621d53e..bfaacb3 100644
  
  /* ---------------------------------------------------------------------------
   * Backend selection
-@@ -82,6 +84,45 @@ static PadHostState  s_host_state[PAD_MAX_HOST_PORTS];
+@@ -82,11 +84,112 @@ static PadHostState  s_host_state[PAD_MAX_HOST_PORTS];
  /* Per-port "a report has arrived since your last read" flag; see cellPadGetData. */
  static int s_data_fresh[PAD_MAX_HOST_PORTS];
  
@@ -732,7 +915,74 @@ index 621d53e..bfaacb3 100644
  #if PAD_BACKEND_SDL2
  static SDL_GameController* s_sdl_controllers[PAD_MAX_HOST_PORTS];
  static int s_sdl_inited = 0;
-@@ -287,8 +328,32 @@ static u8 pad_sdl_trigger_to_u8(int raw)
+ #endif
+ 
++/* ---------------------------------------------------------------------------
++ * Rumble (cellPadSetActDirect)
++ *
++ * A DualShock 3 has two motors: the small one (motor[0]) is on or off, the
++ * large one (motor[1]) takes 0-255. A title sets them and they stay that way
++ * until it sets them again -- inFAMOUS 2 only calls when the value changes.
++ * SDL's rumble runs for a duration instead, so the last request per port is
++ * kept and renewed from the pad poll while it is non-zero; if the title stops
++ * polling (a hang, a closed window), the motors stop within PAD_RUMBLE_HOLD_MS.
++ * Large -> SDL's low-frequency motor, small -> the high-frequency one, which
++ * is how DualShock 4/DualSense and Xbox pads are laid out too.
++ *
++ *   PS3_RUMBLE=0                 no vibration at all
++ *   PS3_RUMBLE_STRENGTH=0..200   percent applied to both motors (100); above
++ *                                100 boosts a weak large-motor value, capped
++ *                                at the motor's maximum
++ *   PS3_RUMBLE_LOG=1             print every request the title makes
++ * -------------------------------------------------------------------------*/
++
++#define PAD_RUMBLE_HOLD_MS     1000   /* one SDL request lasts this long ... */
++#define PAD_RUMBLE_RENEW_MS     400   /* ... and is renewed this often */
++
++typedef struct {
++    u16 lo, hi;        /* what the host motors were last asked for */
++    u64 sent_ms;       /* when (GetTickCount64), 0 = nothing pending */
++} PadRumble;
++static PadRumble s_rumble[PAD_MAX_HOST_PORTS];
++
++/* Strength in percent from PS3_RUMBLE / PS3_RUMBLE_STRENGTH: 0 = off. */
++static int pad_rumble_strength_from(const char* on, const char* strength)
++{
++    if (on && on[0] == '0' && on[1] == 0) return 0;
++    if (!strength || !*strength) return 100;
++    char* end = NULL;
++    long v = strtol(strength, &end, 10);
++    if (end == strength) return 100;
++    if (v < 0) v = 0;
++    if (v > 200) v = 200;
++    return (int)v;
++}
++
++static int pad_rumble_strength(void)
++{
++    static int s = -1;
++    if (s < 0) {
++        s = pad_rumble_strength_from(getenv("PS3_RUMBLE"), getenv("PS3_RUMBLE_STRENGTH"));
++        fprintf(stderr, "[cellPad] rumble %s", s ? "on" : "off (PS3_RUMBLE=0)");
++        if (s && s != 100) fprintf(stderr, ", strength %d%%", s);
++        fputc('\n', stderr);
++    }
++    return s;
++}
++
++/* The two host motor levels (0-65535) for a PS3 actuator request. */
++static void pad_rumble_levels(u8 small_on, u8 large, int pct, u16* lo, u16* hi)
++{
++    unsigned long l = (unsigned long)large * 257ul * (unsigned long)pct / 100ul;
++    unsigned long h = small_on ? 65535ul * (unsigned long)pct / 100ul : 0;
++    *lo = (u16)(l > 65535ul ? 65535ul : l);
++    *hi = (u16)(h > 65535ul ? 65535ul : h);
++}
++
+ /* ---------------------------------------------------------------------------
+  * XInput backend
+  * -----------------------------------------------------------------------*/
+@@ -287,8 +390,43 @@ static u8 pad_sdl_trigger_to_u8(int raw)
      return (u8)val;
  }
  
@@ -756,6 +1006,17 @@ index 621d53e..bfaacb3 100644
 +    return v;
 +}
 +
++/* Send port i's rumble state to its controller (with a fresh duration). */
++static void pad_sdl_rumble_send(int i)
++{
++    SDL_GameController* gc = s_sdl_controllers[i];
++    if (!gc) return;
++    PadRumble* r = &s_rumble[i];
++    const int on = r->lo || r->hi;
++    SDL_GameControllerRumble(gc, r->lo, r->hi, on ? PAD_RUMBLE_HOLD_MS : 0);
++    r->sent_ms = on ? GetTickCount64() : 0;
++}
++
  static void pad_poll_sdl2(void)
  {
 +    if (pad_sdl_off()) {
@@ -765,16 +1026,24 @@ index 621d53e..bfaacb3 100644
      SDL_GameControllerUpdate();
  
      for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
-@@ -296,6 +361,8 @@ static void pad_poll_sdl2(void)
+@@ -296,6 +434,10 @@ static void pad_poll_sdl2(void)
              /* Try to open newly connected controllers */
              if (SDL_IsGameController(i)) {
                  s_sdl_controllers[i] = SDL_GameControllerOpen(i);
-+                fprintf(stderr, "[cellPad] SDL controller %d connected: %s\n", i,
-+                        s_sdl_controllers[i] ? SDL_GameControllerName(s_sdl_controllers[i]) : "(open failed)");
++                fprintf(stderr, "[cellPad] SDL controller %d connected: %s%s\n", i,
++                        s_sdl_controllers[i] ? SDL_GameControllerName(s_sdl_controllers[i]) : "(open failed)",
++                        s_sdl_controllers[i] && !SDL_GameControllerHasRumble(s_sdl_controllers[i])
++                            ? " (no rumble)" : "");
              }
          }
  
-@@ -311,39 +378,39 @@ static void pad_poll_sdl2(void)
+@@ -306,44 +448,49 @@ static void pad_poll_sdl2(void)
+                 SDL_GameControllerClose(gc);
+                 s_sdl_controllers[i] = NULL;
+             }
++            memset(&s_rumble[i], 0, sizeof s_rumble[i]);
+             continue;
+         }
  
          s_host_state[i].connected = 1;
  
@@ -795,6 +1064,10 @@ index 621d53e..bfaacb3 100644
 -        if (SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_X))             btns |= CELL_PAD_CTRL_SQUARE;
 -
 -        /* Triggers via axis */
++        /* Keep a rumble the title set going (see PAD_RUMBLE_HOLD_MS). */
++        if (s_rumble[i].sent_ms && GetTickCount64() - s_rumble[i].sent_ms >= PAD_RUMBLE_RENEW_MS)
++            pad_sdl_rumble_send(i);
++
 +        /* Every SDL input, then the PS3 controls bound to them ([controller]
 +         * in PS3_INPUT_MAP; by default each button is its PS3 namesake and
 +         * the triggers are L2/R2, pressed past 3000). */
@@ -842,7 +1115,7 @@ index 621d53e..bfaacb3 100644
  
          /* Pressure: SDL has digital buttons, so 0 or 255 */
          s_host_state[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
-@@ -361,6 +428,7 @@ static void pad_poll_sdl2(void)
+@@ -361,6 +508,7 @@ static void pad_poll_sdl2(void)
  
  static void pad_init_backend(void)
  {
@@ -850,7 +1123,7 @@ index 621d53e..bfaacb3 100644
      if (!s_sdl_inited) {
          if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
              SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
-@@ -372,6 +440,9 @@ static void pad_init_backend(void)
+@@ -372,6 +520,9 @@ static void pad_init_backend(void)
      /* Open any controllers already connected */
      int num = SDL_NumJoysticks();
      for (int i = 0; i < num && i < PAD_MAX_HOST_PORTS; i++) {
@@ -860,7 +1133,20 @@ index 621d53e..bfaacb3 100644
          if (SDL_IsGameController(i)) {
              s_sdl_controllers[i] = SDL_GameControllerOpen(i);
          }
-@@ -490,34 +561,143 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
+@@ -382,10 +533,12 @@ static void pad_shutdown_backend(void)
+ {
+     for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
+         if (s_sdl_controllers[i]) {
++            SDL_GameControllerRumble(s_sdl_controllers[i], 0, 0, 0);
+             SDL_GameControllerClose(s_sdl_controllers[i]);
+             s_sdl_controllers[i] = NULL;
+         }
+     }
++    memset(s_rumble, 0, sizeof s_rumble);
+ }
+ 
+ #endif /* PAD_BACKEND_SDL2 */
+@@ -490,34 +643,143 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
  }
  
  /* Keyboard pad (macOS window): the Metal window records key state by
@@ -1027,7 +1313,7 @@ index 621d53e..bfaacb3 100644
      /* PS3_PAD_FILE: its buttons are held in addition to the keys; an
       * off-centre file axis wins over the keyboard's. */
      { u16 fb; int flx, fly, frx, fry;
-@@ -528,6 +708,22 @@ static void pad_poll_keys(void)
+@@ -528,6 +790,22 @@ static void pad_poll_keys(void)
        if (frx != 128) rx = frx;
        if (fry != 128) ry = fry; }
      PadHostState* hs = &s_host_state[0];
@@ -1050,7 +1336,7 @@ index 621d53e..bfaacb3 100644
      if (btns != hs->buttons) { printf("[cellPad] keyboard: buttons 0x%04X\n", btns); fflush(stdout); }
      pad_apply(hs, btns, lx, ly, rx, ry);
  }
-@@ -553,9 +749,9 @@ static void pad_poll_backend(void)
+@@ -553,9 +831,9 @@ static void pad_poll_backend(void)
  #ifdef _WIN32
      if (!s_host_state[0].connected) pad_poll_keyboard();
  #endif
@@ -1063,7 +1349,7 @@ index 621d53e..bfaacb3 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -581,6 +777,7 @@ s32 cellPadInit(u32 max_connect)
+@@ -581,6 +859,7 @@ s32 cellPadInit(u32 max_connect)
      memset(s_port_setting, 0, sizeof(s_port_setting));
      memset(s_host_state, 0, sizeof(s_host_state));
  
@@ -1071,7 +1357,7 @@ index 621d53e..bfaacb3 100644
      pad_init_backend();
  
      /* Do an initial poll to detect connected controllers */
-@@ -730,21 +927,40 @@ skip_inject: ;
+@@ -730,21 +1009,40 @@ skip_inject: ;
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
       * (DIGITAL2 << 8) | DIGITAL1: START 0x0008, UP 0x0010, DOWN 0x0040,
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
@@ -1115,7 +1401,7 @@ index 621d53e..bfaacb3 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
-@@ -752,24 +968,47 @@ skip_inject: ;
+@@ -752,24 +1050,47 @@ skip_inject: ;
        }
        if (s_sc && port_no == 0) {
            double now = (double)(GetTickCount64() - t0) / 1000.0;
@@ -1168,7 +1454,7 @@ index 621d53e..bfaacb3 100644
        } }
  
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
-@@ -817,20 +1056,32 @@ skip_inject: ;
+@@ -817,20 +1138,32 @@ skip_inject: ;
       * started -- which can leave the subject of the demo off-screen or too far
       * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
      { static int s_st = -1;
@@ -1211,6 +1497,55 @@ index 621d53e..bfaacb3 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
+@@ -1185,27 +1518,35 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+ 
+     param = GUEST_PTR(param, CellPadActParam*);
+ 
++    const u8 small_on = param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL];
++    const u8 large    = param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE];
++    { static int log = -1; if (log < 0) log = getenv("PS3_RUMBLE_LOG") ? 1 : 0;
++      if (log) fprintf(stderr, "[cellPad] SetActDirect port %u: small %u, large %u\n",
++                       port_no, small_on, large); }
++    if (port_no >= PAD_MAX_HOST_PORTS)
++        return CELL_OK;
++
++    u16 lo, hi;
++    pad_rumble_levels(small_on, large, pad_rumble_strength(), &lo, &hi);
++    PadRumble* r = &s_rumble[port_no];
++    const int changed = r->lo != lo || r->hi != hi;
++    r->lo = lo;
++    r->hi = hi;
++
+ #if PAD_BACKEND_XINPUT
+-    /* Map to XInput vibration */
+-    if (port_no < PAD_MAX_HOST_PORTS && s_host_state[port_no].connected) {
++    /* XInput keeps the motors at what they were last set to: no renewal. */
++    if (changed && s_host_state[port_no].connected) {
+         XINPUT_VIBRATION vib;
+-        vib.wLeftMotorSpeed  = (WORD)(param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] * 257);
+-        vib.wRightMotorSpeed = (WORD)(param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] * 257);
++        vib.wLeftMotorSpeed  = (WORD)lo;
++        vib.wRightMotorSpeed = (WORD)hi;
+         XInputSetState((DWORD)port_no, &vib);
+     }
+ #endif
+ 
+ #if PAD_BACKEND_SDL2
+-    if (port_no < PAD_MAX_HOST_PORTS && s_sdl_controllers[port_no]) {
+-        SDL_GameControllerRumble(
+-            s_sdl_controllers[port_no],
+-            (Uint16)(param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] * 257),
+-            (Uint16)(param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] * 257),
+-            100 /* duration ms */
+-        );
+-    }
++    if (changed) pad_sdl_rumble_send((int)port_no);
+ #endif
+-
++    (void)changed;
+     return CELL_OK;
+ }
+ 
 diff --git a/libs/input/pad_input_map.h b/libs/input/pad_input_map.h
 new file mode 100644
 index 0000000..7f49ca3
@@ -2068,6 +2403,97 @@ index 0000000..114a032
 +    test_mapped_layout();
 +    test_sdl_triggers();
 +    printf("test_pad_keymap: ok\n");
++    return 0;
++}
+diff --git a/libs/input/tests/test_pad_rumble.c b/libs/input/tests/test_pad_rumble.c
+new file mode 100644
+index 0000000..9ebcfd9
+--- /dev/null
++++ b/libs/input/tests/test_pad_rumble.c
+@@ -0,0 +1,85 @@
++/* cellPadSetActDirect -> host rumble: PS3_RUMBLE / PS3_RUMBLE_STRENGTH, the
++ * motor levels, and the per-port state the pad poll renews.
++ *
++ *   cc -std=gnu17 -I include -isystem /opt/homebrew/include \
++ *      -isystem /opt/homebrew/include/SDL2 libs/input/tests/test_pad_rumble.c \
++ *      -L /opt/homebrew/lib -lSDL2 -o /tmp/test_pad_rumble && /tmp/test_pad_rumble
++ * (No controller is opened: the state is checked, nothing vibrates.)
++ */
++#include "../cellPad.c"
++#include <assert.h>
++#include <sys/mman.h>
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++
++static void test_strength(void)
++{
++    assert(pad_rumble_strength_from(NULL, NULL) == 100);
++    assert(pad_rumble_strength_from("1", NULL) == 100);
++    assert(pad_rumble_strength_from("0", NULL) == 0);
++    assert(pad_rumble_strength_from("0", "80") == 0);    /* off wins */
++    assert(pad_rumble_strength_from(NULL, "50") == 50);
++    assert(pad_rumble_strength_from(NULL, "0") == 0);
++    assert(pad_rumble_strength_from(NULL, "250") == 200);
++    assert(pad_rumble_strength_from(NULL, "-3") == 0);
++    assert(pad_rumble_strength_from(NULL, "abc") == 100);
++    assert(pad_rumble_strength_from(NULL, "") == 100);
++}
++
++static void test_levels(void)
++{
++    u16 lo, hi;
++    pad_rumble_levels(0, 0, 100, &lo, &hi);   assert(lo == 0 && hi == 0);
++    pad_rumble_levels(1, 255, 100, &lo, &hi); assert(lo == 65535 && hi == 65535);
++    pad_rumble_levels(1, 0, 100, &lo, &hi);   assert(lo == 0 && hi == 65535);  /* small motor is on/off */
++    pad_rumble_levels(255, 0, 100, &lo, &hi); assert(hi == 65535);            /* any non-zero is on */
++    pad_rumble_levels(1, 128, 50, &lo, &hi);  assert(lo == 16448 && hi == 32767);
++    pad_rumble_levels(0, 100, 200, &lo, &hi); assert(lo == 51400 && hi == 0);
++    pad_rumble_levels(1, 255, 200, &lo, &hi); assert(lo == 65535 && hi == 65535); /* capped */
++    pad_rumble_levels(1, 255, 0, &lo, &hi);   assert(lo == 0 && hi == 0);
++}
++
++static void test_set_act_direct(void)
++{
++    vm_base = mmap(NULL, 0x10000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    assert(vm_base != MAP_FAILED);
++    s_pad_initialized = 1;
++    CellPadActParam* p = (CellPadActParam*)(vm_base + 0x100);
++    const uintptr_t ea = 0x100;
++
++    p->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = 1;
++    p->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = 200;
++    assert(cellPadSetActDirect(0, (CellPadActParam*)ea) == CELL_OK);
++    assert(s_rumble[0].lo == 200 * 257 && s_rumble[0].hi == 65535);
++    assert(s_rumble[0].sent_ms == 0);     /* no controller open: nothing sent, nothing to renew */
++
++    p->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = 0;
++    p->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = 0;
++    assert(cellPadSetActDirect(0, (CellPadActParam*)ea) == CELL_OK);
++    assert(s_rumble[0].lo == 0 && s_rumble[0].hi == 0);
++
++    assert(cellPadSetActDirect(5, (CellPadActParam*)ea) == CELL_OK);   /* a port with no host pad */
++    assert(cellPadSetActDirect(CELL_PAD_MAX_PORT_NUM, (CellPadActParam*)ea) == (s32)CELL_PAD_ERROR_INVALID_PARAMETER);
++    assert(cellPadSetActDirect(0, NULL) == (s32)CELL_PAD_ERROR_INVALID_PARAMETER);
++    s_pad_initialized = 0;
++    assert(cellPadSetActDirect(0, (CellPadActParam*)ea) == (s32)CELL_PAD_ERROR_NOT_OPENED);
++}
++
++int main(void)
++{
++    unsetenv("PS3_RUMBLE");
++    unsetenv("PS3_RUMBLE_STRENGTH");
++    test_strength();
++    test_levels();
++    test_set_act_direct();
++    printf("test_pad_rumble: ok\n");
 +    return 0;
 +}
 diff --git a/libs/misc/cellAvconfExt.c b/libs/misc/cellAvconfExt.c
@@ -5900,10 +6326,10 @@ index 7161c4e..830f0a7 100644
   * Useful for disassembly/logging. */
  const char* rsx_fp_opcode_name(u32 opcode);
 diff --git a/libs/video/rsx_metal_backend.h b/libs/video/rsx_metal_backend.h
-index aee795c..2d8b1f9 100644
+index aee795c..5845a3f 100644
 --- a/libs/video/rsx_metal_backend.h
 +++ b/libs/video/rsx_metal_backend.h
-@@ -36,6 +36,32 @@ int  rsx_metal_backend_pump_messages(void);
+@@ -36,6 +36,39 @@ int  rsx_metal_backend_pump_messages(void);
   * RSX clear method, then hand it to the compositor. */
  void rsx_metal_backend_present(void);
  
@@ -5922,6 +6348,13 @@ index aee795c..2d8b1f9 100644
 + *       resolution by default), shrunk to fit the screen.
 + *   PS3_WINDOW_ICON=<file>|game|none   the Dock / app switcher icon: an image
 + *       file, or "game" for $PS3_VFS_ROOT/PS3_GAME/ICON0.PNG (none by default).
++ *   PS3_DISPLAY=<n>|<name>    the screen it opens on (and fullscreen or
++ *       borderless covers): 1 = the one with the menu bar, 2 = the next in the
++ *       system's order, or a screen's name (exact, any case, or a part of
++ *       it). The main screen when unset or not found.
++ *   PS3_VSYNC=0               present without waiting for the screen's
++ *       refresh (CAMetalLayer displaySyncEnabled off); the game's frame pacing
++ *       comes from the host's vblank clock and does not change.
 + *   PS3_MOUSE_CAPTURE=0       the mouse camera works without capturing the
 + *       cursor (the old behaviour); there is no capture with PS3_MOUSE=0.
 + *       [mouse] capture / camera in PS3_INPUT_MAP do the same when the
@@ -5937,7 +6370,7 @@ index aee795c..2d8b1f9 100644
  
  /* The clear colour most recently set via NV4097_SET_COLOR_CLEAR_VALUE, in the
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..6795151 100644
+index 98db285..37a8f7c 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -48,11 +48,18 @@
@@ -6065,7 +6498,7 @@ index 98db285..6795151 100644
  /* ---- vertex layout ----------------------------------------------------------
   * Every draw carries all 16 RSX vertex attributes as float4, fetched on the
   * CPU by rsx_fetch_attrib: 256 bytes per vertex, attribute i at offset i*16.
-@@ -460,13 +559,216 @@ static int create_offscreen(void)
+@@ -460,13 +559,269 @@ static int create_offscreen(void)
  }
  
  #if !TARGET_OS_IPHONE
@@ -6235,6 +6668,58 @@ index 98db285..6795151 100644
 +    [NSApp setApplicationIconImage:img];
 +}
 +
++/* PS3_DISPLAY=<n>|<name>: the screen the window opens on, and so the one
++ * fullscreen and borderless cover. <n> counts from 1 in the system's order
++ * (1 = the screen with the menu bar); a name is matched against the screens'
++ * names as System Settings shows them ("Built-in Retina Display", "DELL
++ * U2720Q"): exactly, then ignoring case, then as a part of one. Unset, or a
++ * screen that is not there: the main screen, as before. */
++static NSScreen* wm_pick_screen(const char** why)
++{
++    NSArray<NSScreen*>* screens = [NSScreen screens];
++    NSScreen* fallback = [NSScreen mainScreen];
++    const char* e = getenv("PS3_DISPLAY");
++    *why = "main screen";
++    if (!e || !*e || !screens.count) return fallback;
++    char* end = NULL;
++    const long k = strtol(e, &end, 10);
++    if (end != e && *end == 0) {
++        if (k >= 1 && k <= (long)screens.count) { *why = "PS3_DISPLAY"; return screens[(NSUInteger)(k - 1)]; }
++        fprintf(stderr, "[RSX metal] PS3_DISPLAY=%s: there are %lu screen(s), using the main one\n",
++                e, (unsigned long)screens.count);
++        return fallback;
++    }
++    if (@available(macOS 10.15, *)) {
++        NSString* want = [NSString stringWithUTF8String:e];
++        for (int pass = 0; want && pass < 3; pass++)
++            for (NSScreen* sc in screens) {
++                NSString* n = sc.localizedName;
++                if (!n) continue;
++                if ((pass == 0 && [n isEqualToString:want]) ||
++                    (pass == 1 && [n caseInsensitiveCompare:want] == NSOrderedSame) ||
++                    (pass == 2 && [n rangeOfString:want options:NSCaseInsensitiveSearch].location != NSNotFound)) {
++                    *why = "PS3_DISPLAY";
++                    return sc;
++                }
++            }
++        fprintf(stderr, "[RSX metal] PS3_DISPLAY=%s: no such screen, using the main one. Screens:\n", e);
++        int i = 1;
++        for (NSScreen* sc in screens)
++            fprintf(stderr, "[RSX metal]   %d: %s\n", i++, sc.localizedName ? [sc.localizedName UTF8String] : "?");
++    } else {
++        fprintf(stderr, "[RSX metal] PS3_DISPLAY=%s: names need macOS 10.15; give a number\n", e);
++    }
++    return fallback;
++}
++
++static const char* wm_screen_name(NSScreen* scr)
++{
++    if (@available(macOS 10.15, *)) {
++        if (scr && scr.localizedName) return [scr.localizedName UTF8String];
++    }
++    return "?";
++}
++
  static int create_window_impl(const char* title)
  {
      [NSApplication sharedApplication];
@@ -6269,7 +6754,8 @@ index 98db285..6795151 100644
 +              fprintf(stderr, "[RSX metal] PS3_WINDOW_SIZE=%s: expected <width>x<height>\n", e);
 +          }
 +      } }
-+    NSScreen* scr = [NSScreen mainScreen];
++    const char* scr_why = "";
++    NSScreen* scr = wm_pick_screen(&scr_why);
 +    if (scr) {
 +        const NSRect vis = [NSWindow contentRectForFrameRect:[scr visibleFrame]
 +                                                   styleMask:NSWindowStyleMaskTitled];
@@ -6284,7 +6770,7 @@ index 98db285..6795151 100644
          initWithContentRect:frame
                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                               NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
-@@ -475,20 +777,43 @@ static int create_window_impl(const char* title)
+@@ -475,20 +830,60 @@ static int create_window_impl(const char* title)
      if (!s_window) return -1;
  
      [s_window setTitle:[NSString stringWithUTF8String:(title ? title : "ps3recomp")]];
@@ -6294,6 +6780,13 @@ index 98db285..6795151 100644
 +    [s_window setContentMinSize:NSMakeSize(320, 180)];
 +    [s_window setBackgroundColor:[NSColor blackColor]];
      [s_window center];
++    /* center goes by the main screen; put it in the middle of the chosen one
++     * (fullscreen and borderless then cover that screen). */
++    if (scr && scr != [s_window screen]) {
++        const NSRect vf = [scr visibleFrame], wf = [s_window frame];
++        [s_window setFrameOrigin:NSMakePoint(floor(NSMidX(vf) - wf.size.width / 2),
++                                             floor(NSMidY(vf) - wf.size.height / 2))];
++    }
 +    s_win_delegate = [PS3RecompWindowDelegate new];
 +    [s_window setDelegate:s_win_delegate];
  
@@ -6304,6 +6797,15 @@ index 98db285..6795151 100644
      s_layer.drawableSize    = CGSizeMake((CGFloat)s_width, (CGFloat)s_height);
 +    s_layer.contentsGravity = kCAGravityResizeAspect;
 +    s_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
++    /* PS3_VSYNC=0: present as soon as a frame is ready instead of at the
++     * screen's next refresh (lower latency; may tear in fullscreen). The
++     * game's own 30/60 fps pacing does not depend on this: it runs off the
++     * host's vblank clock (frame_clock in the port's main.cpp), never off
++     * when a drawable reaches the screen. */
++    int vsync = 1;
++    { const char* e = getenv("PS3_VSYNC");
++      if (e && *e) vsync = !(e[0] == '0' && e[1] == 0); }
++    if (@available(macOS 10.13, *)) s_layer.displaySyncEnabled = vsync ? YES : NO;
  
      NSView* view = [s_window contentView];
      [view setWantsLayer:YES];
@@ -6320,15 +6822,16 @@ index 98db285..6795151 100644
 +        dispatch_async(dispatch_get_main_queue(), ^{
 +            if (s_window && !wm_native_fullscreen()) [s_window toggleFullScreen:nil];
 +        });
-+    fprintf(stderr, "[RSX metal] window %.0fx%.0f, %s; Cmd+F / Option+Return: fullscreen, "
-+                    "Cmd+Ctrl+F: macOS fullscreen%s\n", cw, ch,
++    fprintf(stderr, "[RSX metal] window %.0fx%.0f, %s on \"%s\" (%s), vsync %s; Cmd+F / Option+Return: "
++                    "fullscreen, Cmd+Ctrl+F: macOS fullscreen%s\n", cw, ch,
 +            mode == WM_FULLSCREEN ? "fullscreen" : mode == WM_BORDERLESS ? "borderless" : "windowed",
++            wm_screen_name(scr), scr_why, vsync ? "on" : "off",
 +            s_cap_on ? "; click captures the mouse, Esc or Cmd releases it" : "");
 +    fps_start();
      return 0;
  }
  
-@@ -742,6 +1067,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
+@@ -742,6 +1137,23 @@ static int vp_slot_for(const rsx_state* st, u32 vtex_mask)
   * and sampled with a direction rather than a 2D coordinate, so it changes the
   * compiled program and belongs in the key -- the D3D12 backend's PSO key
   * carries cube_mask for the same reason. */
@@ -6352,7 +6855,7 @@ index 98db285..6795151 100644
  static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
  {
      if (!vm_base || st->shader_program == 0) return -1;
-@@ -752,6 +1094,8 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -752,6 +1164,8 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
  
      u64 key = rsx_fp_structural_hash(*uc, MTL_FP_MAX_BYTES, 1469598103934665603ull);
      if (!key) return -1;                    /* malformed or unterminated */
@@ -6361,7 +6864,7 @@ index 98db285..6795151 100644
      const u32 ctrl      = st->shader_control;
      const u32 ctrl_key  = ctrl & CELL_GCM_SHADER_CONTROL_32_BITS_EXPORTS;
      const u32 alpha_en  = (st->alpha_test_enable && st->alpha_func != 0x0207u) ? 1u : 0u;
-@@ -761,15 +1105,20 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -761,15 +1175,20 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
      key = fnv1a64(&alpha_fn, sizeof alpha_fn, key);
      key = fnv1a64(&cube_mask, sizeof cube_mask, key);
  
@@ -6386,7 +6889,7 @@ index 98db285..6795151 100644
      if (ni > 0 && alpha_en &&
          rsx_fp_apply_alpha_test_buffered(s_hlsl, sizeof s_hlsl, st->alpha_func) < 0)
          ni = -1;
-@@ -793,13 +1142,14 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
+@@ -793,13 +1212,14 @@ static int fp_slot_for(const rsx_state* st, const u8** uc, u32 cube_mask)
      { static int n = 0; if (n++ < 32)
          fprintf(stderr, "[RSX metal] fragment program %016llX: %d instrs, %u constants -> %s\n",
                  (unsigned long long)key, ni, nconst,
@@ -6403,7 +6906,7 @@ index 98db285..6795151 100644
  }
  
  /* Reserve `bytes` of constant staging at a 256-byte boundary. */
-@@ -828,24 +1178,27 @@ static int cb_alloc(u32 bytes, u32* off)
+@@ -828,24 +1248,27 @@ static int cb_alloc(u32 bytes, u32* off)
   * outputs do not link with the built-in fragment shader's inputs. */
  static int guest_programs_for(const rsx_state* st, MtlDraw* d)
  {
@@ -6436,7 +6939,7 @@ index 98db285..6795151 100644
  
      /* VPConst: the 512 transform constants, then the viewport epilogue
       * (see the D3D12 backend's vp_record_cb): x/y identity, and the z lane
-@@ -1581,7 +1934,8 @@ static void record_draw(const rsx_state* st, u32 prim, u32 base, u32 count,
+@@ -1581,7 +2004,8 @@ static void record_draw(const rsx_state* st, u32 prim, u32 base, u32 count,
       * drops to the built-in shader must still fetch its vertices the same
       * way. Constant staging reserved here for a draw that then fails on
       * vertices is simply left unused until the frame resets it. */
@@ -6446,7 +6949,7 @@ index 98db285..6795151 100644
      if (guest) textures_for(st, d);
  
      u32 first_vert = s_vert_count;
-@@ -2061,6 +2415,13 @@ static void release_surfaces(void)
+@@ -2061,6 +2485,13 @@ static void release_surfaces(void)
  static u32 s_eng_obj_free[ENG_MAX_OBJECTS];
  static u32 s_eng_obj_free_count;
  static u8 s_eng_obj_retired[ENG_MAX_OBJECTS];
@@ -6460,7 +6963,7 @@ index 98db285..6795151 100644
  
  typedef struct {
      id<MTLRenderPipelineState> pso;
-@@ -2089,7 +2450,7 @@ static void release_surfaces(void)
+@@ -2089,7 +2520,7 @@ static void release_surfaces(void)
  
  typedef enum {
      ENG_REC_DRAW, ENG_REC_CLEAR_COLOR, ENG_REC_CLEAR_DS, ENG_REC_DEPTH_RESOLVE,
@@ -6469,7 +6972,7 @@ index 98db285..6795151 100644
  } EngRecKind;
  
  typedef struct {
-@@ -2102,6 +2463,7 @@ static void release_surfaces(void)
+@@ -2102,6 +2533,7 @@ static void release_surfaces(void)
      u32 pipeline;
      MTLPrimitiveType topology;
      u32 vb_off, stride, vertex_count;
@@ -6477,7 +6980,7 @@ index 98db285..6795151 100644
      u32 ib_off, index_count;
      u32 vs_cb_off, vs_cb_bytes;
      float vs_xf[8];             /* VPXform (buffer 2): vp_posscale, vp_posoffset */
-@@ -2174,6 +2536,14 @@ static void release_surfaces(void)
+@@ -2174,6 +2606,14 @@ static void release_surfaces(void)
  "                            sampler s [[sampler(0)]]) {\n"
  "    return src.sample(s, i.uv);\n"
  "}\n"
@@ -6492,7 +6995,7 @@ index 98db285..6795151 100644
  "fragment float eng_depth_fs(BOut i [[stage_in]],\n"
  "                            depth2d<float> src [[texture(0)]],\n"
  "                            sampler s [[sampler(0)]]) {\n"
-@@ -2181,10 +2551,228 @@ static void release_surfaces(void)
+@@ -2181,10 +2621,228 @@ static void release_surfaces(void)
  "}\n"
  "fragment float4 eng_depth_rgba8_fs(BOut i [[stage_in]],\n"
  "                                   depth2d<float> src [[texture(0)]],\n"
@@ -6723,7 +7226,7 @@ index 98db285..6795151 100644
  
  static u32 eng_obj_add(id<MTLTexture> t)
  {
-@@ -2211,6 +2799,8 @@ static u32 eng_obj_add(id<MTLTexture> t)
+@@ -2211,6 +2869,8 @@ static u32 eng_obj_add(id<MTLTexture> t)
  static void eng_collect_retired_objects(void)
  {
      if (s_eng_rec_count) return;
@@ -6732,7 +7235,7 @@ index 98db285..6795151 100644
      for (u32 i = 0; i < s_eng_obj_count; ++i) {
          if (!s_eng_obj_retired[i]) continue;
          s_eng_obj_retired[i] = 0;
-@@ -2360,9 +2950,11 @@ static void eng_shutdown(void* user)
+@@ -2360,9 +3020,11 @@ static void eng_shutdown(void* user)
      s_eng_active = 0;
  }
  
@@ -6745,7 +7248,7 @@ index 98db285..6795151 100644
      eng_encode_and_commit(nil);
  }
  
-@@ -2405,6 +2997,43 @@ static void eng_texture_upload(void* user, u32 handle, u32 face, u32 mip,
+@@ -2405,6 +3067,43 @@ static void eng_texture_upload(void* user, u32 handle, u32 face, u32 mip,
         bytesPerImage:0];
  }
  
@@ -6789,7 +7292,7 @@ index 98db285..6795151 100644
  static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
                                     const void* seed, u32 seed_row_bytes)
  {
-@@ -2465,8 +3094,10 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
+@@ -2465,8 +3164,10 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
                                                             width:w height:h
                                                         mipmapped:NO];
      /* ShaderRead as well as RenderTarget: depth-as-texture resolves through a
@@ -6802,7 +7305,7 @@ index 98db285..6795151 100644
      td.storageMode = MTLStorageModePrivate;
      return eng_obj_add([s_dev newTextureWithDescriptor:td]);
  }
-@@ -2556,6 +3187,125 @@ static u32 eng_color_snapshot(void* user, u32 surface)
+@@ -2556,6 +3257,125 @@ static u32 eng_color_snapshot(void* user, u32 surface)
      return dst;
  }
  
@@ -6928,7 +7431,7 @@ index 98db285..6795151 100644
  static u32 eng_depth_snapshot_rgba8(void* user, u32 depth, u32 w, u32 h)
  {
      (void)user;
-@@ -2727,17 +3477,42 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -2727,17 +3547,42 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      if ((rs->color_mask >>  8) & 0xFF) wm |= MTLColorWriteMaskGreen;
      if ((rs->color_mask >> 16) & 0xFF) wm |= MTLColorWriteMaskRed;
      if ((rs->color_mask >> 24) & 0xFF) wm |= MTLColorWriteMaskAlpha;
@@ -6979,7 +7482,7 @@ index 98db285..6795151 100644
              ca.blendingEnabled             = YES;
              ca.sourceRGBBlendFactor        = blend_factor_to_metal(rs->sf_rgb);
              ca.destinationRGBBlendFactor   = blend_factor_to_metal(rs->df_rgb);
-@@ -2999,6 +3774,51 @@ static void eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2999,6 +3844,51 @@ static void eng_draw(void* user, rsx_topology topology, const void* vertices,
      r->kind         = ENG_REC_DRAW;
      r->topology     = topo_to_metal(topology);
      r->vb_off       = vb_off;
@@ -7031,7 +7534,7 @@ index 98db285..6795151 100644
      r->stride       = stride;
      r->vertex_count = vertex_count;
      r->ib_off       = ib_off;
-@@ -3068,10 +3888,130 @@ static void eng_bound_reset(void)
+@@ -3068,10 +3958,130 @@ static void eng_bound_reset(void)
  }
  #define ENG_PTR(o) ((__bridge const void*)(o))
  
@@ -7162,7 +7665,7 @@ index 98db285..6795151 100644
      /* PS3RECOMP_METAL_SKIP_PIPE=a,b,...: drop draws using those pipelines
       * (pass-log p= numbers) to bisect which pass breaks an image. */
      { static u32 skip[16]; static int nskip = -1;
-@@ -3105,7 +4045,15 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+@@ -3105,7 +4115,15 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
          if (!b->have_sc || memcmp(&b->sc, &sc, sizeof sc)) { [enc setScissorRect:sc]; b->sc = sc; b->have_sc = 1; }
      }
      /* Same buffer, new offset: setVertexBufferOffset is the cheap form. */
@@ -7179,7 +7682,7 @@ index 98db285..6795151 100644
          [enc setVertexBuffer:stage offset:r->vb_off atIndex:MTL_VB_INDEX];
          b->buf[0] = ENG_PTR(stage); b->buf_off[0] = r->vb_off;
      } else if (b->buf_off[0] != r->vb_off) {
-@@ -3131,9 +4079,37 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+@@ -3131,9 +4149,37 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
              [enc setFragmentBufferOffset:r->ps_cb_off atIndex:1]; b->fbuf_off = r->ps_cb_off;
          }
      }
@@ -7217,7 +7720,7 @@ index 98db285..6795151 100644
          id<MTLSamplerState> sm = r->samp[u] >= 0 ? s_eng_samp[r->samp[u]].samp : s_default_sampler;
          if (b->ftex[u] != ENG_PTR(t)) { [enc setFragmentTexture:t atIndex:(NSUInteger)u]; b->ftex[u] = ENG_PTR(t); }
          if (b->fsamp[u] != ENG_PTR(sm)) { [enc setFragmentSamplerState:sm atIndex:(NSUInteger)u]; b->fsamp[u] = ENG_PTR(sm); }
-@@ -3201,24 +4177,116 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
+@@ -3201,24 +4247,116 @@ static int eng_record_targets_are(const EngRecord* r, const u32* rt, u32 nrt)
      return 1;
  }
  
@@ -7334,7 +7837,7 @@ index 98db285..6795151 100644
          if (s_eng_rec[i].kind == ENG_REC_DEPTH_RESOLVE) {
              const EngRecord* r = &s_eng_rec[i++];
              id<MTLTexture> src = eng_obj(r->depth);
-@@ -3231,8 +4299,20 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3231,8 +4369,20 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              rp.colorAttachments[0].storeAction = MTLStoreActionStore;
              id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
              if (!e) continue;
@@ -7355,7 +7858,7 @@ index 98db285..6795151 100644
              [e setFragmentSamplerState:s_eng_point_sampler atIndex:0];
              [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
              [e endEncoding];
-@@ -3243,6 +4323,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3243,6 +4393,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
           * surface and an MRT set arrives as one clear per target, so they are
           * collected rather than compared: they become load actions on the
           * pass below when the draw that follows writes the same targets. */
@@ -7363,7 +7866,7 @@ index 98db285..6795151 100644
          u32 n_cc = 0;
          u32 cc_surf[RSX_BE_MAX_COLOR_TARGETS];
          float cc_rgba[RSX_BE_MAX_COLOR_TARGETS][4];
-@@ -3252,7 +4333,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3252,7 +4403,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
          u8 cstencil = 0;
          while (i < s_eng_rec_count && s_eng_rec[i].kind != ENG_REC_DRAW &&
                 s_eng_rec[i].kind != ENG_REC_DEPTH_RESOLVE &&
@@ -7374,7 +7877,7 @@ index 98db285..6795151 100644
              const EngRecord* r = &s_eng_rec[i];
              if (r->kind == ENG_REC_CLEAR_COLOR) {
                  u32 k = 0;
-@@ -3281,6 +4364,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3281,6 +4434,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
          u32 nrt = n_cc;
          for (u32 k = 0; k < n_cc; k++) rt[k] = cc_surf[k];
          u32 depth = have_clear_ds ? cd : 0;
@@ -7382,7 +7885,7 @@ index 98db285..6795151 100644
          if (i < s_eng_rec_count && s_eng_rec[i].kind == ENG_REC_DRAW &&
              (!have_clear_ds || s_eng_rec[i].depth == cd)) {
              const EngRecord* d = &s_eng_rec[i];
-@@ -3292,12 +4376,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3292,12 +4446,23 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
                  covered = found;
              }
              if (covered) {
@@ -7406,7 +7909,7 @@ index 98db285..6795151 100644
          /* Metal wants every attachment the same size, and the engine registers
           * an MRT set's members at target A's, so a set whose members disagree
           * is one this frame cannot honour: it stops at the gap, as the vtable
-@@ -3364,6 +4459,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3364,6 +4529,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              continue;
          }
          eng_bound_reset();
@@ -7414,7 +7917,7 @@ index 98db285..6795151 100644
          while (i < s_eng_rec_count && s_eng_rec[i].kind == ENG_REC_DRAW &&
                 eng_record_targets_are(&s_eng_rec[i], rt, nrt) &&
                 (s_eng_rec[i].depth == depth ||
-@@ -3385,7 +4481,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -3385,7 +4551,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
      if (!s_eng_blit_pso || s_eng_blit_pso_fmt != [dst pixelFormat]) {
          MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
          pd.vertexFunction   = [s_eng_helper_lib newFunctionWithName:@"eng_fullscreen_vs"];
@@ -7423,7 +7926,7 @@ index 98db285..6795151 100644
          pd.colorAttachments[0].pixelFormat = [dst pixelFormat];
          NSError* err = nil;
          s_eng_blit_pso = [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
-@@ -3405,6 +4501,11 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -3405,6 +4571,11 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
      [e setRenderPipelineState:s_eng_blit_pso];
      [e setFragmentTexture:src atIndex:0];
      [e setFragmentSamplerState:s_eng_point_sampler atIndex:0];
@@ -7435,7 +7938,7 @@ index 98db285..6795151 100644
      [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
      [e endEncoding];
  }
-@@ -3447,10 +4548,20 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3447,10 +4618,20 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
      @autoreleasepool {
          id<CAMetalDrawable> drawable = nil;
          id<MTLTexture> dst = nil;
@@ -7458,7 +7961,7 @@ index 98db285..6795151 100644
          if (present_dst) {
              if (s_headless) {
                  dst = s_offscreen;
-@@ -3471,16 +4582,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3471,16 +4652,37 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          /* PS3RECOMP_METAL_PASS_LOG=1: every 600th present, print the frame's
           * record stream grouped into passes (kind, targets, depth, count, and
           * the textures the first draw samples). */
@@ -7500,7 +8003,7 @@ index 98db285..6795151 100644
                      fprintf(stderr, "[pass] %5u x%-4u kind=%d rt=", i, j - i, (int)r->kind);
                      for (u32 k = 0; k < r->nrt; k++) fprintf(stderr, "%s%u", k ? "," : "", r->rt[k]);
                      fprintf(stderr, " depth=%u", r->depth);
-@@ -3498,12 +4630,14 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3498,12 +4700,14 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
                      i = j;
                  }
              }
@@ -7517,7 +8020,7 @@ index 98db285..6795151 100644
          if (windowed_present) { pt1 = eng_pt_now(); s_pt_ns[2] += pt1 - pt; pt = pt1; }
          if (windowed_present) {
              dispatch_semaphore_t sem = s_inflight;
-@@ -3519,8 +4653,27 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -3519,8 +4723,27 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
              s_pt_n++;
              eng_pt_report();
          } else {
@@ -7545,7 +8048,7 @@ index 98db285..6795151 100644
          }
  
  
-@@ -3550,7 +4703,7 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -3550,7 +4773,7 @@ static void eng_dump_frame(id<MTLTexture> src)
      if (!w || !h || w > 16384 || h > 16384) return;
      unsigned char* rgba = malloc(w * h * 4);
      if (!rgba) return;
@@ -7554,7 +8057,7 @@ index 98db285..6795151 100644
          id<MTLCommandBuffer> fence = [s_queue commandBuffer];
          [fence commit];
          [fence waitUntilCompleted];
-@@ -3580,7 +4733,11 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -3580,7 +4803,11 @@ static void eng_dump_frame(id<MTLTexture> src)
              fwrite(rgb, 1, 3, f);
          }
          fclose(f);
@@ -7567,7 +8070,7 @@ index 98db285..6795151 100644
      }
      free(rgba);
  }
-@@ -3596,14 +4753,30 @@ static float eng_half_to_float(uint16_t h)
+@@ -3596,14 +4823,30 @@ static float eng_half_to_float(uint16_t h)
      else f = (s << 31) | ((e + 112) << 23) | (m << 13);
      float r; memcpy(&r, &f, 4); return r;
  }
@@ -7600,7 +8103,7 @@ index 98db285..6795151 100644
      for (u32 h = 1; h <= s_eng_obj_count; ++h) {
          id<MTLTexture> t = s_eng_obj[h - 1];
          /* PS3RECOMP_METAL_SURF_DUMP_EXTRA=h,h,...: also dump these handles even if
-@@ -3672,9 +4845,17 @@ static void eng_present(void* user, u32 surface)
+@@ -3672,9 +4915,17 @@ static void eng_present(void* user, u32 surface)
      const u32 nrec = s_eng_rec_count;
      eng_encode_and_commit(src);
      eng_dump_frame(src);
@@ -7619,7 +8122,7 @@ index 98db285..6795151 100644
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
                           void* out, u32 out_pitch)
  {
-@@ -3682,6 +4863,14 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3682,6 +4933,14 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      id<MTLTexture> t = eng_obj(surface);
      if (!t || !out || !out_pitch || !w || !h) return;
      if (x + w > [t width] || y + h > [t height]) return;
@@ -7634,7 +8137,7 @@ index 98db285..6795151 100644
      if ([t storageMode] != MTLStorageModePrivate) {
          [t getBytes:out bytesPerRow:out_pitch
           fromRegion:MTLRegionMake2D(x, y, w, h) mipmapLevel:0];
-@@ -3713,6 +4902,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3713,6 +4972,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .texture_create       = eng_texture_create,
      .texture_upload       = eng_texture_upload,
      .texture_release      = eng_obj_release,
@@ -7643,7 +8146,7 @@ index 98db285..6795151 100644
      .color_target_create  = eng_color_target_create,
      .color_target_release = eng_obj_release,
      .surface_view         = eng_surface_view,
-@@ -3721,6 +4912,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3721,6 +4982,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .depth_snapshot       = eng_depth_snapshot,
      .color_snapshot       = eng_color_snapshot,
      .depth_snapshot_rgba8 = eng_depth_snapshot_rgba8,
@@ -7652,7 +8155,7 @@ index 98db285..6795151 100644
      .pipeline_create      = eng_pipeline_create,
      .pipeline_release     = eng_pipeline_release,
      .bind_targets         = eng_bind_targets,
-@@ -3734,6 +4927,9 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3734,6 +4997,9 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .set_scissor          = eng_set_scissor,
      .set_stencil_ref      = eng_set_stencil_ref,
      .draw                 = eng_draw,
@@ -7662,7 +8165,7 @@ index 98db285..6795151 100644
      .clear_color          = eng_clear_color,
      .clear_depth_stencil  = eng_clear_depth_stencil,
      .present              = eng_present,
-@@ -3853,6 +5049,12 @@ void rsx_metal_backend_shutdown(void)
+@@ -3853,6 +5119,12 @@ void rsx_metal_backend_shutdown(void)
              s_inflight = nil;
          }
  #if !TARGET_OS_IPHONE
@@ -7675,7 +8178,7 @@ index 98db285..6795151 100644
          if (s_window) { [s_window close]; s_window = nil; }
  #endif
          free(s_verts); s_verts = NULL;
-@@ -3886,15 +5088,116 @@ static int pump_messages_impl(void)
+@@ -3886,15 +5158,116 @@ static int pump_messages_impl(void)
                                                  inMode:NSDefaultRunLoopMode
                                                 dequeue:YES];
              if (!ev) break;
@@ -7795,7 +8298,7 @@ index 98db285..6795151 100644
                  continue;
              }
              [NSApp sendEvent:ev];
-@@ -3903,8 +5206,16 @@ static int pump_messages_impl(void)
+@@ -3903,8 +5276,16 @@ static int pump_messages_impl(void)
          if (![NSApp isActive]) {
              extern volatile uint32_t g_pad_host_keys[4];
              for (int i = 0; i < 4; i++) g_pad_host_keys[i] = 0;
@@ -7813,7 +8316,7 @@ index 98db285..6795151 100644
      }
  #endif
      return s_closed ? -1 : 0;
-@@ -4011,7 +5322,7 @@ void rsx_metal_backend_present(void)
+@@ -4011,7 +5392,7 @@ void rsx_metal_backend_present(void)
          }
          if (enc) [enc endEncoding];
  
