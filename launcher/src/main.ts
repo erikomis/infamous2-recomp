@@ -16,6 +16,10 @@ interface Settings {
   skipOcclusion: boolean;
   gammaOverride: boolean;
   gamma: number;
+  aniso: number;
+  aa: string;
+  sharpen: number;
+  upscale: string;
   mouse: boolean;
   mouseSens: number;
   mouseInvertY: boolean;
@@ -277,6 +281,7 @@ function bindSettings() {
   bindSelect("display", "windowMode");
   bindSelect("window-size", "windowSize");
   bindRange("gamma", "gamma", (v) => v.toFixed(2));
+  bindGraphics(bindRange);
   bindRange("mouse-sens", "mouseSens", (v) => `${v.toFixed(2)}×`);
   bindRange("mouse-dz", "mouseDeadzone", (v) => String(Math.round(v)));
   bindRange("audio-volume", "audioVolume", (v) => `${Math.round(v)}%`);
@@ -332,6 +337,10 @@ function bindSettings() {
       skipOcclusion: true,
       gammaOverride: false,
       gamma: 1.0,
+      aniso: 0,
+      aa: "",
+      sharpen: 0,
+      upscale: "",
       mouse: true,
       mouseSens: 1.0,
       mouseInvertY: false,
@@ -354,6 +363,22 @@ function bindSettings() {
     location.reload();
   });
   syncDependent();
+}
+
+/** Anisotropic filtering, AA, sharpening and upscaling (PS3_ANISO, PS3_AA,
+ * PS3_SHARPEN, PS3_UPSCALE); Play passes only what differs from the default. */
+function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: number) => string) => void) {
+  for (const [id, key] of [["aniso", "aniso"], ["aa", "aa"], ["upscale", "upscale"]] as const) {
+    const el = $<HTMLSelectElement>(id);
+    el.value = String(settings[key]);
+    if (el.value !== String(settings[key])) el.selectedIndex = 0; // a value the list does not offer
+    el.addEventListener("change", () => {
+      if (key === "aniso") settings.aniso = Number(el.value);
+      else settings[key] = el.value;
+      persist();
+    });
+  }
+  bindRange("sharpen", "sharpen", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
 }
 
 /** The GPU SSAO needs the GPU light pass; gamma/mouse sliders follow their toggles. */

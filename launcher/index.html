@@ -350,6 +350,30 @@
           <label class="check"><input id="gamma-on" type="checkbox" /> <span data-i18n="settings.gamma"></span></label>
           <div class="slider"><input id="gamma" type="range" min="0.8" max="1.2" step="0.01" /><output id="gamma-out"></output></div>
           <p class="hint" data-i18n="settings.gammaHint"></p>
+          <label for="aniso" data-i18n="settings.aniso">Filtragem anisotrópica</label>
+          <select id="aniso">
+            <option value="0" data-i18n="settings.off">Desligado</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+            <option value="8">8×</option>
+            <option value="16">16×</option>
+          </select>
+          <p class="hint" data-i18n="settings.anisoHint"></p>
+          <label for="aa" data-i18n="settings.aa">Antisserrilhamento</label>
+          <select id="aa">
+            <option value="" data-i18n="settings.off">Desligado</option>
+            <option value="fxaa">FXAA</option>
+          </select>
+          <p class="hint" data-i18n="settings.aaHint"></p>
+          <label data-i18n="settings.sharpen">Nitidez</label>
+          <div class="slider"><input id="sharpen" type="range" min="0" max="1" step="0.05" /><output id="sharpen-out"></output></div>
+          <p class="hint" data-i18n="settings.sharpenHint"></p>
+          <label for="upscale" data-i18n="settings.upscale">Ampliação</label>
+          <select id="upscale">
+            <option value="" data-i18n="settings.off">Desligado</option>
+            <option value="metalfx" data-i18n="settings.upscaleMetalfx">MetalFX (macOS)</option>
+          </select>
+          <p class="hint" data-i18n="settings.upscaleHint"></p>
           <label for="display" data-i18n="settings.display">Modo de exibição</label>
           <select id="display">
             <option value="windowed" data-i18n="settings.windowed">Janela</option>
