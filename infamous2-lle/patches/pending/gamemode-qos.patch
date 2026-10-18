@@ -1,20 +1,22 @@
 Toolkit half of feat/game-mode (2026-10-18), not yet folded into
 ../ps3recomp-fork-770660a-with-upstream-prs.patch.
 
-PS3_QOS: guest PPU threads, SPU group threads (lifted and fallback), SPU
-async jobs and interpreted SPU tasks ask for QOS_CLASS_USER_INTERACTIVE at
-their own entry (runtime/platform/host_qos.h). A pthread on macOS starts at
-QOS_CLASS_DEFAULT, not at its creator's class, so nothing else gets them
-there. PPU threads of guest priority >= 1500 (sound-bank loading, motion
-controller, install copy) get USER_INITIATED. PS3_QOS=0 turns it off.
-No-op off Apple.
+PS3_QOS=1 (opt-in): guest PPU threads, SPU group threads (lifted and
+fallback), SPU async jobs and interpreted SPU tasks ask for
+QOS_CLASS_USER_INTERACTIVE at their own entry (runtime/platform/host_qos.h).
+A pthread on macOS starts at QOS_CLASS_DEFAULT, not at its creator's class,
+so nothing else gets them there. PPU threads of guest priority >= 1500
+(sound-bank loading, motion controller, install copy) get USER_INITIATED.
+Off by default: no frame-time gain in a headless A/B, and two of three runs
+with it hung on the frame fence with get == put (ROADMAP, 2026-10-18).
+Without PS3_QOS=1 the patch changes nothing. No-op off Apple.
 
 Apply to a ps3recomp-fork that already has the main patch:
     patch -p1 -d ps3recomp-fork < infamous2-lle/patches/pending/gamemode-qos.patch
 
 --- a/runtime/platform/host_qos.h
 +++ b/runtime/platform/host_qos.h
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,60 @@
 +/*
 + * Host thread QoS for the threads that set the frame rate.
 + *
@@ -29,9 +31,12 @@ Apply to a ps3recomp-fork that already has the main patch:
 + *   interactive != 0  QOS_CLASS_USER_INTERACTIVE  frame-critical work
 + *   interactive == 0  QOS_CLASS_USER_INITIATED    the title's background work
 + *
-+ * PS3_QOS=0 turns it off: every thread keeps the class it started with, as
-+ * before this existed. PS3_HOT_QOS=1 (SetThreadPriority ABOVE_NORMAL on the
-+ * SPU threads and the frame clock) is separate and still works on top.
++ * Opt-in, PS3_QOS=1: without it every thread keeps the class it started
++ * with. In a headless New Marais A/B (2026-10-18, 3 runs per side) it did not
++ * move the frame time (31.0 vs 31.4 ms at 270 s), and two of the three runs
++ * with it hung on the frame fence with get == put (the flip-race signature),
++ * which none of the runs without it did. PS3_HOT_QOS=1 (SetThreadPriority
++ * ABOVE_NORMAL on the SPU threads and the frame clock) is separate.
 + *
 + * A no-op off Apple: Windows has thread priorities (SetThreadPriority, used
 + * where it matters) and Linux has nothing QoS-like to ask for.
@@ -49,7 +54,7 @@ Apply to a ps3recomp-fork that already has the main patch:
 +    static int on = -1;          /* per TU; every copy reads the same variable */
 +    if (on < 0) {
 +        const char* e = getenv("PS3_QOS");
-+        on = !(e && e[0] == '0');
++        on = e && e[0] == '1';
 +    }
 +    return on;
 +}

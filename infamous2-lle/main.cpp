@@ -41,7 +41,7 @@
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #include <pthread.h>
-/* macos_host.m: App Nap off for the run, USER_INTERACTIVE QoS (PS3_QOS=0 off). */
+/* macos_host.m: App Nap off for the run; USER_INTERACTIVE QoS with PS3_QOS=1. */
 extern "C" void infamous2_host_begin_activity(void);
 extern "C" int  infamous2_host_qos_enabled(void);
 extern "C" void infamous2_host_qos_self(void);
@@ -207,7 +207,7 @@ static void present_guest_frame(void)
 
 static DWORD WINAPI frame_clock(LPVOID)
 {
-    /* PS3_QOS: this thread walks the FIFO, encodes the draws and presents --
+    /* PS3_QOS=1: this thread walks the FIFO, encodes the draws and presents --
      * half of every frame. It starts at QOS_CLASS_DEFAULT like any pthread. */
     infamous2_host_qos_self();
     const char* title = getenv("PS3_TITLE");
@@ -383,14 +383,15 @@ int main(int argc, char** argv)
     printf("=== ps3recomp game runner ===\n");
 
     /* Before any thread exists: keep macOS from App-Napping or timer-throttling
-     * the run, and put the main thread (the guest's own when headless) at
-     * USER_INTERACTIVE. The PPU/SPU threads do the same at their entry. */
+     * the run, and with PS3_QOS=1 put the main thread (the guest's own when
+     * headless) at USER_INTERACTIVE; the PPU/SPU threads then do the same at
+     * their entry. */
     infamous2_host_begin_activity();
     infamous2_host_qos_self();
 #if defined(__APPLE__)
     printf("[host] App Nap off; thread QoS %s\n", infamous2_host_qos_enabled()
-           ? "USER_INTERACTIVE for PPU/SPU/RSX threads (PS3_QOS=0 turns it off)"
-           : "left at the system default (PS3_QOS=0)");
+           ? "USER_INTERACTIVE for PPU/SPU/RSX threads (PS3_QOS=1)"
+           : "left at the system default (PS3_QOS=1 raises it)");
 #endif
 
     if (!alloc_guest_vm()) {
