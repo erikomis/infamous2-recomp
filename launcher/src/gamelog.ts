@@ -1,5 +1,5 @@
 // Advanced > Game log: the tail of the log the last game this launcher started
-// wrote (logs/game.log, or the report folder's in diagnostic mode), read by
+// wrote (logs/game.log, or the session folder's in debug mode), read by
 // src-tauri's read_game_log. Followed every 2 s while the tab is open.
 import { invoke } from "@tauri-apps/api/core";
 import { lang, t } from "./i18n";

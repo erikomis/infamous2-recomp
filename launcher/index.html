@@ -450,7 +450,7 @@
           <button class="tab active" data-tab="install" role="tab" data-i18n="tab.install">Instalar / recompilar</button>
           <button class="tab" data-tab="updates" role="tab" data-i18n="update.title">Atualizações</button>
           <button class="tab" data-tab="log" role="tab" data-i18n="tab.log">Log do jogo</button>
-          <button class="tab" data-tab="diagnostics" role="tab" data-i18n="report.title">Reportar um problema</button>
+          <button class="tab" data-tab="diagnostics" role="tab" data-i18n="report.title">Modo de depuração</button>
           <button class="tab" data-tab="env" role="tab" data-i18n="tab.env">Ambiente</button>
         </div>
 
@@ -636,29 +636,34 @@
           <p id="glog-state" class="small muted"></p>
         </div>
 
-        <!-- Report a problem -->
+        <!-- Debug mode (report a problem) -->
         <div id="tab-diagnostics" class="tab-panel">
           <div class="card" id="report-card">
-            <h3 class="card-title" data-i18n="report.title">Reportar um problema</h3>
+            <h3 class="card-title" data-i18n="report.title">Modo de depuração</h3>
             <p class="hint" id="report-hint"></p>
             <div class="row">
-              <button id="report-play" class="primary" data-i18n="report.play">Jogar em modo de diagnóstico</button>
+              <button id="report-play" class="primary" data-i18n="report.play">Jogar em modo de depuração</button>
               <button id="report-capture" class="primary hidden" data-i18n="report.capture">Capturar este quadro</button>
             </div>
             <p id="report-state" class="small muted"></p>
-            <div id="report-done" class="hidden">
-              <label class="field-label" for="report-notes" data-i18n="report.notes">O que deu errado (opcional)</label>
-              <textarea id="report-notes" rows="3"></textarea>
-              <div class="row">
-                <button id="report-zip" data-i18n="report.zip">Criar .zip</button>
-                <button id="report-open" class="link" data-i18n="report.open">Abrir pasta</button>
-                <button id="report-show-zip" class="link hidden" data-i18n="report.showZip">Mostrar o .zip</button>
-                <button id="report-issue" class="link" data-i18n="report.issue">Abrir uma issue no GitHub</button>
-              </div>
-              <p class="hint" data-i18n="report.privacy"></p>
-            </div>
             <p id="report-msg" class="small"></p>
           </div>
+
+          <section class="section">
+            <div class="section-head">
+              <h2 data-i18n="report.sessions">Sessões de depuração</h2>
+              <button id="report-refresh" class="link" data-i18n="report.refresh">Atualizar</button>
+            </div>
+            <p class="hint" data-i18n="report.sessionsLead"></p>
+            <label class="field-label" for="report-notes" data-i18n="report.notes">O que deu errado (opcional)</label>
+            <textarea id="report-notes" rows="2"></textarea>
+            <ul id="report-sessions" class="sessions"></ul>
+            <p id="report-none" class="small muted hidden" data-i18n="report.noSessions"></p>
+            <p class="hint" data-i18n="report.privacy"></p>
+            <div class="row toolbar">
+              <button id="report-issue" class="link" data-i18n="report.issue">Abrir uma issue no GitHub</button>
+            </div>
+          </section>
         </div>
 
         <!-- Environment -->
