@@ -24,6 +24,12 @@ interface Settings {
   windowMode: string;
   windowSize: string;
   gameIcon: boolean;
+  display: string;
+  vsync: boolean;
+  audioVolume: number;
+  audioDevice: string;
+  rumble: boolean;
+  rumbleStrength: number;
   extraEnv: string;
   gamePaths: string[];
   rapPath: string;
@@ -102,7 +108,10 @@ function showView(name: string) {
   document.querySelectorAll<HTMLElement>(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "home") refreshStatus();
-  if (name === "settings") updatePreview();
+  if (name === "settings") {
+    updatePreview();
+    refreshOutputs();
+  }
   if (name === "controls") showControls();
 }
 document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view!)));
@@ -146,6 +155,52 @@ function applyLang(l: Lang) {
   renderPrereqs();
   renderGame(lastSearch);
   renderControls();
+  renderOutputs();
+}
+
+// ---- screens and audio outputs (PS3_DISPLAY, PS3_AUDIO_DEVICE) ------------------
+interface Outputs {
+  screens: string[];
+  audioOutputs: string[];
+}
+let outputs: Outputs = { screens: [], audioOutputs: [] };
+
+async function refreshOutputs() {
+  try {
+    outputs = await invoke<Outputs>("list_outputs");
+  } catch {
+    outputs = { screens: [], audioOutputs: [] };
+  }
+  renderOutputs();
+}
+
+/** Fill a select; a saved value the system no longer lists stays selectable. */
+function fillSelect(id: string, opts: { value: string; label: string }[], current: string, missing: Key) {
+  if (current && !opts.some((o) => o.value === current)) opts.push({ value: current, label: t(missing, { name: current }) });
+  const sel = $<HTMLSelectElement>(id);
+  sel.innerHTML = "";
+  for (const o of opts) {
+    const el = document.createElement("option");
+    el.value = o.value;
+    el.textContent = o.label;
+    sel.appendChild(el);
+  }
+  sel.value = current;
+}
+
+function renderOutputs() {
+  // A screen goes by its name, or by its number when two share one (the
+  // game's PS3_DISPLAY counts from 1 in the system's order).
+  const seen = new Map<string, number>();
+  for (const n of outputs.screens) seen.set(n, (seen.get(n) ?? 0) + 1);
+  const screens = [{ value: "", label: t("settings.screenMain") }];
+  outputs.screens.forEach((n, i) => {
+    const dup = (seen.get(n) ?? 0) > 1;
+    screens.push({ value: dup ? String(i + 1) : n, label: dup ? `${n} (${i + 1})` : n });
+  });
+  fillSelect("screen", screens, settings.display, "settings.screenMissing");
+  const devices = [{ value: "", label: t("settings.audioDefault") }, ...outputs.audioOutputs.map((n) => ({ value: n, label: n }))];
+  fillSelect("audio-device", devices, settings.audioDevice, "settings.audioMissing");
 }
 
 function bindSettings() {
@@ -178,6 +233,15 @@ function bindSettings() {
   bindCheck("mouse-invert-x", "mouseInvertX");
   bindCheck("mouse-capture", "mouseCapture");
   bindCheck("game-icon", "gameIcon");
+  bindCheck("vsync", "vsync");
+  bindCheck("rumble-on", "rumble");
+  for (const [id, key] of [["screen", "display"], ["audio-device", "audioDevice"]] as const) {
+    const el = $<HTMLSelectElement>(id);
+    el.addEventListener("change", () => {
+      settings[key] = el.value;
+      persist();
+    });
+  }
   const bindSelect = (id: string, key: "windowMode" | "windowSize") => {
     const el = $<HTMLSelectElement>(id);
     el.value = settings[key];
@@ -192,6 +256,9 @@ function bindSettings() {
   bindRange("gamma", "gamma", (v) => v.toFixed(2));
   bindRange("mouse-sens", "mouseSens", (v) => `${v.toFixed(2)}×`);
   bindRange("mouse-dz", "mouseDeadzone", (v) => String(Math.round(v)));
+  bindRange("audio-volume", "audioVolume", (v) => `${Math.round(v)}%`);
+  bindRange("rumble-strength", "rumbleStrength", (v) => `${Math.round(v)}%`);
+  $("rumble-test").addEventListener("click", testRumble);
 
   const gl = $<HTMLSelectElement>("game-lang");
   gl.addEventListener("change", () => {
@@ -243,6 +310,12 @@ function bindSettings() {
       windowMode: "windowed",
       windowSize: "",
       gameIcon: false,
+      display: "",
+      vsync: true,
+      audioVolume: 100,
+      audioDevice: "",
+      rumble: true,
+      rumbleStrength: 100,
       extraEnv: "",
     }, keep);
     await invoke("save_settings", { settings });
@@ -257,6 +330,33 @@ function syncDependent() {
   ssao.disabled = !settings.gpuLight;
   $<HTMLInputElement>("gamma").disabled = !settings.gammaOverride;
   for (const id of ["mouse-sens", "mouse-invert", "mouse-invert-x", "mouse-dz", "mouse-capture"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
+  $<HTMLInputElement>("rumble-strength").disabled = !settings.rumble;
+  $<HTMLButtonElement>("rumble-test").disabled = !settings.rumble;
+}
+
+/** A half-second rumble at the chosen strength through the Gamepad API, so
+ * the player feels what the game will do (the game itself goes through SDL;
+ * above 100% only the weak values change, so the test tops out at full). */
+async function testRumble() {
+  const msg = $("rumble-test-msg");
+  msg.textContent = "";
+  const pads = (navigator.getGamepads ? Array.from(navigator.getGamepads()) : []).filter((p): p is Gamepad => !!p);
+  if (!pads.length) {
+    msg.textContent = t("settings.rumbleTestNoPad");
+    return;
+  }
+  type Actuator = { playEffect?: (type: string, params: Record<string, number>) => Promise<unknown> };
+  const act = (pads[0] as unknown as { vibrationActuator?: Actuator }).vibrationActuator;
+  if (!act?.playEffect) {
+    msg.textContent = t("settings.rumbleTestNoSupport");
+    return;
+  }
+  const k = Math.min(1, settings.rumbleStrength / 100);
+  try {
+    await act.playEffect("dual-rumble", { duration: 500, startDelay: 0, strongMagnitude: k, weakMagnitude: k });
+  } catch {
+    msg.textContent = t("settings.rumbleTestNoSupport");
+  }
 }
 
 // ---- home ---------------------------------------------------------------------
@@ -708,6 +808,7 @@ async function main() {
   setLang(settings.uiLang as Lang);
   bindSettings();
   initControls();
+  refreshOutputs();
   gamePaths.value = settings.gamePaths.join("\n");
   rapPath.value = settings.rapPath;
   outDir.value = settings.installDir;
