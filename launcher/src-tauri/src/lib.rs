@@ -7,6 +7,7 @@
 mod input_map;
 mod report;
 mod saves;
+mod update;
 mod zipfile;
 
 use input_map::{Bindings, InputEnv};
@@ -1700,6 +1701,7 @@ pub fn run() {
             get_input_map,
             save_input_map,
             get_status,
+            update::check_updates,
             detect_rpcs3,
             find_licence,
             check_prereqs,
