@@ -104,9 +104,16 @@ Controles e Avançado.
   cópia traz).
 - **Saves:** listar, fazer backup, restaurar, importar/exportar com o RPCS3,
   `.zip`.
-- **Reportar problema:** jogar em modo de diagnóstico, capturar um quadro,
-  gerar um `.zip` para uma issue; **visualizador do log do jogo** que
-  acompanha o log ao vivo.
+- **Modo de depuração** (Avançado > Modo de depuração): jogue normalmente
+  enquanto o jogo anota o que dá errado (funções que faltam, falhas de
+  shader/textura, travadas da GPU, falhas das SPUs, áudio atrasando, arquivos
+  que não abrem, quedas de fps) e mantém um índice da sessão com os horários;
+  clique em **Capturar este quadro** quando algo parecer errado. Depois,
+  **Analisar** roda `infamous2-lle/tools/log_triage.py` na sessão e lista os
+  principais problemas (também em `triage.md` na pasta da sessão, para um
+  desenvolvedor ou um agente percorrer), e **Criar .zip** junta tudo para uma
+  issue. Detalhes em [launcher/README.md](launcher/README.md#debug-mode-report-a-problem).
+  E um **visualizador do log do jogo** que acompanha o log ao vivo.
 - **Cartão de Atualizações:** avisa quando sai uma release nova ou quando o
   jogo instalado é mais antigo que as fontes do app, e oferece recompilar.
 
