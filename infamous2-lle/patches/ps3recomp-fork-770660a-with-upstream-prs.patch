@@ -3144,7 +3144,7 @@ index 7718d14..4e3c69c 100644
              state->vertex_constants[slot][lane] = f;
              { static int _sq=0, _e=-1; if (_e < 0) _e = getenv("SEQ_DBG") ? 1 : 0; if (_e && slot==256 && lane==0 && __atomic_fetch_add(&_sq, 1, __ATOMIC_RELAXED) < 500)
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..2c5de47 100644
+index 9a76e67..bfa3972 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -23,6 +23,8 @@
@@ -4468,7 +4468,7 @@ index 9a76e67..2c5de47 100644
      const u32 vtex_mask = sink_bind_vertex_textures(eng_vtex_mask(), vtextures,
                                                      vsamplers);
  
-@@ -1992,6 +2823,127 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1992,6 +2823,160 @@ static void sink_end(void* user, const rsx_dispatch* r)
                                            n_targets, &pipeline_is_fixed);
      if (!pipeline) { eng_drop("pipeline", prim); return; }
      DS_MARK(ns_pipe);
@@ -4513,6 +4513,39 @@ index 9a76e67..2c5de47 100644
 +                          t.cubemap, t.remap, t.filter, t.control0, t.wrap, rsx_dsp_reg(&g.rsx, 0x1A1Cu + 0x20u * u),
 +                          (rsx_dsp_reg(&g.rsx, 0x1A04u + 0x20u * u) >> 4) & 0xFu, rsx_dsp_reg(&g.rsx, 0x1840u + 4u * u) >> 20,
 +                          rsx_dsp_reg(&g.rsx, 0x1A04u + 0x20u * u), rsx_dsp_reg(&g.rsx, 0x1840u + 4u * u));
++              } } } }
++    /* PS3RECOMP_ENG_TEXRAW_FP=<hex>:<unit>:<dir>: the guest bytes of the texture
++     * bound on <unit> for draws of that fragment program, raw (before any
++     * decode), once per distinct texture offset (first 16), with its registers
++     * in <dir>/index.txt -- data for an offline check of how a program reads
++     * a lookup texture (the occlusion volumes' 8x8x8 cone LUTs). */
++    { static u64 rfp; static long runit = -1; static char rdir[400]; static int rinit;
++      static u32 rseen[16]; static u32 rn;
++      if (!rinit) { rinit = 1; const char* e = getenv("PS3RECOMP_ENG_TEXRAW_FP");
++          if (e) { char* d; rfp = strtoull(e, &d, 16);
++                   if (*d == ':') runit = strtol(d + 1, &d, 10);
++                   if (*d == ':') snprintf(rdir, sizeof rdir, "%s", d + 1); } }
++      if (rfp && runit >= 0 && runit < (long)RSX_BE_MAX_TEXTURES && rn < 16 && rdir[0]) {
++          const eng_fp_memo* fpm = NULL;
++          if (eng_guest_programs(NULL, &fpm) && fpm && fpm->structural == rfp) {
++              rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, (u32)runit, &t);
++              const u32 key = t.offset ^ (t.location << 31);
++              u32 k = 0; while (k < rn && rseen[k] != key) k++;
++              if (k == rn && t.width && t.height) {
++                  rseen[rn++] = key;
++                  const u32 depth = (t.dimension == 3 && !t.cubemap && t.depth) ? t.depth : 1u;
++                  const u32 span = depth > 1 ? eng_texture_span_3d(t.format, t.width, t.height, depth, t.mipmaps, t.pitch)
++                                             : eng_texture_span(t.format, t.width, t.height, t.mipmaps, t.pitch, (int)t.cubemap);
++                  const u8* src = span ? eng_guest_ptr(NULL, t.location, t.offset, span) : NULL;
++                  char path[512]; snprintf(path, sizeof path, "%s/tex%02u.bin", rdir, rn - 1);
++                  FILE* f = src ? fopen(path, "wb") : NULL;
++                  if (f) { fwrite(src, 1, span, f); fclose(f); }
++                  snprintf(path, sizeof path, "%s/index.txt", rdir);
++                  FILE* ix = fopen(path, "a");
++                  if (ix) { fprintf(ix, "tex%02u loc %u off 0x%08X fmt 0x%02X %ux%u depth %u dim %u mips %u pitch %u remap 0x%08X filter 0x%08X addr 0x%08X ctl0 0x%08X border 0x%08X span %u frame %u\n",
++                                    rn - 1, t.location, t.offset, t.format, t.width, t.height, depth, t.dimension, t.mipmaps,
++                                    t.pitch, t.remap, t.filter, t.wrap, t.control0, rsx_dsp_reg(&g.rsx, 0x1A1Cu + 0x20u * (u32)runit),
++                                    span, g.frames); fclose(ix); }
 +              } } } }
 +    /* PS3RECOMP_ENG_DUMPTEX_FP=<hex>:<unit>:<sec>:<path>: once, at the first
 +     * draw of that fragment program <sec> seconds after its first draw, read
@@ -4596,7 +4629,7 @@ index 9a76e67..2c5de47 100644
  
      if (indexed) {
          if (!dc_reserve_indices(n_draw)) { eng_drop("reserve_indices", prim); return; }
-@@ -2045,6 +2997,57 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2045,6 +3030,57 @@ static void sink_end(void* user, const rsx_dispatch* r)
      memset(g.fp_cb, 0, fp_bytes);
      if (g.fp_constants->count)
          memcpy(g.fp_cb, g.fp_constants->values, g.fp_constants->count * 16u);
@@ -4654,7 +4687,7 @@ index 9a76e67..2c5de47 100644
      { float* alpha = (float*)(g.fp_cb + nslots * 16u);
        alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
        /* WPOS y = pos.y * alpha[1] + alpha[2]: SHADER_WINDOW (0x1D88) bits
-@@ -2109,8 +3112,12 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2109,8 +3145,12 @@ static void sink_end(void* user, const rsx_dispatch* r)
  
      const u32 uploaded = indexed ? dc.n_verts : n_draw;
      DS_MARK(ns_bind);
@@ -4669,7 +4702,7 @@ index 9a76e67..2c5de47 100644
      DS_MARK(ns_draw);
  #undef DS_MARK
      /* Counted only when the draw ran the guest's OWN programs, which is what
-@@ -2126,8 +3133,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2126,8 +3166,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
          ds.ns_rest += eng_ds_now() - ds_t0;
      }
  
@@ -4691,7 +4724,7 @@ index 9a76e67..2c5de47 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2138,6 +3157,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2138,6 +3190,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
      const u32 n_targets = eng_current_target_set(targets);
      if (!n_targets) return;
  
@@ -4713,7 +4746,7 @@ index 9a76e67..2c5de47 100644
      if (mask & (RSX_CLEAR_COLOR_R | RSX_CLEAR_COLOR_G |
                  RSX_CLEAR_COLOR_B | RSX_CLEAR_COLOR_A)) {
          const u32 c = rsx_dsp_clear_color(&g.rsx);
-@@ -2347,13 +3381,23 @@ presented:;
+@@ -2347,13 +3414,23 @@ presented:;
                pf = b0 = b1 = bw = 0; t0 = now; } } }
      /* PS3RECOMP_ENG_MEMDUMP=<hexEA>:<hexLen>:<worldframe>[:file]: at that world
       * frame, write the guest range as hex words, 16 bytes per line -- the same
@@ -4741,7 +4774,7 @@ index 9a76e67..2c5de47 100644
            extern uint8_t* vm_base;
            FILE* f = fopen(dpath, "w");
            if (f && vm_base) {
-@@ -2408,6 +3452,20 @@ presented:;
+@@ -2408,6 +3485,20 @@ presented:;
                }
            } } }
      eng_constlog_frame_end();
@@ -4762,7 +4795,7 @@ index 9a76e67..2c5de47 100644
      g.frames++;
      eng_ds_frame_end(g.guest_draws);
      g.last_guest_draws = g.guest_draws;
-@@ -2531,6 +3589,102 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +3622,102 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
@@ -9655,7 +9688,7 @@ index 0000000..42ed073
 +    puts("PASS: PPU directory-entry ABI, batching, bounds, errors, and EOF");
 +}
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 3addd48..4ddcc1e 100644
+index 3addd48..6a285fd 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -18,6 +18,7 @@
@@ -10226,7 +10259,7 @@ index 3addd48..4ddcc1e 100644
          /* MUSTTAIL: a guest loop that iterates through an indirect branch (the
           * Bink decoder's per-command dispatch does) must not grow the host
           * stack -- a plain call here leaked a resolver+callee frame per
-@@ -3013,9 +3266,22 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
+@@ -3013,9 +3266,34 @@ static __attribute__((noinline)) void spu_indirect_branch_slow(spu_context* ctx)
        static int _bt0[BT0_MAX_IMG];
        unsigned img = (ctx->image_id >= 0 && ctx->image_id < BT0_MAX_IMG)
                       ? (unsigned)ctx->image_id : 0;
@@ -10234,6 +10267,18 @@ index 3addd48..4ddcc1e 100644
 +      if (_bt0[img]++ < BT0_PER_IMG) {
          fprintf(stderr, "[SPU] BRANCH-TO-0 unresolved pc=0x%05X image=%d lr=0x%05X\n",
                  ctx->pc, ctx->image_id, ctx->gpr[0]._u32[0] & SPU_LS_MASK);
++        /* Which code the dispatcher believed resident: a stale code span (a
++         * relocatable module whose slot a DMA-list job load never evicted) is
++         * looked up BEFORE the job overlay, so it can serve a function from
++         * the wrong module at the job's addresses. */
++        fprintf(stderr, "[SPU]   resident_ovl=%d code_base=0x%05X resident_task=%d slots:",
++                ctx->resident_ovl, ctx->code_base, ctx->resident_task);
++        for (unsigned k = 0; k < SPU_RESIDENT_CODE_SLOTS; ++k)
++            if (ctx->resident_code[k].image_id)
++                fprintf(stderr, " {img %d LS 0x%05X+0x%X src 0x%08X%s}", ctx->resident_code[k].image_id,
++                        ctx->resident_code[k].lsa, ctx->resident_code[k].size, ctx->resident_code[k].source_ea,
++                        ctx->resident_code[k].reloc ? " reloc" : "");
++        fputc('\n', stderr);
 +        /* The host stack still holds the lifted functions that branched
 +         * here (func_<image>_<lsa> frames): name them, so a branch into data
 +         * says which code computed the target. */
@@ -10250,7 +10295,7 @@ index 3addd48..4ddcc1e 100644
        spu_ls_watch_dump("branch-to-0"); }
      /* One-shot: the FMOD null-handler DSP node carries a PPU descriptor EA at
       * node+0x14 (observed 0x93C3C0). Dump it to identify which plugin/unit
-@@ -3105,12 +3371,30 @@ static inline int spu_ib_diag_enabled(void)
+@@ -3105,12 +3383,30 @@ static inline int spu_ib_diag_enabled(void)
      return on < 0 ? spu_ib_diag_init() : on;
  }
  
@@ -10282,7 +10327,7 @@ index 3addd48..4ddcc1e 100644
          (ctx->policy_mode && (pc == SPURS_PM_EXIT_TO_KERNEL_LS || pc == SPURS_PM_SELECT_WORKLOAD_LS)) ||
          (!ctx->policy_mode && pc == SPU_JOB_RETURN_LS) || spu_ib_diag_enabled())
          goto slow;
-@@ -3127,24 +3411,26 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -3127,24 +3423,26 @@ void spu_indirect_branch(spu_context* ctx)
          }
          spu_fn fn = NULL;
          int code_owner = 0;
