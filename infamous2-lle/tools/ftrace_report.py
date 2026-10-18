@@ -2,6 +2,14 @@
 """Frame-by-frame report of a PS3_FTRACE timeline.
 
   tools/ftrace_report.py <trace.txt> [--frames N] [--ms-per-col F] [--threads a,b]
+  tools/ftrace_report.py <trace.txt> --phases [--settle MS]
+
+--phases is for a live A/B (tools/ab_live.sh): PS3_TOGGLE_FILE switched knobs
+during the trace, each switch left a mark, and the frames are split by the knob
+values they started under -- every stretch of one value in time order, then
+each value's frames together (frame time, SPU busy, RSX drain/present). The
+first --settle ms after each switch (default 1000) are left out: a switched
+cache refills, a switched code path warms up.
 
 PS3_FTRACE=<start s>:<seconds>:<path> (toolkit, include/ps3emu/ps3_ftrace.h)
 records spans: PPU syscalls that blocked and merged usleep poll runs (with the
@@ -22,7 +30,97 @@ import statistics
 import sys
 
 (SYSCALL, USLEEP, SPU_WAIT, SPU_BUSY, SEMA, SEMA_GAVEUP, DRAIN, FLIP_FIFO, FLIP_REQ, PRESENT,
- GPU_ENCODE, GPU_WAIT, READBACK, GPU_EXEC) = range(1, 15)
+ GPU_ENCODE, GPU_WAIT, READBACK, GPU_EXEC, TOGGLE) = range(1, 16)
+# include/ps3emu/ps3_toggles.h, enum ps3_toggle_id (append-only there too).
+TOGGLE_NAMES = ["PS3RECOMP_ENG_VCACHE", "PS3RECOMP_ENG_TEXHASH_FULL", "PS3RECOMP_ENG_SKIP_FP",
+                "PS3_SPU_FASTJOB", "PS3_SPU_STUB_MICRO", "PS3_SPU_STACK_HINT", "PS3_SPU_DRAIN_INLINE",
+                "PS3_DISPLAY_GAMMA", "PS3_SHARPEN", "PS3_AA", "PS3_ANISO", "PS3RECOMP_METAL_FPS"]
+TOGGLE_STRING = {2, 7, 8, 9}   # marks carry a hash of the text
+# What --phases reads (and tools/ab_live.sh records: PS3_FTRACE_KINDS).
+PHASE_KINDS = (SPU_BUSY, SEMA, SEMA_GAVEUP, DRAIN, FLIP_REQ, PRESENT, TOGGLE)
+
+
+def toggle_name(who):
+    if who < len(TOGGLE_NAMES):
+        return TOGGLE_NAMES[who]
+    return f"extra#{who - 64}" if who >= 64 else f"knob#{who}"
+
+
+def toggle_val(who, v):
+    return f"#{v:08x}" if who in TOGGLE_STRING else str(v - (1 << 32) if v >= 1 << 31 else v)
+
+
+def phases(spans, frames, settle):
+    """Frames grouped by the toggle values they started under."""
+    marks = [s for s in spans if s[0] == TOGGLE]
+    if not marks:
+        sys.exit("no toggle marks in the trace (PS3_TOGGLE_FILE unset, or no switch inside the window)")
+    ids = sorted({m[1] for m in marks})
+    state = {}
+    for m in marks:                       # before its first switch a knob held that switch's old value
+        state.setdefault(m[1], m[2])
+    # Per-frame cost: SPU busy (all SPUs), RSX drain, present, acquire wait.
+    per = []
+    j0, mi, last_switch = 0, 0, -1e18
+    for f0, f1 in frames:
+        while mi < len(marks) and marks[mi][4] <= f0:
+            state[marks[mi][1]] = marks[mi][3]
+            last_switch = marks[mi][4]
+            mi += 1
+        acc = collections.defaultdict(float)
+        while j0 < len(spans) and spans[j0][5] < f0 - 5000:   # spans are sorted by start
+            j0 += 1
+        for k, who, a, b, t0, t1 in spans[j0:]:
+            if t0 > f1:
+                break
+            o = overlap(t0, t1, f0, f1)
+            if o <= 0:
+                continue
+            if k == SPU_BUSY:
+                acc["spu"] += o
+            elif k == DRAIN:
+                acc["drain"] += o
+            elif k == PRESENT:
+                acc["present"] += o
+            elif k in (SEMA, SEMA_GAVEUP):
+                acc["acquire"] += o
+        key = tuple(state[i] for i in ids)
+        per.append((f0, f1 - f0, key, f0 - last_switch < settle, acc))
+
+    def label(key):
+        return " ".join(f"{toggle_name(i)}={toggle_val(i, v)}" for i, v in zip(ids, key))
+
+    def stats(rows):
+        d = [r[1] for r in rows]
+        q = sorted(d)
+        p90 = q[min(len(q) - 1, int(len(q) * 0.9))]
+        n = len(rows)
+        mean = lambda k: sum(r[4][k] for r in rows) / n
+        return (f"{n:5d} frames  median {statistics.median(d):6.1f} ms  mean {sum(d) / n:6.1f}"
+                f"  p90 {p90:6.1f}  ({1000 * n / sum(d):5.1f} fps)  spu busy (all) {mean('spu'):6.1f}"
+                f"  drain {mean('drain'):5.1f}  present {mean('present'):5.1f}  acquire {mean('acquire'):5.1f}")
+
+    print(f"\nPhases (frames that start within {settle:.0f} ms of a switch left out):")
+    seg = []
+    for r in per + [None]:
+        if seg and (r is None or r[2] != seg[0][2]):
+            kept = [x for x in seg if not x[3]]
+            if kept:
+                print(f"  {seg[0][0] / 1000:8.1f} s  {label(seg[0][2])}\n      {stats(kept)}")
+            seg = []
+        if r is not None:
+            seg.append(r)
+    print("\nBy value (all stretches together):")
+    medians = {}
+    for key in sorted({r[2] for r in per}):
+        kept = [r for r in per if r[2] == key and not r[3]]
+        if kept:
+            medians[key] = statistics.median(r[1] for r in kept)
+            print(f"  {label(key)}\n      {stats(kept)}")
+    if len(medians) == 2:
+        (ka, ma), (kb, mb) = sorted(medians.items())
+        print(f"\n  median frame {label(kb)} vs {label(ka)}: {mb:.1f} vs {ma:.1f} ms ({100 * (mb - ma) / ma:+.1f}%)")
+
 GPU_WAIT_KIND = {0: "gpu wait (flush)", 1: "gpu wait (present)", 2: "gpu wait (in-flight)"}
 
 SYSCALL_NAMES = {   # runtime/syscalls/lv2_syscall_table.h
@@ -37,8 +135,10 @@ RSX_ROWS = ("acquire wait", "drain", "present", "encode (flush)", "encode (prese
             "gpu wait (flush)", "gpu wait (present)", "gpu wait (in-flight)", "readback")
 
 
-def load(path):
+def load(path, kinds=None):
+    """kinds: keep only these span kinds (a long trace does not fit in memory whole)."""
     names, spans, header = {}, [], ""
+    keep = {str(k) for k in kinds} if kinds else None
     with open(path) as f:
         for line in f:
             if line.startswith("#"):
@@ -49,6 +149,8 @@ def load(path):
                 names[int(tid)] = name
                 continue
             k, who, a, b, t0, t1 = line.split()
+            if keep is not None and k not in keep:
+                continue
             spans.append((int(k), int(who), int(a, 16), int(b, 16), float(t0) / 1e3, float(t1) / 1e3))
     spans.sort(key=lambda s: s[4])
     return header, names, spans
@@ -64,9 +166,11 @@ def main():
     ap.add_argument("--frames", type=int, default=3, help="frames drawn as a timeline")
     ap.add_argument("--ms-per-col", type=float, default=1.0)
     ap.add_argument("--threads", default="", help="PPU tids to draw (default: the six least blocked)")
+    ap.add_argument("--phases", action="store_true", help="split frames by PS3_TOGGLE_FILE switches (A/B)")
+    ap.add_argument("--settle", type=float, default=1000.0, help="--phases: ms left out after each switch")
     args = ap.parse_args()
 
-    header, names, spans = load(args.trace)
+    header, names, spans = load(args.trace, PHASE_KINDS if args.phases else None)
     print(header)
     flips = [s[4] for s in spans if s[0] == FLIP_REQ]
     if len(flips) < 3:
@@ -75,6 +179,9 @@ def main():
     durs = [b - a for a, b in frames]
     print(f"{len(frames)} frames, median {statistics.median(durs):.1f} ms "
           f"({1000 / statistics.median(durs):.1f} fps), min {min(durs):.1f}, max {max(durs):.1f}")
+    if args.phases:
+        phases(spans, frames, args.settle)
+        return
 
     # Per-frame totals, then the median of each.
     ppu = collections.defaultdict(lambda: collections.defaultdict(list))   # tid -> (kind, site) -> [ms per frame]
