@@ -7,17 +7,35 @@ A native port of **inFAMOUS 2** (PS3, digital release `NPUA80638`) to
 code is translated to C/C++ and compiled into a native executable, with
 graphics on Metal. It is not an emulator.
 
+**It boots, shows its menus and cutscenes, and New Marais is playable**, at
+the game's own 30 fps cap on Apple silicon. Get the app from the
+[**v0.2.0 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+and it rebuilds the game from your own copy ([how](#download-and-play)).
+
+| | |
+| --- | --- |
+| [<img src="docs/screenshots/01-boot-sucker-punch-logo.jpg" width="420" alt="Sucker Punch logo at boot">](docs/screenshots/01-boot-sucker-punch-logo.jpg)<br>Boot: the studio logos | [<img src="docs/screenshots/02-main-menu.jpg" width="420" alt="Main menu, START A NEW GAME">](docs/screenshots/02-main-menu.jpg)<br>3D main menu |
+| [<img src="docs/screenshots/03-intro-comic.jpg" width="420" alt="Comic-book intro video">](docs/screenshots/03-intro-comic.jpg)<br>Comic-book intro (Bink video) | [<img src="docs/screenshots/04-cutscene-sunset-docks.jpg" width="420" alt="In-engine cutscene, boat at the docks at sunset">](docs/screenshots/04-cutscene-sunset-docks.jpg)<br>Arriving in New Marais (in-engine cutscene) |
+| [<img src="docs/screenshots/05-cutscene-kuo.jpg" width="420" alt="In-engine cutscene, Kuo on the pier">](docs/screenshots/05-cutscene-kuo.jpg)<br>Kuo on the pier (in-engine cutscene) | [<img src="docs/screenshots/06-pier-gameplay.jpg" width="420" alt="Cole on the pier, day">](docs/screenshots/06-pier-gameplay.jpg)<br>Gameplay: the pier by day |
+| [<img src="docs/screenshots/07-street-amp.jpg" width="420" alt="Cole with the Amp in a New Marais street">](docs/screenshots/07-street-amp.jpg)<br>The streets of New Marais, Amp in hand | [<img src="docs/screenshots/08-street-corner.jpg" width="420" alt="New Marais street corner in late afternoon">](docs/screenshots/08-street-corner.jpg)<br>Late afternoon in the city |
+| [<img src="docs/screenshots/09-dusk-neon-taxi.jpg" width="420" alt="Neon signs and a taxi at dusk">](docs/screenshots/09-dusk-neon-taxi.jpg)<br>Neon at dusk | [<img src="docs/screenshots/10-powers-lightning.jpg" width="420" alt="Cole's lightning powers">](docs/screenshots/10-powers-lightning.jpg)<br>Powers: lightning |
+
+<sub>Frames from the port itself running on an Apple-silicon Mac (M4 Pro),
+built from the player's own copy, at the game's 1280×720; subtitles are in
+Brazilian Portuguese, the port's default dub. inFAMOUS 2 © Sony Interactive
+Entertainment, developed by Sucker Punch Productions; shown only to document
+the port.</sub>
+
 Built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and, above all,
 on [NoahBPeterson](https://github.com/NoahBPeterson/ps3recomp)'s **inFAMOUS 1
 fork**, which brought the firmware LLE and the fixes that got the first game
 running on the Mac. See [CREDITS.md](CREDITS.md).
 
 > [!WARNING]
-> **Work in progress, not playable from start to finish yet.** The game runs
-> from boot to the first missions in New Marais, now at the game's own 30 fps
-> cap in headless runs (still to confirm in a window), only on Apple Silicon macOS, and building it means recompiling
-> everything from your own copy (there is no prebuilt executable). What is
-> missing is in [ROADMAP.md](ROADMAP.md).
+> **Alpha, not tested from start to finish yet.** The game runs from boot to
+> the first missions in New Marais, only on Apple silicon macOS. Nobody has
+> gone past 1% of the story yet, so later missions may break. What is missing
+> is in [ROADMAP.md](ROADMAP.md).
 
 > **This repository contains no game data, no firmware, no Sony keys and
 > nothing translated from them.** Everyone generates all of that locally from
@@ -29,28 +47,101 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | | |
 | --- | --- |
 | Boot, firmware LLE, SPURS, Wwise audio (SPU jobs) | ✅ |
-| Health warning, Bink videos, loading screens | ✅ |
+| Health warning, studio logos, Bink videos, loading screens | ✅ |
 | 3D main menu, pause menu, options | ✅ |
-| New game → intro video → in-engine cutscenes | ✅ |
+| New game → comic-book intro → in-engine cutscenes | ✅ |
 | Empire City prologue (the Beast, the freighter) | ✅ |
 | New Marais: first missions, played in a window with a DualSense | ✅ |
-| Brazilian Portuguese dub and subtitles (default), saves, DLC | ✅ |
-| Performance | ✅ 30 fps walking in New Marais (the game's own cap): frames 29.7–30.4 ms headless, i.e. ~33 fps of headroom |
+| Performance | ✅ ~30 fps walking in New Marais (the game's own cap) in headless runs on Apple silicon: frames of 29.7–30.4 ms, ~33–36 fps of headroom. Windowed confirmation pending |
+| Controller (DualSense tested; DualShock 4 and Xbox through SDL), rumble | ✅ |
+| Keyboard and mouse (mouse camera, remappable) | 🧪 mapped, little tested in a window |
+| Saves and trophies (in `~/Library/Application Support`), saves manager in the app | ✅ |
+| Brazilian Portuguese dub and subtitles (default), other languages your copy ships, DLC | ✅ |
+| The app: install, rebuild, play, settings, controls, saves, report a problem | ✅ [v0.2.0 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0) |
 | Whole game | ❓ nobody has gone past 1% yet |
-| Keyboard and mouse in a window | 🧪 mapped, barely tested |
 | Linux and Windows | ⏳ planned |
 
 Details and next steps in [ROADMAP.md](ROADMAP.md).
 
-## Layout
+## Download and play
 
-| Folder | What it is |
-| ------ | ---------- |
-| [`infamous2-lle/`](infamous2-lle/README.md) | **Current port.** inFAMOUS 1 fork + firmware LLE. |
-| [`infamous2/`](infamous2/README.md) | First attempt, against upstream ps3recomp v0.14.0 with SPURS in HLE. Stops before the first frame; kept as reference. Its local `game/`, `fw/` and `vfs/` folders are also used by the current port. |
-| `tools/setup_toolkit.sh` | Clones the fork at the commit in use and applies this repository's patches. |
+You need an Apple-silicon Mac and your own copy of inFAMOUS 2 (the PSN
+release `NPUA80638`, for example installed in [RPCS3](https://rpcs3.net) with
+its `.rap` licence).
 
-## What you need
+1. Download `infamous2-recomp_0.2.0_aarch64.dmg` from the
+   [v0.2.0 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+   and drag the app to Applications. It is not notarized: the first time,
+   right-click > Open (or System Settings > Privacy & Security > Open Anyway).
+2. The app lists what your Mac still needs (Xcode Command Line Tools, a few
+   Homebrew packages) and installs it with your OK.
+3. Pick your game folder; the `.rap` is found on its own. Decryption uses
+   RPCS3 if you have it, or your own key file and the PS3 firmware (a
+   `dev_flash` folder or Sony's `PS3UPDAT.PUP`). No keys ship with the app.
+4. **Install** (the first rebuild takes a few minutes), then **Play**.
+
+After updating the app, the Updates card on Home offers **Rebuild the game**.
+The release ships no game files: the app recompiles the game on your Mac.
+
+## The app
+
+[`launcher/`](launcher/README.md) is a desktop app (Tauri) that does all of
+this without a terminal, in the game's own look: Home (your copy's art, PLAY,
+quick settings, last save, status), Graphics, Performance, Game, Controls and
+Advanced.
+
+- **Install / rebuild** with a progress bar: checks and installs the tools,
+  finds your copy and its `.rap`, decrypts with RPCS3 or without it.
+- **Graphics:** window, fullscreen or borderless, screen, vsync, gamma,
+  anisotropic filtering, FXAA, sharpening (CAS), MetalFX upscaling, fps
+  counter.
+- **Controls:** remap keyboard, mouse and controller, mouse camera,
+  vibration; **audio** volume and output; **game language** (the ones your
+  copy ships).
+- **Saves:** list, back up, restore, import/export with RPCS3, `.zip`.
+- **Report a problem:** play in diagnostic mode, capture a frame, make a
+  `.zip` for an issue; **game log viewer** that follows the log live.
+- **Updates card:** tells when a newer release is out or the installed game
+  is older than the app's sources, and offers a rebuild.
+
+| | |
+| --- | --- |
+| [<img src="launcher/docs/screenshots/home.en.png" width="420" alt="Launcher Home">](launcher/docs/screenshots/home.en.png) | [<img src="launcher/docs/screenshots/graphics.png" width="420" alt="Launcher Graphics page">](launcher/docs/screenshots/graphics.png) |
+
+CI builds it for macOS, Windows and Linux on every change (the game itself
+builds only on macOS so far); the installers are not signed yet.
+
+## Known problems
+
+- In some close-up views at dusk the occlusion-volume passes turned whole
+  facades (and Cole) black; `run.sh` skips them for now (only the soft
+  contact darkening near props is lost) while their math is checked.
+  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws them again.
+- Rarely, an SPU running the Edge geometry job faults and the game stops
+  (about 1 run in 8 before the latest runtime changes; none in the last 17
+  test runs). Diagnosed down to a register clobbered inside an atomic loop,
+  not fixed for certain yet.
+- Windows and Linux are not supported yet.
+- With less than about 3 GB free on the disk the game shows a "not enough
+  space" error at boot, which in the window is just a black screen.
+
+## Work in progress
+
+What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
+
+- An **in-game overlay menu**, to change settings without leaving the game.
+- A **live A/B toggle file**: the running game re-reads a text file and
+  switches options on the fly, for fair before/after comparisons in one run.
+- A **fifth round of pull requests** to [ps3recomp](https://github.com/sp00nznet/ps3recomp)
+  with this port's toolkit fixes.
+- **Adopting upstream fixes:** ps3recomp #358, #340, #326, #349, #360, #366
+  and the log-cap fix from issue #364 are in since v0.2.0; more as they land.
+
+## Building from source
+
+The app does all of this for you; by hand, from a terminal:
+
+### What you need
 
 - An Apple Silicon Mac (tested on an M4 Pro, macOS 27).
 - A legitimate copy of inFAMOUS 2 installed in [RPCS3](https://rpcs3.net),
@@ -62,7 +153,7 @@ brew install cmake ninja sdl2 glslang spirv-cross spirv-tools python@3.12
 python3.12 -m venv .venv
 ```
 
-## Building
+### Building
 
 ```sh
 git clone https://github.com/erikomis/infamous2-recomp.git
@@ -87,17 +178,7 @@ repository. The manual recipe is in
 
 Translation takes a few minutes and compiling ~80 s on an M4 Pro.
 
-### The app
-
-[`launcher/`](launcher/README.md) is a desktop app (Tauri) that does all of
-this without a terminal: it checks and installs the tools, finds your copy and
-its `.rap`, runs the rebuild with a progress bar, and has Play, display,
-controls (remapping) and saves screens. CI builds it for macOS, Windows and
-Linux on every change (the game itself builds only on macOS so far); the
-installers are not signed yet, so on a Mac open it the first time with
-right-click > Open.
-
-## Playing
+## Playing from the terminal
 
 ```sh
 cd infamous2-lle
@@ -224,17 +305,6 @@ Options worth knowing:
 pressed in its terminal, saves that frame (render targets, shaders, pass log)
 under `out/<name>/`: the quickest way to report a rendering bug.
 
-Known problems:
-
-- In some close-up views at dusk the occlusion-volume passes turned whole
-  facades (and Cole) black; `run.sh` skips them for now (only the soft
-  contact darkening near props is lost) while their math is checked.
-  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws them again.
-- Rarely, an SPU running the Edge geometry job faults and the game stops;
-  diagnosed down to a register clobbered inside an atomic loop, not fixed yet.
-- With less than about 3 GB free on the disk the game shows a "not enough
-  space" error at boot, which in the window is just a black screen.
-
 For headless tests: `tools/capture.sh <name> <seconds>` saves a PNG of the
 frame every 10 s, `PAD_SCRIPT="95:0x4000"` presses ✕ at 95 s
 (`760:0x0400:400` holds L1 for 400 s) and `PAD_STICK="lx,ly,rx,ry,from,to;..."`
@@ -258,10 +328,21 @@ In the toolkit (in `infamous2-lle/patches/`, applied by `setup_toolkit.sh`):
   (#311–#316), and the ps3recomp README mentions this port in its
   "In the community" section.
 - **Upstream:** open PRs applied — #297, #275, #274, #278, #293, #303; #266, #302, #304 and #305 ported by hand (credits in [CREDITS.md](CREDITS.md)).
+- **Adopted from upstream (2026-10-18, in v0.2.0):** #358 (NV3089 source origin in 12.4 fixed point), #340, #326, #349, #360, #366 and the log-cap wrap from issue #364.
 
 In the port: an extractor for the 27 job modules embedded in the EBOOT,
 registration of the `Wws_Job` policy module, PARAM.SFO at boot, and the run
 and capture scripts.
+
+## Layout
+
+| Folder | What it is |
+| ------ | ---------- |
+| [`infamous2-lle/`](infamous2-lle/README.md) | **Current port.** inFAMOUS 1 fork + firmware LLE. |
+| [`infamous2/`](infamous2/README.md) | First attempt, against upstream ps3recomp v0.14.0 with SPURS in HLE. Stops before the first frame; kept as reference. Its local `game/`, `fw/` and `vfs/` folders are also used by the current port. |
+| [`launcher/`](launcher/README.md) | The desktop app (Tauri): install, rebuild, play, settings, saves. |
+| `tools/setup_toolkit.sh` | Clones the fork at the commit in use and applies this repository's patches. |
+| `docs/screenshots/` | The gallery at the top of this page. |
 
 ## License
 
