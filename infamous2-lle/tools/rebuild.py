@@ -919,7 +919,7 @@ class Rebuild:
         if self.a.toolkit:
             log('using the toolkit at %s as is' % self.toolkit)
             return
-        self.run('toolkit', ['sh', SETUP_TOOLKIT, self.toolkit])
+        self.run('toolkit', ['sh', SETUP_TOOLKIT, self.toolkit, '--managed'])
 
     def step_venv(self):
         if self.a.venv:
