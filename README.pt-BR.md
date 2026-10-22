@@ -178,9 +178,9 @@ O que está sendo feito agora (detalhes no [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md))
   primeiro uso e parte das quedas; o que sobra em New Marais é sobretudo tempo
   das SPUs.
 - **Ícones de teclado nos prompts de botão**, no lugar dos do PS3.
-- **Mais efeitos no estilo do ReShade** no passo final da imagem (SMAA,
-  vibrance, contraste, LUTs de cor, vinheta e granulado já entraram): curvas
-  e contraste local.
+- **Pacotes de texturas** (`PS3_MODS`, Jogo > Pacotes de texturas) e **mais
+  efeitos de imagem** (claridade, curva de tons, predefinições de cor)
+  entraram, esperando um teste com janela.
 - **Pull requests para o [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
   todos os PRs deste port até o #375 foram aceitos em 2026-10-19; a sexta
   rodada (#470 SMAA, vibrance e contraste; #472 reconexão do controle; #476
@@ -398,10 +398,15 @@ fps e coincidiu com travamentos.
 | `PS3_VIGNETTE=0..1`, `PS3_GRAIN=0..1` | Cantos mais escuros; granulado. Padrão 0 (desligado) |
 | `PS3_VIBRANCE=-1..1` | Vibrance: satura mais as cores apagadas (negativo deixa mais sóbrio). Padrão 0 (desligado) |
 | `PS3_CONTRAST=0.5..1.5` | Contraste em torno do cinza médio. Padrão 1 (desligado) |
+| `PS3_CLARITY=-1..1` | Claridade (contraste local): a luminância menos um desfoque largo dela, somada de volta puxando para os meios-tons, para as formas grandes se destacarem sem o chuvisco que a nitidez traz; negativo suaviza. Padrão 0 (desligado) |
+| `PS3_SHADOWS`, `PS3_MIDTONES`, `PS3_HIGHLIGHTS=-1..1` | Uma curva de tons: cada um clareia (ou, negativo, escurece) o seu terço da faixa, sem mexer no preto nem no branco. Padrão 0 (desligado) |
+| `PS3_LUT_PRESET=warm\|cool\|film\|vivid` | Um ajuste de cor embutido (escrito para este port, gerado como um LUT 32³) no lugar do arquivo `PS3_LUT`; `PS3_LUT_STRENGTH` dosa. Padrão desligado |
+| `PS3_MODS=<pacote>,<pacote>` | Pacotes de texturas: pastas em `PS3_MODS_DIR` (`run.sh`: `~/Library/Application Support/infamous2-recomp/mods`) com PNGs nomeados pela chave da textura que trocam (`<16 dígitos hex>.png`, opcionalmente `_qualquercoisa` antes do `.png`); o primeiro pacote vence. Qualquer tamanho (um PNG de resolução maior ganha a sua própria cadeia de mipmaps); o sampler e o remapeamento de canais do original continuam. Só texturas de cor (RGBA8 e DXT); uma que o jogo lê em texels precisa manter o tamanho. No app: Jogo > Pacotes de texturas. Padrão nenhum |
+| `PS3_MODS_DUMP=<pasta>` | Grava cada textura de cor que o jogo envia, uma vez cada, como `<pasta>/<chave>.png` (o nome que um pacote usa), com uma linha em `<pasta>/textures.txt` (chave, tamanho, formato, endereço): extraia, edite, ponha num pacote |
 | `PS3_AA=fxaa` / `smaa` | Antisserrilhamento na imagem de 1280x720 do jogo, antes de qualquer ampliação: FXAA (o mais leve, um pouco suave) ou SMAA 1x (textos e texturas mais nítidos). Padrão desligado |
 | `PS3_SHARPEN=<0..1>` | nitidez adaptativa ao contraste (estilo AMD CAS) na resolução de saída; 0 (padrão) desliga |
 | `PS3_UPSCALE=metalfx` | ampliação espacial MetalFX de 1280x720 para o tamanho em pixels da janela (macOS 13+), em vez de só esticar a imagem. Onde não houver MetalFX, volta ao caminho normal com uma linha no log. Padrão desligada |
-| `PS3_AUDIO_VOLUME=<0..100>` | volume geral (padrão 100). Aplicado ao que o Mac toca, numa curva que soa uniforme: 50 é cerca de −12 dB |
+| `PS3_AUDIO_VOLUME=<0..100>` | volume geral (padrão 100). Aplicado ao que o Mac toca (o som dos filmes também: é tudo uma mixagem só), numa curva que soa uniforme: 50 é cerca de −12 dB. Ao vivo pelo menu do jogo e pelo `PS3_TOGGLE_FILE` |
 | `PS3_AUDIO_DEVICE=<nome>` | a saída de áudio, pelo nome nos ajustes de Som (sem diferenciar maiúsculas, ou só um pedaço: `AirPods`); não encontrada ou sem valor, a padrão do sistema (que o jogo acompanha quando muda) |
 | `PS3_RUMBLE=0` | sem vibração no controle. Ligada por padrão: a vibração do jogo chega a controles DualSense, DualShock 4 e Xbox pelo SDL |
 | `PS3_RUMBLE_STRENGTH=<0..200>` | intensidade da vibração em porcentagem (padrão 100); acima de 100 reforça as vibrações fracas, limitado ao máximo dos motores. `PS3_RUMBLE_LOG=1` mostra cada pedido que o jogo faz |

@@ -9,6 +9,7 @@ import { initUpdates, refreshUpdates, renderUpdates } from "./update";
 import { initLog, renderLog, showLog } from "./gamelog";
 import { flashSaved, human } from "./ui";
 import { initTrophies, refreshTrophies, renderTrophies } from "./trophies";
+import { initMods, renderMods } from "./mods";
 
 // ---- types shared with src-tauri/src/lib.rs (camelCase) ----------------------
 interface Settings {
@@ -32,6 +33,12 @@ interface Settings {
   grain: number;
   lutPath: string;
   lutStrength: number;
+  lutPreset: string;
+  shadows: number;
+  midtones: number;
+  highlights: number;
+  clarity: number;
+  mods: string[];
   upscale: string;
   mouse: boolean;
   mouseSens: number;
@@ -320,6 +327,7 @@ function applyLang(l: Lang) {
   renderControls();
   renderSaves();
   renderTrophies();
+  renderMods();
   renderOutputs();
   renderReport();
   renderLog();
@@ -542,6 +550,12 @@ function bindSettings() {
       grain: 0,
       lutPath: "",
       lutStrength: 1,
+      lutPreset: "",
+      shadows: 0,
+      midtones: 0,
+      highlights: 0,
+      clarity: 0,
+      mods: [],
       upscale: "",
       mouse: true,
       mouseSens: 1.0,
@@ -598,13 +612,26 @@ function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: numb
   bindRange("vignette", "vignette", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
   bindRange("grain", "grain", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
   bindRange("lut-strength", "lutStrength", (v) => `${Math.round(v * 100)}%`);
+  const signed = (v: number) => (Math.abs(v) >= 0.005 ? `${v > 0 ? "+" : ""}${Math.round(v * 100)}%` : t("settings.off"));
+  bindRange("clarity", "clarity", signed);
+  bindRange("shadows", "shadows", signed);
+  bindRange("midtones", "midtones", signed);
+  bindRange("highlights", "highlights", signed);
+  const preset = $<HTMLSelectElement>("lut-preset");
   const lutSync = () => {
+    preset.value = settings.lutPreset ?? "";
+    if (preset.value !== (settings.lutPreset ?? "")) preset.selectedIndex = 0;
     $("lut-file").textContent = settings.lutPath ? settings.lutPath.split("/").pop() ?? "" : t("settings.lutNone");
-    $<HTMLInputElement>("lut-strength").disabled = !settings.lutPath;
+    $<HTMLInputElement>("lut-strength").disabled = !settings.lutPath && !settings.lutPreset;
     $<HTMLButtonElement>("lut-clear").disabled = !settings.lutPath;
   };
   syncers.push(lutSync);
   lutSync();
+  preset.addEventListener("change", () => {
+    settings.lutPreset = preset.value;
+    lutSync();
+    persist();
+  });
   $("lut-pick").addEventListener("click", async () => {
     const p = await open({ multiple: false, filters: [{ name: "LUT (PNG)", extensions: ["png"] }] });
     if (typeof p === "string") {
@@ -1593,6 +1620,13 @@ async function main() {
   initControls();
   initLog();
   initTrophies();
+  initMods({
+    enabled: () => settings.mods ?? [],
+    setEnabled: (names) => {
+      settings.mods = names;
+      persist();
+    },
+  });
   initSaves({
     keep: () => settings.saveBackupsKeep ?? 10,
     setKeep: (n) => {

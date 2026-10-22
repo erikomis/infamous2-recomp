@@ -87,6 +87,19 @@ if [ -z "$HEADLESS" ] && [ -z "${PS3_SHADER_CACHE+set}" ]; then
     esac
     export PS3_SHADER_CACHE="$cfg/shader-cache"
 fi
+# Texture packs (the toolkit's rsx_draw_engine.c): folders of PNGs in mods/
+# next to the saves, each file named by the key of the texture it replaces.
+# PS3_MODS=<pack>,<pack> turns them on, the first winning when two replace the
+# same texture (the launcher's Mods card writes it); unset, nothing is loaded.
+# PS3_MODS_DUMP=<dir> writes every colour texture the game uploads as
+# <dir>/<key>.png, the name a pack uses. Windowed runs only, like the rest.
+if [ -z "$HEADLESS" ] && [ -z "${PS3_MODS_DIR+set}" ]; then
+    case $(uname) in
+        Darwin) cfg="$HOME/Library/Application Support/infamous2-recomp" ;;
+        *)      cfg="${XDG_DATA_HOME:-$HOME/.local/share}/infamous2-recomp" ;;
+    esac
+    export PS3_MODS_DIR="$cfg/mods"
+fi
 # The RSX must block on its semaphore ACQUIREs: each frame the FIFO acquires
 # the label the SPU light task writes when it has turned the normals/depth
 # copies in XDR into the light buffers, and only then composites. With the
@@ -134,6 +147,9 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #   PS3_AA=fxaa                 FXAA on the 1280x720 image
 #   PS3_SHARPEN=0..1            contrast-adaptive sharpening (AMD CAS)
 #   PS3_UPSCALE=metalfx         MetalFX spatial upscaling to the window (macOS 13+)
+#   PS3_CLARITY=-1..1           local contrast; PS3_SHADOWS / PS3_MIDTONES /
+#                               PS3_HIGHLIGHTS=-1..1 a tone curve
+#   PS3_LUT_PRESET=warm|cool|film|vivid  a built-in colour grade
 # Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
 # PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200.
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or
