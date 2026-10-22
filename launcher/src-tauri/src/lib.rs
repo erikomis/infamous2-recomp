@@ -667,6 +667,11 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     if s.show_fps {
         set("PS3RECOMP_METAL_FPS", "1".into()); // exactly "1" (rsx_metal_backend.m)
     }
+    // Normal play keeps the log quiet: with stderr going to a file the
+    // runtime is verbose by default, ~500 [WAIT]/[evt] lines a second
+    // written one by one from the game's threads (288 MB in a 2 h session).
+    // Debug mode (report::DEBUG_ENV) and the extra variables can turn it on.
+    set("PS3_VERBOSE", "0".into());
     env.extend(parse_env_lines(&s.extra_env));
     env
 }
@@ -2312,6 +2317,7 @@ mod tests {
         let none = InputEnv::default();
         let mut s = Settings::default();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_VERBOSE").map(String::as_str), Some("0"), "normal play logs quietly");
         for k in ["PS3_ANISO", "PS3_AA", "PS3_SHARPEN", "PS3_UPSCALE"] {
             assert!(!env.contains_key(k), "{k} is a default and must stay out");
         }

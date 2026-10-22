@@ -58,6 +58,9 @@ pub const DEBUG_ENV: &[(&str, &str)] = &[
     // every 60 s the guest threads and where each one waits: the last dump
     // before a hang says what it hangs on
     ("PS3_THREAD_DUMP", "60"),
+    // the runtime's per-event lines ([WAIT], [evt]): normal play turns them
+    // off (launch_env), the triage reads them
+    ("PS3_VERBOSE", "1"),
 ];
 
 /// The variables play_dump.sh sets, pointed at `dir`, and `DEBUG_ENV`. Two
