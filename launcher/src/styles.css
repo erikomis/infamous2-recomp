@@ -371,6 +371,15 @@ input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rg
 .tab-panel.active { display: block; animation: fade 0.15s ease-out; }
 .tab-panel > .hint:first-child { margin: 0 0 4px; }
 .update-info { display: grid; gap: 6px; margin-bottom: 14px; }
+.update-info .update-notes { white-space: pre-wrap; max-height: 160px; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--muted); font-size: 12px; }
+.update-progress { margin: 8px 0 12px; max-width: 520px; }
+.update-progress .progress { height: 6px; }
+.update-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-deep), var(--accent)); box-shadow: 0 0 12px var(--accent); transition: width 0.2s; }
+.update-bar.indeterminate { width: 35%; animation: update-slide 1.1s ease-in-out infinite; }
+@keyframes update-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.update-progress-text { margin-top: 4px; }
+.notice-bar .update-progress { margin: 8px 0 0; }
+#update-auto-row { margin-top: 14px; }
 
 /* game log viewer */
 .log-meta { margin: 8px 0; }
