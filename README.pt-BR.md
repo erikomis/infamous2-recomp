@@ -105,7 +105,8 @@ Controles e Avançado.
   Qualidade). O Modo Jogo do macOS liga em tela cheia.
 - **Controles:** remapeamento de teclado, mouse e controle, câmera no mouse,
   vibração; **áudio** (volume e saída); **idioma do jogo** (os que a sua
-  cópia traz).
+  cópia traz), com a voz e as legendas/menus cada um no seu idioma se quiser
+  (ex.: voz em inglês, legendas em português).
 - **Saves:** listar, fazer backup, restaurar, importar/exportar com o RPCS3,
   `.zip`.
 - **Troféus:** os troféus do jogo com os seus desbloqueios (nomes e ícones da
@@ -342,6 +343,7 @@ apertados, nenhum chega. `PS3_OVERLAY_PAD=0` desliga a combinação no controle,
 | Áudio | volume geral |
 | Controles | jogar com controle + teclado/mouse, só o controle ou só teclado/mouse; os ícones dos botões nos avisos do jogo (automático, PlayStation, Xbox, teclado e mouse); vibração liga/desliga e força; câmera no mouse liga/desliga, sensibilidade e inversão vertical/horizontal; uma tabela com cada botão do PS3 e sua tecla, botão do mouse e botão do controle: clique numa célula (ou escolha com o controle e aperte ✕), aperte a nova entrada e ela vale na hora (Esc cancela, botão direito limpa, "Restaurar padrões"). O aperto vai para o menu, nunca para o jogo. As trocas são salvas na hora no mesmo `input.toml` que a tela Controles do launcher edita |
 | Desempenho | um painel pequeno num canto que fica com o menu fechado: fps, tempo de quadro com gráfico, núcleos de CPU em uso e threads ocupadas (≥ 80% de um núcleo: aqui sobretudo as das SPUs), o tempo de codificação Metal do RSX e a espera pela GPU por quadro; canto, opacidade e gráfico são opções |
+| Jogo | o idioma do jogo, a voz e o texto (menus e legendas), cada um entre os idiomas que a sua cópia traz, e quais estão em uso agora. O jogo carrega o idioma ao abrir, então valem quando ele reiniciar (o menu avisa) |
 
 O que o menu muda é salvo quando ele fecha, em
 `~/Library/Application Support/infamous2-recomp/overlay.ini` (o `run.sh`
@@ -377,6 +379,9 @@ fps e coincidiu com travamentos.
 
 | Variável | O que faz |
 | --- | --- |
+| `PS3_LANG=pt\|en\|es\|fr\|ru\|ja\|...` | o idioma do console (padrão `pt`: português do Brasil). Esta versão das Américas só escolhe os próprios arquivos para `pt` (brazilian), `es` (latino), `en` e `fr`, e joga todos os outros idiomas em inglês; o port então serve ele mesmo os arquivos desse idioma, então `ru`, `ja`, `de`, `it`, `nl`, `pl`, `tr`, `ko`, `zh-t`, `en-gb`, `pt-pt` (português de Portugal) e `es-es` (espanhol da Espanha) também funcionam (coreano, chinês e inglês do Reino Unido não têm dublagem: voz em inglês). Lido uma vez ao abrir |
+| `PS3_VOICE_LANG=<nome>` | a dublagem em outro idioma: os diálogos e a faixa de voz dos filmes. `<nome>` é o nome do arquivo na sua cópia: `english`, `brazilian`, `portuguese`, `latino`, `spanish`, `french`, `german`, `italian`, `dutch`, `polish`, `russian`, `turkish`, `japanese`. Sem ela: a do idioma do jogo. Ex.: `PS3_LANG=pt PS3_VOICE_LANG=english` = voz em inglês, texto em português |
+| `PS3_TEXT_LANG=<nome>` | menus, HUD e legendas em outro idioma (mudam juntos: a fonte com as letras vem com os menus); os nomes acima mais `british`, `korean`, `chinese`. Sem ela: o do idioma do jogo. O log mostra cada arquivo servido (`[lang] ...`) |
 | `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | como o jogo abre: em janela (padrão), na tela cheia do macOS (um Space só dele) ou em tela cheia sem bordas (cobre a tela no lugar, sem barra de menus nem Dock, troca de app na hora) |
 | `PS3_WINDOW_SIZE=<l>x<a>` | o tamanho da janela em pontos, p. ex. `1920x1080` (padrão 1280x720, reduzido para caber na tela) |
 | `PS3_WINDOW_ICON=game\|<arquivo>\|none` | o ícone no Dock: por padrão o placeholder original do launcher (`infamous2-lle/window_icon.png`, sem arte da Sony); `game` usa o `PS3_GAME/ICON0.PNG` da sua própria cópia |
