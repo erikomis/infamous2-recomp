@@ -455,6 +455,38 @@ function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: numb
   bindSelect("upscale", "upscale");
   bindSelect("q-upscale", "upscale");
   bindRange("sharpen", "sharpen", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
+  bindPreset();
+}
+
+/** Ready-made image-quality profiles: they only set the four image options
+ * above (the GPU light/SSAO cost nothing visually and stay as they are). The
+ * list shows the profile the current values match, or "custom". */
+const PRESETS: Record<string, Pick<Settings, "aniso" | "aa" | "sharpen" | "upscale">> = {
+  performance: { aniso: 0, aa: "", sharpen: 0, upscale: "" },
+  balanced: { aniso: 4, aa: "fxaa", sharpen: 0.2, upscale: "" },
+  quality: { aniso: 16, aa: "fxaa", sharpen: 0.35, upscale: "metalfx" },
+};
+
+function currentPreset(): string {
+  for (const [name, p] of Object.entries(PRESETS)) {
+    if (settings.aniso === p.aniso && settings.aa === p.aa && settings.upscale === p.upscale &&
+        Math.abs(settings.sharpen - p.sharpen) < 0.005) return name;
+  }
+  return "custom";
+}
+
+function bindPreset() {
+  const el = $<HTMLSelectElement>("preset");
+  syncers.push(() => { el.value = currentPreset(); });
+  el.value = currentPreset();
+  $("sharpen").addEventListener("input", () => { el.value = currentPreset(); });
+  el.addEventListener("change", () => {
+    const p = PRESETS[el.value];
+    if (!p) return;
+    Object.assign(settings, p);
+    syncAll();
+    persist();
+  });
 }
 
 /** The GPU SSAO needs the GPU light pass; gamma/mouse sliders follow their toggles. */
