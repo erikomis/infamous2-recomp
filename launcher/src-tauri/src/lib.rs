@@ -6,6 +6,7 @@
 
 mod app_icon;
 mod input_map;
+mod mods;
 mod play_shortcut;
 mod report;
 mod saves;
@@ -84,6 +85,19 @@ pub struct Settings {
     /// of it (PS3_LUT_STRENGTH, 0..1).
     pub lut_path: String,
     pub lut_strength: f32,
+    /// PS3_LUT_PRESET: a built-in colour LUT ("warm", "cool", "film",
+    /// "vivid"; empty = none) in place of the file, mixed in by lut_strength.
+    pub lut_preset: String,
+    /// PS3_SHADOWS, PS3_MIDTONES, PS3_HIGHLIGHTS: the tone curve, each
+    /// -1 .. 0 (off) .. 1.
+    pub shadows: f32,
+    pub midtones: f32,
+    pub highlights: f32,
+    /// PS3_CLARITY: local contrast, -1 .. 0 (off) .. 1.
+    pub clarity: f32,
+    /// PS3_MODS: the texture packs in use (folders in <data>/mods), first
+    /// wins; empty = none.
+    pub mods: Vec<String>,
     /// PS3_UPSCALE: "" (off) or "metalfx" (macOS 13+).
     pub upscale: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
@@ -161,6 +175,12 @@ impl Default for Settings {
             grain: 0.0,
             lut_path: String::new(),
             lut_strength: 1.0,
+            lut_preset: String::new(),
+            shadows: 0.0,
+            midtones: 0.0,
+            highlights: 0.0,
+            clarity: 0.0,
+            mods: Vec::new(),
             upscale: String::new(),
             mouse: true,
             mouse_sens: 1.0,
@@ -672,11 +692,25 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     if s.grain >= 0.005 {
         set("PS3_GRAIN", format!("{:.2}", s.grain.min(1.0)));
     }
+    let preset = valid_lut_preset(&s.lut_preset);
     if !s.lut_path.trim().is_empty() {
         set("PS3_LUT", s.lut_path.trim().to_string());
-        if s.lut_strength < 0.995 {
-            set("PS3_LUT_STRENGTH", format!("{:.2}", s.lut_strength.clamp(0.0, 1.0)));
+    }
+    if let Some(p) = preset {
+        set("PS3_LUT_PRESET", p.into());
+    }
+    if (preset.is_some() || !s.lut_path.trim().is_empty()) && s.lut_strength < 0.995 {
+        set("PS3_LUT_STRENGTH", format!("{:.2}", s.lut_strength.clamp(0.0, 1.0)));
+    }
+    for (k, v) in [("PS3_SHADOWS", s.shadows), ("PS3_MIDTONES", s.midtones), ("PS3_HIGHLIGHTS", s.highlights), ("PS3_CLARITY", s.clarity)] {
+        if v.abs() >= 0.005 {
+            set(k, format!("{:.2}", v.clamp(-1.0, 1.0)));
         }
+    }
+    // Texture packs: the folder and the enabled ones, first wins.
+    if let Some(list) = mods::env_list(&s.mods) {
+        set("PS3_MODS_DIR", mods_dir().to_string_lossy().into_owned());
+        set("PS3_MODS", list);
     }
     if s.upscale == "metalfx" {
         set("PS3_UPSCALE", "metalfx".into());
@@ -750,6 +784,16 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     set("PS3_VERBOSE", "0".into());
     env.extend(parse_env_lines(&s.extra_env));
     env
+}
+
+/// The built-in LUTs the game knows (rsx_metal_backend.m, PS3_LUT_PRESET).
+fn valid_lut_preset(v: &str) -> Option<&'static str> {
+    ["warm", "cool", "film", "vivid"].into_iter().find(|p| *p == v.trim())
+}
+
+/// Where texture packs live: <data>/mods.
+fn mods_dir() -> PathBuf {
+    data_root().join("mods")
 }
 
 /// "<w>x<h>", as PS3_WINDOW_SIZE takes it (the window shrinks it to the screen).
@@ -843,6 +887,14 @@ fn list_outputs_host() -> Outputs {
 #[tauri::command]
 async fn list_outputs() -> Outputs {
     tauri::async_runtime::spawn_blocking(list_outputs_host).await.unwrap_or_default()
+}
+
+/// The Mods card: the packs in <data>/mods (the folder is created, so "Open
+/// mods folder" always has somewhere to go).
+#[tauri::command]
+fn list_mods() -> mods::ModsInfo {
+    let dir = mods_dir();
+    mods::ModsInfo { packs: mods::list(&dir), dir: dir.to_string_lossy().into_owned() }
 }
 
 #[tauri::command]
@@ -2541,6 +2593,7 @@ pub fn run() {
             saves_export_zip,
             saves_import_zip,
             list_outputs,
+            list_mods,
             report_info,
             report_list,
             report_triage,
@@ -2828,6 +2881,29 @@ mod tests {
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert!(!env.contains_key("PS3_ANISO"));
         assert!(!env.contains_key("PS3_SHARPEN"));
+        assert!(!env.contains_key("PS3_LUT_STRENGTH"), "no LUT, no strength");
+        for k in ["PS3_SHADOWS", "PS3_MIDTONES", "PS3_HIGHLIGHTS", "PS3_CLARITY", "PS3_LUT_PRESET", "PS3_MODS", "PS3_MODS_DIR"] {
+            assert!(!env.contains_key(k), "{k} is off by default");
+        }
+        // Curves, clarity, a LUT preset (with its strength), texture packs.
+        s.shadows = 0.3;
+        s.highlights = -1.5;
+        s.clarity = 0.25;
+        s.lut_preset = "film".into();
+        s.mods = vec!["HD UI".into(), "bad,name".into(), "Warm".into()];
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_SHADOWS").map(String::as_str), Some("0.30"));
+        assert_eq!(env.get("PS3_HIGHLIGHTS").map(String::as_str), Some("-1.00"));
+        assert!(!env.contains_key("PS3_MIDTONES"));
+        assert_eq!(env.get("PS3_CLARITY").map(String::as_str), Some("0.25"));
+        assert_eq!(env.get("PS3_LUT_PRESET").map(String::as_str), Some("film"));
+        assert_eq!(env.get("PS3_LUT_STRENGTH").map(String::as_str), Some("0.60"));
+        assert!(!env.contains_key("PS3_LUT"));
+        assert_eq!(env.get("PS3_MODS").map(String::as_str), Some("HD UI,Warm"));
+        assert!(env.get("PS3_MODS_DIR").is_some_and(|d| d.ends_with("mods")));
+        s.lut_preset = "sepia".into();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert!(!env.contains_key("PS3_LUT_PRESET"), "an unknown preset stays out");
     }
 
     #[test]

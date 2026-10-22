@@ -167,9 +167,9 @@ What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
   vertex-cache prune (2026-10-22) took out the first-use hitches and part of
   the dips; what is left in New Marais is mostly SPU time.
 - **Keyboard icons in the button prompts**, instead of the PS3 ones.
-- **More ReShade-style effects** in the final image pass (SMAA, vibrance,
-  contrast, colour LUTs, vignette and grain are in): curves and local
-  contrast.
+- **Texture packs** (`PS3_MODS`, Game > Texture packs) and **more image
+  effects** (clarity, a tone curve, built-in colour presets) are in,
+  waiting for a windowed test.
 - **Pull requests to [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
   all of this port's PRs up to #375 were merged on 2026-10-19; the sixth
   round (#470 SMAA, vibrance and contrast; #472 controller hot-plug; #476
@@ -384,10 +384,15 @@ class; it did not raise the frame rate in tests and coincided with hangs.
 | `PS3_VIGNETTE=0..1`, `PS3_GRAIN=0..1` | Darker corners; film grain. Default 0 (off) |
 | `PS3_VIBRANCE=-1..1` | Vibrance: saturation raised most on dull colours (negative mutes). Default 0 (off) |
 | `PS3_CONTRAST=0.5..1.5` | Contrast around mid-grey. Default 1 (off) |
+| `PS3_CLARITY=-1..1` | Clarity (local contrast): the luminance minus a wide blur of it, added back toward the midtones, so large shapes stand out without the fine grain sharpening adds; negative softens. Default 0 (off) |
+| `PS3_SHADOWS`, `PS3_MIDTONES`, `PS3_HIGHLIGHTS=-1..1` | A tone curve: each lifts (or, negative, lowers) its third of the range while black and white stay put. Default 0 (off) |
+| `PS3_LUT_PRESET=warm\|cool\|film\|vivid` | A built-in colour grade (written for this port, generated as a 32³ LUT) in place of the `PS3_LUT` file; `PS3_LUT_STRENGTH` mixes it in. Default off |
+| `PS3_MODS=<pack>,<pack>` | Texture packs: folders in `PS3_MODS_DIR` (`run.sh`: `~/Library/Application Support/infamous2-recomp/mods`) of PNGs named by the key of the texture they replace (`<16 hex digits>.png`, optionally `_anything` before `.png`); the first pack wins. Any size (a higher-resolution PNG gets its own mip chain); the sampler and channel remap of the original stay. Colour textures only (RGBA8 and DXT); one the game reads in texels must keep its size. In the app: Game > Texture packs. Default none |
+| `PS3_MODS_DUMP=<dir>` | Writes every colour texture the game uploads, once each, as `<dir>/<key>.png` (the name a pack uses) with a line in `<dir>/textures.txt` (key, size, format, address): dump, edit, drop into a pack |
 | `PS3_AA=fxaa` / `smaa` | Anti-aliasing on the game's 1280x720 image, before any scaling: FXAA (cheapest, slightly soft) or SMAA 1x (sharper text and textures). Default off |
 | `PS3_SHARPEN=<0..1>` | contrast-adaptive sharpening (AMD CAS style) at the output resolution; 0 (default) is off |
 | `PS3_UPSCALE=metalfx` | MetalFX spatial upscaling from 1280x720 to the window's pixel size (macOS 13+), instead of the layer's plain stretch. Falls back to the plain path, with a line in the log, where MetalFX is missing. Default off |
-| `PS3_AUDIO_VOLUME=<0..100>` | master volume (default 100). Applied to what the Mac plays, on a curve that sounds even: 50 is about −12 dB |
+| `PS3_AUDIO_VOLUME=<0..100>` | master volume (default 100). Applied to what the Mac plays (the movies' sound too: it is all one mix), on a curve that sounds even: 50 is about −12 dB. Live from the in-game menu and `PS3_TOGGLE_FILE` |
 | `PS3_AUDIO_DEVICE=<name>` | the audio output, by its name in Sound settings (any case, or a part: `AirPods`); not found or unset, the system default (which the game follows when it changes) |
 | `PS3_RUMBLE=0` | no controller vibration. On by default: the game's rumble reaches DualSense, DualShock 4 and Xbox controllers through SDL |
 | `PS3_RUMBLE_STRENGTH=<0..200>` | vibration strength in percent (default 100); above 100 strengthens light rumble, capped at the motors' maximum. `PS3_RUMBLE_LOG=1` prints every request the game makes |
