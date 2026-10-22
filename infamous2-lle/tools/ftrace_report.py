@@ -23,6 +23,7 @@ few frames as a timeline (one column per --ms-per-col ms):
   SPU   '#' busy      ' ' waiting on a channel
   RSX   'S' blocked on ACQUIRE   'D' FIFO drain   'P' present   '|' flip reached
         inside D/P: 'E' Metal encode   'G' waiting for the GPU   'R' render-target readback
+                    'C' a shader/pipeline built on first use   'T' a texture decoded + uploaded
 """
 import argparse
 import collections
@@ -30,7 +31,7 @@ import statistics
 import sys
 
 (SYSCALL, USLEEP, SPU_WAIT, SPU_BUSY, SEMA, SEMA_GAVEUP, DRAIN, FLIP_FIFO, FLIP_REQ, PRESENT,
- GPU_ENCODE, GPU_WAIT, READBACK, GPU_EXEC, TOGGLE) = range(1, 16)
+ GPU_ENCODE, GPU_WAIT, READBACK, GPU_EXEC, TOGGLE, COMPILE, TEXUP) = range(1, 18)
 # include/ps3emu/ps3_toggles.h, enum ps3_toggle_id (append-only there too).
 TOGGLE_NAMES = ["PS3RECOMP_ENG_VCACHE", "PS3RECOMP_ENG_TEXHASH_FULL", "PS3RECOMP_ENG_SKIP_FP",
                 "PS3_SPU_FASTJOB", "PS3_SPU_STUB_MICRO", "PS3_SPU_STACK_HINT", "PS3_SPU_DRAIN_INLINE",
@@ -132,7 +133,8 @@ SYSCALL_NAMES = {   # runtime/syscalls/lv2_syscall_table.h
 
 
 RSX_ROWS = ("acquire wait", "drain", "present", "encode (flush)", "encode (present)",
-            "gpu wait (flush)", "gpu wait (present)", "gpu wait (in-flight)", "readback")
+            "gpu wait (flush)", "gpu wait (present)", "gpu wait (in-flight)", "readback",
+            "first-use compile", "texture upload")
 
 
 def load(path, kinds=None):
@@ -224,6 +226,10 @@ def main():
                 acc[("rsx", GPU_WAIT_KIND.get(a, "gpu wait"))] += o
             elif k == READBACK:
                 acc[("rsx", "readback")] += o
+            elif k == COMPILE and who == 0:   # the engine's whole miss (1-4 are inside it)
+                acc[("rsx", "first-use compile")] += o
+            elif k == TEXUP:
+                acc[("rsx", "texture upload")] += o
         for t in tids:
             keys = [key for key in acc if key[0] == "ppu" and key[1] == t]
             for key in keys:
@@ -325,6 +331,10 @@ def main():
                 paint(lines[("rsx",)], t0, t1, "G", True)
             elif k == READBACK:
                 paint(lines[("rsx",)], t0, t1, "R", True)
+            elif k == COMPILE and who == 0:
+                paint(lines[("rsx",)], t0, t1, "C", True)
+            elif k == TEXUP:
+                paint(lines[("rsx",)], t0, t1, "T", True)
         for key, row in lines.items():
             if key[0] == "ppu":
                 label = f"{key[1]:3d} {names.get(key[1], '?')[:14]:14s}"
