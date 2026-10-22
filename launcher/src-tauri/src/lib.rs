@@ -40,6 +40,9 @@ pub struct Settings {
     pub install_dir: String,
     /// PS3_LANG: dub, subtitles and menus. "pt" selects the Brazilian files.
     pub game_lang: String,
+    /// PS3_PATCHES: community patches by name, read from the player's own
+    /// RPCS3 patch.yml (game_patches.cpp).
+    pub patches: Vec<String>,
     /// PS3RECOMP_ENG_GPU_LIGHT: the SPU light pass on the GPU.
     pub gpu_light: bool,
     /// PS3RECOMP_ENG_GPU_SSAO: the SSAO job on the GPU (needs gpu_light).
@@ -113,6 +116,7 @@ impl Default for Settings {
             ui_lang: "pt-BR".into(),
             install_dir: default_install_dir().to_string_lossy().into_owned(),
             game_lang: "pt".into(),
+            patches: Vec::new(),
             gpu_light: true,
             gpu_ssao: true,
             skip_occlusion: true,
@@ -570,6 +574,10 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
         set("PS3_DEV_FLASH", inst.dev_flash.clone());
     }
     set("PS3_LANG", s.game_lang.clone());
+    let patches: Vec<&str> = s.patches.iter().map(|p| p.trim()).filter(|p| !p.is_empty() && !p.contains(',')).collect();
+    if !patches.is_empty() {
+        set("PS3_PATCHES", patches.join(","));
+    }
     if !s.gpu_light {
         set("PS3RECOMP_ENG_GPU_LIGHT", String::new());
     }
