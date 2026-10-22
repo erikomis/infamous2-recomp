@@ -210,6 +210,7 @@ Ideas from the God of War III PC port, ReShade and what players ask for; not don
 - [ ] **Persistent pipeline cache** (`MTLBinaryArchive` with the translated shaders) and a background warm-up at start: removes the hitches the first time an effect or a place shows up.
 - [ ] **Community patches** read from the player's own RPCS3 `patch.yml` (nothing shipped here): "Skip Intro" (FlexBy) and "Extended FOV" (illusion) exist for NPUA80638 01.03. Data patches at load time; code patches on the EBOOT before translation (`rebuild.py`). Credited to their authors.
 - [ ] **In-game capture hotkey** for debug mode (a key and a controller combo), without switching to the app; and a normal **screenshot** to PNG.
+  - Update 2026-10-21: **F12** captures the current frame in debug mode (render targets, pass log, shaders; `[capture] in-game key` in the log, listed by `log_triage.py`), with a corner notice; outside debug mode it says how to start it. Still open: a controller combo and a plain PNG screenshot.
 - [ ] **Automatic capture when something hangs** in debug mode: a watchdog that saves the frame, the log and the threads' state when the GPU or the game stops for a few seconds.
 - [ ] **Trophies:** a corner notice when one is earned (through the overlay) and the list in the app; the game already writes them to `<data dir>/trophies`.
 - [ ] **App auto-update:** download and install the new version (`tauri-plugin-updater` with a `latest.json` signed in CI), beyond today's notice.

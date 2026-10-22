@@ -41,9 +41,9 @@ const en = {
 
   "report.title": "Debug mode",
   "report.hintIdle":
-    "Play normally: in debug mode the game also writes down everything that goes wrong (missing functions, shader and texture failures, GPU stalls, SPU faults, audio falling behind, files it cannot open, frame-rate drops) and keeps a timed index of the session. When something looks or sounds wrong, come back to this window and click Capture this frame: that frame's render targets, its draw list and the shaders are saved next to the log, with the time and the frame number. Afterwards, Analyse lists what went wrong. The game runs a little slower in this mode; the normal Play is unchanged.",
+    "Play normally: in debug mode the game also writes down everything that goes wrong (missing functions, shader and texture failures, GPU stalls, SPU faults, audio falling behind, files it cannot open, frame-rate drops) and keeps a timed index of the session. When something looks or sounds wrong, press F12 in the game (or come back to this window and click Capture this frame): that frame's render targets, its draw list and the shaders are saved next to the log, with the time and the frame number. Afterwards, Analyse lists what went wrong. The game runs a little slower in this mode; the normal Play is unchanged.",
   "report.hintLive":
-    "Go to the spot that looks wrong, then click Capture this frame here (Cmd+Tab back to this window). Each click captures the next frame the game draws; capture as many as you like, then close the game.",
+    "Go to the spot that looks wrong and press F12 in the game, or click Capture this frame here (Cmd+Tab back to this window). Each press captures the next frame the game draws; capture as many as you like, then close the game.",
   "report.hintNotDiag":
     "The game was started with the normal Play, so it is not logging problems or capturing frames. Stop it and start it again with Play in debug mode.",
   "report.play": "Play in debug mode",
@@ -520,9 +520,9 @@ const ptBR: Partial<Record<Key, string>> = {
 
   "report.title": "Modo de depuração",
   "report.hintIdle":
-    "Jogue normalmente: no modo de depuração o jogo também anota tudo o que dá errado (funções que faltam, falhas de shader e de textura, travadas da GPU, falhas das SPUs, áudio atrasando, arquivos que não abrem, quedas de fps) e mantém um índice com os horários da sessão. Quando algo aparecer ou soar errado, volte para esta janela e clique em Capturar este quadro: os render targets daquele quadro, a lista de desenhos e os shaders ficam junto com o log, com a hora e o número do quadro. Depois, Analisar lista o que deu errado. Nesse modo o jogo fica um pouco mais lento; o Jogar normal não muda.",
+    "Jogue normalmente: no modo de depuração o jogo também anota tudo o que dá errado (funções que faltam, falhas de shader e de textura, travadas da GPU, falhas das SPUs, áudio atrasando, arquivos que não abrem, quedas de fps) e mantém um índice com os horários da sessão. Quando algo aparecer ou soar errado, aperte F12 no jogo (ou volte para esta janela e clique em Capturar este quadro): os render targets daquele quadro, a lista de desenhos e os shaders ficam junto com o log, com a hora e o número do quadro. Depois, Analisar lista o que deu errado. Nesse modo o jogo fica um pouco mais lento; o Jogar normal não muda.",
   "report.hintLive":
-    "Vá até o lugar que está errado e clique em Capturar este quadro aqui (Cmd+Tab volta para esta janela). Cada clique captura o próximo quadro que o jogo desenhar; capture quantos quiser e depois feche o jogo.",
+    "Vá até o lugar que está errado e aperte F12 no jogo, ou clique em Capturar este quadro aqui (Cmd+Tab volta para esta janela). Cada captura pega o próximo quadro que o jogo desenhar; capture quantos quiser e depois feche o jogo.",
   "report.hintNotDiag":
     "O jogo foi aberto pelo Jogar normal, então não está anotando problemas nem capturando quadros. Feche e abra de novo com Jogar em modo de depuração.",
   "report.play": "Jogar em modo de depuração",

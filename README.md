@@ -104,8 +104,8 @@ Advanced.
 - **Debug mode** (Advanced > Debug mode): play normally while the game logs
   what goes wrong (missing functions, shader/texture failures, GPU stalls,
   SPU faults, audio falling behind, files it cannot open, frame-rate drops)
-  and keeps a timed index of the session; press **Capture this frame** when
-  something looks wrong. Afterwards **Analyse** runs
+  and keeps a timed index of the session; press **F12** in the game (or
+  **Capture this frame** in the app) when something looks wrong. Afterwards **Analyse** runs
   `infamous2-lle/tools/log_triage.py` on the session and lists the top
   issues (also in `triage.md` in the session folder, for a developer or an
   agent to go through), and **Create .zip** packs it all for an issue.
