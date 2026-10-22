@@ -63,6 +63,10 @@ Original diffs in `infamous2-lle/patches/upstream-prs/`.
   [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross),
   [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools),
   [Capstone](https://www.capstone-engine.org/), CMake, Ninja.
+- [SMAA](https://github.com/iryoku/smaa) (Jorge Jimenez, Jose I. Echevarria,
+  Belen Masia, Fernando Navarro, Diego Gutierrez; MIT): the `PS3_AA=smaa`
+  anti-aliasing, its shader and lookup textures in the toolkit's
+  `third_party/smaa`.
 
 ## Game
 

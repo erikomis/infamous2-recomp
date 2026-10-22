@@ -464,7 +464,7 @@ function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: numb
 const PRESETS: Record<string, Pick<Settings, "aniso" | "aa" | "sharpen" | "upscale">> = {
   performance: { aniso: 0, aa: "", sharpen: 0, upscale: "" },
   balanced: { aniso: 4, aa: "fxaa", sharpen: 0.2, upscale: "" },
-  quality: { aniso: 16, aa: "fxaa", sharpen: 0.35, upscale: "metalfx" },
+  quality: { aniso: 16, aa: "smaa", sharpen: 0.35, upscale: "metalfx" },
 };
 
 function currentPreset(): string {
