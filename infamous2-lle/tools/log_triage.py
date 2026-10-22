@@ -711,11 +711,17 @@ def perf_stats(tr, tm):
     if tr.rsx_fps:
         guest = [r[2] for r in tr.rsx_fps if r[2] > 0]
         disp = [r[1] for r in tr.rsx_fps]
-        worst = [r[5] for r in tr.rsx_fps]
+        # A hidden or covered window presents nothing (display 0) while the
+        # game runs on: the "max frame" of that second and the next is the
+        # gap until a drawable came back, not a stall of the game.
+        shown = [r for i, r in enumerate(tr.rsx_fps)
+                 if r[1] > 0 and (i == 0 or tr.rsx_fps[i - 1][1] > 0)]
+        worst = [r[5] for r in shown] or [0.0]
         hitches = [{'t': rnd(tm.at(r[0])), 'max_ms': r[5], 'guest_fps': r[2]}
-                   for r in tr.rsx_fps if r[5] >= 250.0]
+                   for r in shown if r[5] >= 250.0]
         out['window'] = OrderedDict([
             ('samples', len(tr.rsx_fps)),
+            ('hidden_seconds', len(tr.rsx_fps) - len(shown)),
             ('guest_fps_median', rnd(statistics.median(guest)) if guest else None),
             ('guest_fps_p5', rnd(pct(guest, 0.05))),
             ('display_fps_median', rnd(statistics.median(disp))),
