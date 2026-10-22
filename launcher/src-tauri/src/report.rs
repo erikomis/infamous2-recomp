@@ -58,6 +58,9 @@ pub const DEBUG_ENV: &[(&str, &str)] = &[
     // every 60 s the guest threads and where each one waits: the last dump
     // before a hang says what it hangs on
     ("PS3_THREAD_DUMP", "60"),
+    // and at once when the GPU runs dry for 2 s (a hang): every guest
+    // thread's position at that moment
+    ("PS3_HANG_DUMP", "1"),
     // the runtime's per-event lines ([WAIT], [evt]): normal play turns them
     // off (launch_env), the triage reads them
     ("PS3_VERBOSE", "1"),

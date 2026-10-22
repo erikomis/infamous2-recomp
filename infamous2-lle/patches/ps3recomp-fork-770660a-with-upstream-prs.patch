@@ -5164,7 +5164,7 @@ index 0000000..f8ee047
 +    puts("PS3_GAMEDATA_ROOT moves the save root and the listing follows it");
 +}
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..a794ae8 100644
+index 73b7e71..fdecb32 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -9,13 +9,16 @@
@@ -5578,7 +5578,7 @@ index 73b7e71..a794ae8 100644
      }
      s_ref_q[t % GCM_REF_QLEN] = v;
      s_ref_qtail = t + 1;
-@@ -1469,17 +1650,48 @@ void cellGcm_ref_on_poll(void)
+@@ -1469,17 +1650,54 @@ void cellGcm_ref_on_poll(void)
      ReleaseSRWLockExclusive(&s_ref_pub_lock);
      if (dry && s_gcm_kick_ev)
          SetEvent(s_gcm_kick_ev);       /* dry: ask the present thread to walk */
@@ -5598,6 +5598,12 @@ index 73b7e71..a794ae8 100644
 +                    vm_read32(GCM_LABEL_GUEST_BASE + 0x860), vm_read32(GCM_LABEL_GUEST_BASE + 0x870),
 +                    vm_read32(GCM_LABEL_GUEST_BASE + 0x880), vm_read32(GCM_LABEL_GUEST_BASE + 0x890));
 +            gcm_fifo_dump_around(s_fifo_getoff);
++            /* PS3_HANG_DUMP=1 (the launcher's debug mode): where every guest
++             * thread is at that moment, not up to a minute later. */
++            { static int hd = -1;
++              if (hd < 0) { const char* e = getenv("PS3_HANG_DUMP"); hd = e && *e == '1'; }
++              if (hd) { extern void ps3_thread_dump_now(const char* why);
++                        ps3_thread_dump_now("the GPU has had nothing to do for 2 s"); } }
 +        }
 +    }
  }
@@ -5627,7 +5633,7 @@ index 73b7e71..a794ae8 100644
      { static unsigned _n = 0; static unsigned long long _t0 = 0;
        extern unsigned long long ps3_ms_now(void);
        _n++;
-@@ -1608,7 +1820,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1608,7 +1826,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
              static u32 last_bad; static int n;
              if (s_fifo_getoff != last_bad || n < 4) {
                  last_bad = s_fifo_getoff;
@@ -5636,7 +5642,7 @@ index 73b7e71..a794ae8 100644
                      fprintf(stderr, "[cellGcmSys] FIFO get=0x%08X has no IO "
                              "mapping -- resyncing to put=0x%08X\n",
                              s_fifo_getoff, put);
-@@ -1647,6 +1859,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1647,6 +1865,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
                if (dbg && (flips <= 8ull || (flips % 200ull) == 0))
                    fprintf(stderr, "[flipword] %llu FIFO flip words decoded%c",
                            flips, 10); }
@@ -5645,7 +5651,7 @@ index 73b7e71..a794ae8 100644
              if ((w & 0xFFFFFF00u) == GCM_FLIP_MARKER) {
                  /* Queued by _cellGcmSetFlipCommand, which already did the
                   * guest-visible half of the request. */
-@@ -1677,6 +1891,17 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1677,6 +1897,17 @@ static void gcm_rsx_process_fifo_unlocked(void)
                                 s_fifo_getoff, w & 0x1FFFFFFCu, put); }
              { u32 tgt = w & 0x1FFFFFFCu;
                if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("JUMP", tgt, w); gcm_fifo_dump_around(s_fifo_getoff); gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put); break; }
@@ -5663,7 +5669,7 @@ index 73b7e71..a794ae8 100644
                /* A JUMP to its own address is the "park the RSX here" idiom:
                 * the title leaves it at the write head so the GPU stops if it
                 * catches up, and overwrites it when the next segment is
-@@ -1690,8 +1915,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1690,8 +1921,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -5700,7 +5706,7 @@ index 73b7e71..a794ae8 100644
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -1754,8 +2005,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1754,8 +2011,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
                      u32 m = (type == 0) ? method + i * 4 : method;
                      u32 v = vm_read32(dea);
                      u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
@@ -5724,7 +5730,7 @@ index 73b7e71..a794ae8 100644
                      if (m == 0x64u)      s_sema_offset = v;
                      else if (m == 0x6Cu) vm_write32(la, v);
                      else if (m == 0x68u && vm_read32(la) != v) {
-@@ -1763,12 +2027,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1763,12 +2033,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * the hardware does. Off by default: a title whose label nothing
               * ever writes would wedge the drain permanently, and RELEASE on
               * its own is the half that unblocks a waiting guest. */
@@ -5765,7 +5771,7 @@ index 73b7e71..a794ae8 100644
                  s_fifo_getoff += 4 + count * 4;
                  continue;
              }
-@@ -1840,7 +2128,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1840,7 +2134,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                    { static u32 vw = 1;
                      if (vw == 1) { const char* e = getenv("GCM_VAL_WATCH"); vw = e ? (u32)strtoul(e, 0, 16) : 0; }
                      if (vw && dw == vw) {
@@ -5774,7 +5780,7 @@ index 73b7e71..a794ae8 100644
                              printf("[valwatch] subch=%u method=0x%04X = 0x%08X get=0x%X%c", subch, m, vw, s_fifo_getoff, 10);
                      } }
                    /* ...and surface offsets (colour 0x210/0x218/0x288/0x28C, zeta 0x214) and texture 1 offset */
-@@ -1906,7 +2194,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1906,7 +2200,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                       * tells the title every queried object is occluded. */
                      if (m == 0x1800) {
                          const u32 v = dw, idx = (v & 0xFFFFFFu) / 16u;
@@ -5783,7 +5789,7 @@ index 73b7e71..a794ae8 100644
                          if (idx < CELL_GCM_MAX_REPORT_COUNT) {
                              s_report_data[idx].timestamp = get_timestamp_ns();
                              s_report_data[idx].value = (v >> 24) == 1u ? 0xFFFFu : 0u;
-@@ -1919,7 +2207,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1919,7 +2213,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
              s_fifo_getoff += 4 + count * 4;
              continue;
          }
@@ -5792,7 +5798,7 @@ index 73b7e71..a794ae8 100644
              fprintf(stderr, "[FIFOUW] unknown word 0x%08X at getoff 0x%X\n", w, s_fifo_getoff); }
          s_fifo_getoff += 4;                    /* unknown word: skip */
      }
-@@ -1955,7 +2243,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1955,7 +2249,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
        if (passes && budget <= 0 && s_fifo_getoff != put) {
            if (++burned >= passes) {
                static int n = 0;
@@ -5801,7 +5807,7 @@ index 73b7e71..a794ae8 100644
                    fprintf(stderr, "[cellGcmSys] FIFO walker circling (get=0x%08X, "
                            "put=0x%08X, full budget burned x%d) -- following the "
                            "write head\n", s_fifo_getoff, put, burned);
-@@ -1964,8 +2252,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1964,8 +2258,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
            }
        } else burned = 0; }
  
@@ -5825,7 +5831,7 @@ index 73b7e71..a794ae8 100644
            if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
                               gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
        } else { stuck = 0; last = s_fifo_getoff; } }
-@@ -2057,7 +2359,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2057,7 +2365,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                  s_fifo_getoff = io_begin;                          /* get */
                  put = io_begin;
                  static int n = 0;
@@ -5834,7 +5840,7 @@ index 73b7e71..a794ae8 100644
                      fprintf(stderr, "[cellGcmSys] recycled the title's own ring "
                              "(ctx=0x%08X begin=0x%08X end=0x%08X) -- its callback "
                              "does not%c", ctx, begin, end, 10);
-@@ -2139,7 +2441,7 @@ void cellGcm_fifo_recycle(u32 ctx_ea)
+@@ -2139,7 +2447,7 @@ void cellGcm_fifo_recycle(u32 ctx_ea)
      while (g_gcm_fifo_drained_ea != begin && spins < 2000) { Sleep(1); spins++; }
      if (spins >= 2000) {
          static int warned = 0;
@@ -5843,7 +5849,7 @@ index 73b7e71..a794ae8 100644
              printf("[cellGcmSys] fifo recycle: drain stalled (drained=0x%08X begin=0x%08X)\n",
                     g_gcm_fifo_drained_ea, begin);
      }
-@@ -2247,7 +2549,7 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -2247,7 +2555,7 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
            }
        } }
  
@@ -5852,7 +5858,7 @@ index 73b7e71..a794ae8 100644
          fprintf(stderr, "[FLIP] SetFlipCommand(buf=%u) set=%d\n",
                  bufferId, bufferId < CELL_GCM_MAX_DISPLAY_BUFFER_NUM ? s_display_buffer_set[bufferId] : -1); }
      if (bufferId >= CELL_GCM_MAX_DISPLAY_BUFFER_NUM)
-@@ -2266,8 +2568,13 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -2266,8 +2574,13 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
       * until the present thread's cellGcmTickFlip marks it done (vsync). */
@@ -5866,7 +5872,7 @@ index 73b7e71..a794ae8 100644
  
      /* Invoke via OPD resolution, not a raw call into guest code.
       *
-@@ -2310,9 +2617,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -2310,9 +2623,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of
@@ -5888,7 +5894,7 @@ index 73b7e71..a794ae8 100644
          s_fifo_getoff >= io_begin + GCM_RECYCLE_MARGIN) {
          vm_write32(cur + 4, 0x20000000u | io_begin);   /* JUMP -> begin */
          vm_write32(ctx + 8, begin);
-@@ -2571,7 +2888,7 @@ s32 cellGcmAddressToOffset(u32 address, u32* offset)
+@@ -2571,7 +2894,7 @@ s32 cellGcmAddressToOffset(u32 address, u32* offset)
      printf("[cellGcmSys] WARNING: AddressToOffset failed for 0x%08X\n", address);
      vm_write32(off_ea, 0);
      { static int _d = -1; if (_d < 0) _d = getenv("A2O_FAILDBG") ? 1 : 0;
@@ -5897,7 +5903,7 @@ index 73b7e71..a794ae8 100644
            fprintf(stderr, "[A2O] FAILED ea=0x%08X (not in local or IO space)%c",
                    address, 10); } }
      return CELL_GCM_ERROR_FAILURE;
-@@ -2818,7 +3135,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
+@@ -2818,7 +3141,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
   * walker fills it). Unregistered, every call returned a faked 0. */
  u32 cellGcmGetReport(u32 type, u32 index)
  {
@@ -5906,7 +5912,7 @@ index 73b7e71..a794ae8 100644
        if (__atomic_fetch_add(&n, 1, __ATOMIC_RELAXED) < 8 || (n % 2000) == 0) printf("[cellGcmSys] GetReport(type=%u, index=%u) -> %u%c", type, index,
                            index < CELL_GCM_MAX_REPORT_COUNT ? s_report_data[index].value : 0u, 10); }
      if (index >= CELL_GCM_MAX_REPORT_COUNT) return 0;
-@@ -2960,7 +3277,7 @@ u32 cellGcmGetTiledPitchSize(u32 size)
+@@ -2960,7 +3283,7 @@ u32 cellGcmGetTiledPitchSize(u32 size)
              if (s_valid_pitches[i] >= size) { r = s_valid_pitches[i]; break; }
          }
      }
@@ -19385,7 +19391,7 @@ index 44d51d6..d282836 100644
                  size, addr); }
  
 diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
-index ee91099..f6f32e2 100644
+index ee91099..8763bb6 100644
 --- a/runtime/syscalls/sys_ppu_thread.c
 +++ b/runtime/syscalls/sys_ppu_thread.c
 @@ -3,6 +3,7 @@
@@ -19451,6 +19457,48 @@ index ee91099..f6f32e2 100644
      }
  
      table_unlock();
+@@ -1391,12 +1403,12 @@ static uint32_t td_rd32(uint32_t a)
+     const uint8_t* p = vm_base + a;
+     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+ }
+-static void* thread_dump_main(void* arg)
++/* One dump now ("why" goes into the header): the periodic thread below, and
++ * PS3_HANG_DUMP=1's hang detectors (cellGcmSys's stuck ref). */
++void ps3_thread_dump_now(const char* why)
+ {
+-    const unsigned sec = (unsigned)(uintptr_t)arg;
+-    for (;;) {
+-        sleep(sec);
+-        fprintf(stderr, "[tdump] ---- guest threads ----\n");
++    {
++        fprintf(stderr, "[tdump] ---- guest threads%s%s ----\n", why ? ": " : "", why ? why : "");
+         for (int i = 0; i < PPU_THREAD_MAX; i++) {
+             ppu_thread_info* t = &g_ppu_threads[i];
+             if (t->state != PPU_THREAD_STATE_RUNNING && t->state != PPU_THREAD_STATE_DETACHED) continue;
+@@ -1414,6 +1426,14 @@ static void* thread_dump_main(void* arg)
+         }
+         fflush(stderr);
+     }
++}
++static void* thread_dump_main(void* arg)
++{
++    const unsigned sec = (unsigned)(uintptr_t)arg;
++    for (;;) {
++        sleep(sec);
++        ps3_thread_dump_now(NULL);
++    }
+     return NULL;
+ }
+ 
+@@ -1447,6 +1467,8 @@ static void memdump_start(const char* spec)
+         if (pthread_create(&th, NULL, memdump_main, r) == 0) pthread_detach(th); else free(r);
+     }
+ }
++#else
++void ps3_thread_dump_now(const char* why) { (void)why; }
+ #endif
+ 
+ void sys_ppu_thread_init(lv2_syscall_table* tbl)
 diff --git a/runtime/syscalls/sys_semaphore.c b/runtime/syscalls/sys_semaphore.c
 index 79a9ef2..b48a6ba 100644
 --- a/runtime/syscalls/sys_semaphore.c

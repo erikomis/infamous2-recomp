@@ -636,7 +636,7 @@ class Triage:
             return
 
     def tdump_line(self, s, off):
-        if '---- guest threads ----' in s:
+        if '---- guest threads' in s:          # also '---- guest threads: <why> ----' (PS3_HANG_DUMP)
             if self._tdump_cur:
                 self.tdump, self.tdump_off = self._tdump_cur, self._tdump_off
             self._tdump_cur, self._tdump_off = [], off
