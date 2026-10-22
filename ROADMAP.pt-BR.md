@@ -7,12 +7,12 @@ a seguir. `[x]` = feito e verificado; `[ ]` = a fazer. Itens marcados
 "(novo)" entraram na revisão de 2026-10-15; "Atualização" é o que mudou num item
 que já existia.
 
-## Resumo da situação (2026-10-18)
+## Resumo da situação (2026-10-21)
 
 - **Roda:** boot, logos dos estúdios, vídeos Bink, o menu principal 3D, pausa e opções, o prólogo em Empire City, as cutscenes no motor do jogo e as primeiras missões de New Marais, jogadas com janela e DualSense. Capturas de tela no [README](README.pt-BR.md).
 - **Velocidade:** ~30 fps andando em New Marais (o limite do próprio jogo) nas execuções sem janela em Apple silicon (quadros de 29,7–30,4 ms; mediana de 36 fps sem limite nas execuções de 2026-10-18). Falta confirmar numa sessão longa com janela.
-- **Lançado:** alpha [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) e [v0.2.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0), um `.dmg` do app para macOS/Apple silicon que recompila o jogo a partir da cópia do jogador (veja "App e releases" em Feito).
-- **Problemas conhecidos:** os passes de occlusion volume são pulados como paliativo para as fachadas pretas ao entardecer (a causa real continua aberta); uma falha rara do SPU no Edge (nenhuma nas últimas 17 execuções); ainda sem Windows nem Linux; ninguém passou de 1% da história.
+- **Lançado:** alphas de [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) a [v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) (a mais nova: menu dentro do jogo, SMAA, perfis de qualidade, reconexão do controle e remapeamento ao vivo), um `.dmg` do app para macOS/Apple silicon que recompila o jogo a partir da cópia do jogador (veja "App e releases" em Feito).
+- **Problemas conhecidos:** os passes de occlusion volume são pulados como paliativo para as fachadas pretas ao entardecer (a causa provável, a borda dos mapas de sombra, tem correção em teste); a falha rara do SPU no Edge foi corrigida na v0.2.2; ainda sem Windows nem Linux; ninguém passou de 1% da história.
 - **Em andamento:**
   - [x] Menu sobreposto dentro do jogo: mudar ajustes sem sair do jogo (juntado em 2026-10-18, na v0.2.1; F1 / Cmd+, / L3+R3).
   - [x] (juntado em 2026-10-18) Arquivo de alternância A/B ao vivo: o jogo rodando relê um arquivo `NOME=valor` (`PS3_TOGGLE_FILE`) e troca opções na hora, para um A/B de fps comparar a mesma cena numa execução só (branch `feat/live-toggles`).
@@ -215,7 +215,6 @@ Ideias levantadas olhando o port de God of War III para PC, o ReShade e o que os
 - [ ] **Troféus:** aviso no canto quando um troféu é ganho (pelo menu sobreposto) e a lista no app; o jogo já grava os troféus em `<pasta de dados>/trophies`.
 - [ ] **Atualização automática do app:** baixar e instalar a versão nova (`tauri-plugin-updater` com um `latest.json` assinado pelo CI), além do aviso que já existe.
 - [ ] **Atalho na Steam** (jogo não-Steam) com a arte gerada da cópia do jogador, para jogar pelo modo Big Picture com o controle.
-- [ ] (opcional) **Discord Rich Presence**: nome do jogo e tempo jogando, desligado por padrão.
 
 ### Outras plataformas
 
