@@ -500,3 +500,10 @@ select.pad-pick { min-width: 0; width: auto; margin-left: 6px; padding: 3px 28px
 .trophy .meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
 .trophy .grade { font-weight: 600; }
 .grade-P { color: #c9d6e3; } .grade-G { color: #f2c94c; } .grade-S { color: #b8c4cc; } .grade-B { color: #cd8b55; }
+
+/* Texture packs (Game page): checkbox + name/detail, then the order buttons. */
+.mods-list li { align-items: center; }
+.mods-list .what { flex: 1; min-width: 0; display: flex; gap: 10px; align-items: center; cursor: pointer; }
+.mods-list .what b { display: block; font-weight: 600; }
+.mods-list .msg { word-break: normal; overflow-wrap: anywhere; font-size: 12px; }
+.mods-list button.link { padding: 2px 6px; font-size: 14px; }
