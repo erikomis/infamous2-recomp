@@ -88,6 +88,10 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   `osascript`, "Your copy's icon in the Dock": see "The icon from your copy"
   below) and Image quality
   (MetalFX upscaling `PS3_UPSCALE`, FXAA `PS3_AA`, sharpening `PS3_SHARPEN`,
+  vibrance `PS3_VIBRANCE`, contrast `PS3_CONTRAST`, clarity `PS3_CLARITY`,
+  the tone curve `PS3_SHADOWS` / `PS3_MIDTONES` / `PS3_HIGHLIGHTS`, vignette
+  and grain, a colour LUT file `PS3_LUT` or a built-in preset
+  `PS3_LUT_PRESET` (warm, cool, film, vivid) with its strength,
   anisotropic filtering `PS3_ANISO`, all passed only when not off; gamma
   override `PS3_DISPLAY_GAMMA`).
 - **Performance / Desempenho**: GPU acceleration (light pass and SSAO on the
@@ -103,7 +107,12 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   folder (`game_languages`: `<name>.psarc` beside `<name>_text.psarc` for a
   voice, every `<name>_text.psarc` for text). Changing any of them while the
   game runs offers "Restart the game now" (the game reads its language at
-  boot). Then audio (master volume
+  boot). Then the community patches (`PS3_PATCHES`), **Texture packs**
+  (`list_mods`: the folders in `<data>/mods` with how many replacement PNGs
+  each holds and the first line of an optional `info.txt`; a tick enables a
+  pack, the arrows order the enabled ones, the upper one winning when two
+  replace the same texture; passed as `PS3_MODS_DIR` + `PS3_MODS`, only when
+  one is ticked; "Open mods folder" creates and opens it), audio (master volume
   `PS3_AUDIO_VOLUME`, output `PS3_AUDIO_DEVICE` from `system_profiler
   SPAudioDataType`), the install folder, and the **saves manager**: the game's
   save slots (`BCUS98125*`, `NPUA80638*`) in the port and in RPCS3 side by
