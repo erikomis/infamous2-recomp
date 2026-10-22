@@ -223,6 +223,15 @@ static DWORD WINAPI frame_clock(LPVOID)
     { const char* e = getenv("GCM_FLIP_IMMEDIATE"); g_flip_immediate = e ? atoi(e) : 0; }
     int sema_fast_poll = 0;
     { const char* e = getenv("GCM_SEMA_FASTPOLL"); sema_fast_poll = e ? atoi(e) : 0; }
+    /* PS3_FRAMECLOCK_US=<us>: the sleep between two passes of this loop.
+     * The FIFO has no doorbell: a put the guest writes, a flip it asks for,
+     * waits here until the next pass, so this is also the latency of every
+     * one of those. It was a fixed 4 ms; in the New Marais walk the RSX
+     * thread sat idle ~4 ms after each flip request, and 1 ms gave +6% fps
+     * (live A/B 2026-10-22: 35.9 vs 33.8 fps, mean frame 27.8 vs 29.6 ms).
+     * Default 1000; 4000 is the old pacing. Read live (PS3_TOGGLE_FILE). */
+    int clock_us_env = 1000;
+    { const char* e = getenv("PS3_FRAMECLOCK_US"); if (e && atoi(e) > 0) clock_us_env = atoi(e); }
     /* PS3_HOT_QOS=1: this thread walks the FIFO and encodes every draw; keep
      * it on a performance core alongside the SPU threads (lv2_register.c). */
     { const char* e = getenv("PS3_HOT_QOS");
@@ -233,7 +242,15 @@ static DWORD WINAPI frame_clock(LPVOID)
     for (;;) {
         /* GCM_SEMA_FASTPOLL=1: while the drain is parked on a semaphore acquire
          * (the SPU lighting label), re-check every 1 ms instead of every 4. */
-        Sleep(sema_fast_poll && cellGcm_drain_sema_blocked() ? 1 : 4);
+        {   int us = ps3_toggle_get("PS3_FRAMECLOCK_US", clock_us_env);
+            if (us <= 0) us = clock_us_env;
+            if (sema_fast_poll && cellGcm_drain_sema_blocked() && us > 1000) us = 1000;
+#ifdef _WIN32
+            Sleep((DWORD)((us + 999) / 1000));
+#else
+            usleep((useconds_t)us);
+#endif
+        }
         ULONGLONG now = GetTickCount64();
         /* PS3_TOGGLE_FILE=<path>: re-read every 250 ms when it changed, so an
          * A/B flips a knob inside one run (tools/ab_live.sh). Without the
@@ -271,9 +288,16 @@ static DWORD WINAPI frame_clock(LPVOID)
             }
             cellGcm_rsx_process_fifo();
 
-            if (rsx_backend_pump() != 0) {
-                rsx_ok = 0;              /* window closed */
-                continue;
+            /* Window events at most every 4 ms, as before PS3_FRAMECLOCK_US:
+             * a windowed pump is a dispatch_sync to the main thread, and this
+             * loop now runs every 1 ms. */
+            static ULONGLONG last_pump = 0;
+            if (now - last_pump >= 4 || now < last_pump) {
+                last_pump = now;
+                if (rsx_backend_pump() != 0) {
+                    rsx_ok = 0;              /* window closed */
+                    continue;
+                }
             }
             /* Present a flip the drain just reached, now: the drain stops at
              * the flip, so the batch is exactly the finished frame, and the

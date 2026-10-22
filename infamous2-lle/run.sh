@@ -63,6 +63,23 @@ if [ -z "$HEADLESS" ] && [ -z "${PS3_OVERLAY_INI+set}" ]; then
     esac
     export PS3_OVERLAY_INI="$cfg/overlay.ini"
 fi
+# Shader cache (the toolkit's rsx_metal_backend.m, PS3_SHADER_CACHE): a guest
+# shader's first use translates its HLSL to MSL on the RSX thread, which made
+# frames of up to ~370 ms whenever something new came on screen (2026-10-22:
+# 1.8 s of such hitches in the first two New Marais minutes, 83 ms with the
+# cache warm). The translations are kept in shader-cache/ next to the saves,
+# so each is paid once instead of once a session; a rebuild of the port starts
+# a fresh one. Windowed runs only (a headless A/B must not depend on what an
+# earlier run left behind); PS3_SHADER_CACHE= (empty) turns it off.
+# PS3_SHADER_ASYNC=1 (opt-in) also builds new pipelines in the background:
+# no hitch on a first sight, but those draws are skipped until ready.
+if [ -z "$HEADLESS" ] && [ -z "${PS3_SHADER_CACHE+set}" ]; then
+    case $(uname) in
+        Darwin) cfg="$HOME/Library/Application Support/infamous2-recomp" ;;
+        *)      cfg="${XDG_DATA_HOME:-$HOME/.local/share}/infamous2-recomp" ;;
+    esac
+    export PS3_SHADER_CACHE="$cfg/shader-cache"
+fi
 # The RSX must block on its semaphore ACQUIREs: each frame the FIFO acquires
 # the label the SPU light task writes when it has turned the normals/depth
 # copies in XDR into the light buffers, and only then composites. With the

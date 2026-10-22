@@ -190,9 +190,37 @@ function showTab(tab: string) {
   document.querySelectorAll<HTMLElement>(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${tab}`));
   if (tab === "env") updatePreview();
   if (tab === "log") showLog();
-  if (tab === "updates") renderUpdates();
+  if (tab === "updates") {
+    renderUpdates();
+    refreshShaderCache();
+  }
   if (tab === "diagnostics") refreshReport();
 }
+
+// ---- shader cache (PS3_SHADER_CACHE, src-tauri/src/lib.rs) -------------------
+interface ShaderCacheInfo {
+  path: string | null;
+  bytes: number;
+  files: number;
+}
+async function refreshShaderCache(msg = "") {
+  try {
+    const c = await invoke<ShaderCacheInfo>("shader_cache_info");
+    $("sc-info").textContent =
+      (c.path ? t("sc.size", { size: human(c.bytes), files: c.files }) : t("sc.off")) + (msg ? ` — ${msg}` : "");
+    ($("sc-clear") as HTMLButtonElement).disabled = !c.path || c.files === 0;
+  } catch {
+    $("shadercache-card").classList.add("hidden");   // an older backend without the command
+  }
+}
+$("sc-clear").addEventListener("click", async () => {
+  try {
+    await invoke("shader_cache_clear");
+    refreshShaderCache(t("sc.cleared"));
+  } catch (e) {
+    refreshShaderCache(String(e));
+  }
+});
 
 document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view!)));
 document.querySelectorAll<HTMLElement>(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab!)));
