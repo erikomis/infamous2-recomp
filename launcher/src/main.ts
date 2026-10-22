@@ -26,6 +26,10 @@ interface Settings {
   patches: string[];
   vibrance: number;
   contrast: number;
+  vignette: number;
+  grain: number;
+  lutPath: string;
+  lutStrength: number;
   upscale: string;
   mouse: boolean;
   mouseSens: number;
@@ -426,6 +430,10 @@ function bindSettings() {
       sharpen: 0,
       vibrance: 0,
       contrast: 1,
+      vignette: 0,
+      grain: 0,
+      lutPath: "",
+      lutStrength: 1,
       upscale: "",
       mouse: true,
       mouseSens: 1.0,
@@ -478,6 +486,29 @@ function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: numb
   bindRange("sharpen", "sharpen", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
   bindRange("vibrance", "vibrance", (v) => (Math.abs(v) >= 0.005 ? `${v > 0 ? "+" : ""}${Math.round(v * 100)}%` : t("settings.off")));
   bindRange("contrast", "contrast", (v) => (Math.abs(v - 1) >= 0.005 ? `${Math.round(v * 100)}%` : t("settings.normal")));
+  bindRange("vignette", "vignette", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
+  bindRange("grain", "grain", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
+  bindRange("lut-strength", "lutStrength", (v) => `${Math.round(v * 100)}%`);
+  const lutSync = () => {
+    $("lut-file").textContent = settings.lutPath ? settings.lutPath.split("/").pop() ?? "" : t("settings.lutNone");
+    $<HTMLInputElement>("lut-strength").disabled = !settings.lutPath;
+    $<HTMLButtonElement>("lut-clear").disabled = !settings.lutPath;
+  };
+  syncers.push(lutSync);
+  lutSync();
+  $("lut-pick").addEventListener("click", async () => {
+    const p = await open({ multiple: false, filters: [{ name: "LUT (PNG)", extensions: ["png"] }] });
+    if (typeof p === "string") {
+      settings.lutPath = p;
+      lutSync();
+      persist();
+    }
+  });
+  $("lut-clear").addEventListener("click", () => {
+    settings.lutPath = "";
+    lutSync();
+    persist();
+  });
   bindPreset();
 }
 
