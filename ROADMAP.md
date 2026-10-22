@@ -202,6 +202,20 @@ An app for **macOS, Windows and Linux**, with the same interface on all three, t
 - [ ] `libgcm_sys` and `libfs` in LLE (RPCS3 runs both that way).
 - [x] (2026-10-18, branch `feat/game-mode`) **Game Mode, App Nap and thread QoS on macOS.** The build now makes `build/Infamous2Recomp.app` (games category, `LSSupportsGameMode`/`GCSupportsGameMode`, id `io.github.erikomis.infamous2recomp.game`), with `build/Infamous2Recomp` a symlink to its executable; `run.sh` execs that binary directly, so the env and the log are unchanged. Measured with a test app on macOS 27: `gamepolicyd` labels only a real bundle a game ("Found game ... labelReason=LSSupportsGameMode (Info.plist)"), also through a symlink or a shell `exec`; an Info.plist embedded with `-sectcreate __TEXT __info_plist` was ignored. Game Mode itself turns on only fullscreen and in front, so it cannot be checked headless; macOS fullscreen is the documented case, borderless still to be confirmed in a window. The game also holds an `NSProcessInfo` activity (UserInitiated | LatencyCritical: no App Nap, no timer throttling, no idle sleep). `PS3_QOS=1` also puts its PPU, SPU and RSX threads at `QOS_CLASS_USER_INTERACTIVE` (macOS starts every pthread at DEFAULT, whatever its creator runs at; guest PPU threads of priority >= 1500 get USER_INITIATED); the toolkit half is the toolkit patch, not yet folded into the main patch. It is **off by default**: headless New Marais A/B, 3 runs per side interleaved (newmarais 290, `PS3_FTRACE` 270-280 s), frame median 31.0 ms with it (the one run that got there) vs 33.8 and 31.4 ms without, SPUs ~91% busy either way; the 160-230 s buckets read 37/37 fps with it vs 18 and 36 without (the 18 is a one-off). No gain, and two of the three runs with it hung on the frame fence with get == put (`ref stuck ... get=put`, labels 160C and 5A, at ~265 s and ~30 s), the flip-race signature fixed twice on 2026-10-17; the one hang without it was the other kind (SPU fault + FIFO resync, at ~120 s). So a QoS change in scheduling still reaches a race in the flip/fence path; worth finding with `PS3_QOS=1` as the reproducer.
 
+### New ideas (2026-10-21)
+
+Ideas from the God of War III PC port, ReShade and what players ask for; not done yet.
+
+- [ ] **ReShade-style effects** in the final image pass (SMAA is in): vibrance/contrast/curves, colour LUTs (presets and the player's own), local contrast (Clarity), film grain and vignette. Switched in the app (Graphics) and in the F1 menu, live.
+- [ ] **Persistent pipeline cache** (`MTLBinaryArchive` with the translated shaders) and a background warm-up at start: removes the hitches the first time an effect or a place shows up.
+- [ ] **Community patches** read from the player's own RPCS3 `patch.yml` (nothing shipped here): "Skip Intro" (FlexBy) and "Extended FOV" (illusion) exist for NPUA80638 01.03. Data patches at load time; code patches on the EBOOT before translation (`rebuild.py`). Credited to their authors.
+- [ ] **In-game capture hotkey** for debug mode (a key and a controller combo), without switching to the app; and a normal **screenshot** to PNG.
+- [ ] **Automatic capture when something hangs** in debug mode: a watchdog that saves the frame, the log and the threads' state when the GPU or the game stops for a few seconds.
+- [ ] **Trophies:** a corner notice when one is earned (through the overlay) and the list in the app; the game already writes them to `<data dir>/trophies`.
+- [ ] **App auto-update:** download and install the new version (`tauri-plugin-updater` with a `latest.json` signed in CI), beyond today's notice.
+- [ ] **Steam shortcut** (non-Steam game) with art generated from the player's copy, to play from Big Picture with a controller.
+- [ ] (optional) **Discord Rich Presence**: game name and time played, off by default.
+
 ### Other platforms
 
 - [ ] Linux (Vulkan, already in the toolkit), with the app and the rebuild running natively.
