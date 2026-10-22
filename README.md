@@ -9,7 +9,7 @@ graphics on Metal. It is not an emulator.
 
 **It boots, shows its menus and cutscenes, and New Marais is playable**, at
 the game's own 30 fps cap on Apple silicon. Get the app from the
-[**v0.2.0 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+[**v0.2.4 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
 and it rebuilds the game from your own copy ([how](#download-and-play)).
 
 | | |
@@ -53,11 +53,12 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Empire City prologue (the Beast, the freighter) | ✅ |
 | New Marais: first missions, played in a window with a DualSense | ✅ |
 | Performance | ✅ ~30 fps walking in New Marais (the game's own cap) in headless runs on Apple silicon: frames of 29.7–30.4 ms, ~33–36 fps of headroom. Windowed confirmation pending |
-| Controller (DualSense tested; DualShock 4 and Xbox through SDL), rumble | ✅ |
-| Keyboard and mouse (mouse camera, remappable) | 🧪 mapped, little tested in a window |
+| Controller (DualSense tested; DualShock 4 and Xbox through SDL), rumble, reconnect without a restart | ✅ |
+| Keyboard and mouse (mouse camera, remappable, also live in the in-game menu) | 🧪 mapped, little tested in a window |
+| In-game menu (F1 / Cmd+, / L3+R3): image, audio, controls, performance HUD | ✅ since v0.2.4 (live changes) |
 | Saves and trophies (in `~/Library/Application Support`), saves manager in the app | ✅ |
 | Brazilian Portuguese dub and subtitles (default), other languages your copy ships, DLC | ✅ |
-| The app: install, rebuild, play, settings, controls, saves, report a problem | ✅ [v0.2.0 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0) |
+| The app: install, rebuild, play, settings, controls, saves, debug mode | ✅ [v0.2.4 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Linux and Windows | ⏳ planned |
 
@@ -69,8 +70,8 @@ You need an Apple-silicon Mac and your own copy of inFAMOUS 2 (the PSN
 release `NPUA80638`, for example installed in [RPCS3](https://rpcs3.net) with
 its `.rap` licence).
 
-1. Download `infamous2-recomp_0.2.0_aarch64.dmg` from the
-   [v0.2.0 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+1. Download `infamous2-recomp_0.2.4_aarch64.dmg` from the
+   [v0.2.4 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
    and drag the app to Applications. It is not notarized: the first time,
    right-click > Open (or System Settings > Privacy & Security > Open Anyway).
 2. The app lists what your Mac still needs (Xcode Command Line Tools, a few
@@ -93,8 +94,9 @@ Advanced.
 - **Install / rebuild** with a progress bar: checks and installs the tools,
   finds your copy and its `.rap`, decrypts with RPCS3 or without it.
 - **Graphics:** window, fullscreen or borderless, screen, vsync, gamma,
-  anisotropic filtering, FXAA, sharpening (CAS), MetalFX upscaling, fps
-  counter.
+  anisotropic filtering, FXAA or SMAA, sharpening (CAS), vibrance, contrast,
+  MetalFX upscaling, fps counter, and ready-made profiles (Performance /
+  Balanced / Quality). macOS Game Mode turns on in fullscreen.
 - **Controls:** remap keyboard, mouse and controller, mouse camera,
   vibration; **audio** volume and output; **game language** (the ones your
   copy ships).
@@ -111,6 +113,15 @@ Advanced.
   Plus a **game log viewer** that follows the log live.
 - **Updates card:** tells when a newer release is out or the installed game
   is older than the app's sources, and offers a rebuild.
+- **Your copy's icon** in the Dock for the app and the game (read from your
+  install, never shipped).
+
+**In the game,** F1 (fn+F1), Cmd+, or L3+R3 opens the **in-game menu**:
+image (gamma, sharpening, FXAA/SMAA, vibrance, contrast, MetalFX, vsync,
+display mode), audio volume, controls (live remapping of keyboard, mouse and
+controller, "play with" controller / keyboard and mouse / both, vibration,
+mouse) and a performance HUD (fps, frame time, CPU/GPU). A DualSense that
+switches off comes back by itself within about a second.
 
 | | |
 | --- | --- |
@@ -121,10 +132,12 @@ builds only on macOS so far); the installers are not signed yet.
 
 ## Known problems
 
-- In some close-up views at dusk the occlusion-volume passes turned whole
-  facades (and Cole) black; `run.sh` skips them for now (only the soft
-  contact darkening near props is lost) while their math is checked.
-  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws them again.
+- In some close-up views at dusk whole facades (and Cole) went black;
+  `run.sh` skips the occlusion-volume passes for now (only the soft contact
+  darkening near props is lost). The port reproduces their math exactly; the
+  likely real cause, shadow maps sampled with a black instead of a white
+  border outside the sun's frustum, has a fix in testing.
+  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws the volumes again.
 - Fixed in v0.2.2: the rare Edge geometry SPU fault (about 1 run in 8) and
   the rare hang where the light job never finished a frame were the same
   bug, a stale cache of translated SPU code. None since, in any test run.
@@ -136,13 +149,17 @@ builds only on macOS so far); the installers are not signed yet.
 
 What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
 
-- An **in-game overlay menu**, to change settings without leaving the game.
-- A **live A/B toggle file**: the running game re-reads a text file and
-  switches options on the fly, for fair before/after comparisons in one run.
-- A **fifth round of pull requests** to [ps3recomp](https://github.com/sp00nznet/ps3recomp)
-  with this port's toolkit fixes.
-- **Adopting upstream fixes:** ps3recomp #358, #340, #326, #349, #360, #366
-  and the log-cap fix from issue #364 are in since v0.2.0; more as they land.
+- **Steady 30 fps or more:** finding and cutting the remaining frame-time
+  dips (26-28 fps moments) in New Marais.
+- **Dark facades:** the shadow-map border fix above, then turning the
+  occlusion volumes back on.
+- **More ReShade-style effects** in the final image pass (SMAA, vibrance and
+  contrast are in): colour LUTs, local contrast, film grain and vignette.
+- **Pull requests to [ps3recomp](https://github.com/sp00nznet/ps3recomp)**
+  with this port's toolkit fixes (#372-#375 open), and upstream fixes adopted
+  here (#358, #340, #326, #349, #360, #366, issue #364).
+- New ideas (pipeline cache, community patches, an in-game capture key,
+  trophies, app auto-update, a Steam shortcut) are listed in the roadmap.
 
 ## Building from source
 

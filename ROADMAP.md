@@ -7,12 +7,12 @@ comes next. `[x]` = done and verified; `[ ]` = to do. Items marked "(new)"
 came in with the 2026-10-15 revision; "Update" is what changed in an item that
 already existed.
 
-## Status at a glance (2026-10-18)
+## Status at a glance (2026-10-21)
 
 - **Runs:** boot, studio logos, Bink videos, the 3D main menu, pause and options, the Empire City prologue, in-engine cutscenes and the first missions in New Marais, played in a window with a DualSense. Screenshots in the [README](README.md).
 - **Speed:** ~30 fps walking in New Marais (the game's own cap) in headless runs on Apple silicon (frames 29.7–30.4 ms; median 36 fps uncapped in the 2026-10-18 runs). Still to confirm in a long windowed session.
-- **Released:** [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) and [v0.2.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0) alpha, a macOS/Apple-silicon `.dmg` of the app that rebuilds the game from the player's copy (see "App and releases" under Done).
-- **Known problems:** the occlusion-volume passes are skipped as a stopgap for the black facades at dusk (the real cause is still open); a rare Edge SPU fault (none in the last 17 runs); no Windows or Linux yet; nobody has gone past 1% of the story.
+- **Released:** alphas [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) to [v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) (the newest: in-game menu, SMAA, quality profiles, controller reconnect and live remapping) alpha, a macOS/Apple-silicon `.dmg` of the app that rebuilds the game from the player's copy (see "App and releases" under Done).
+- **Known problems:** the occlusion-volume passes are skipped as a stopgap for the black facades at dusk (the likely cause, the shadow maps' border, has a fix in testing); the rare Edge SPU fault was fixed in v0.2.2; no Windows or Linux yet; nobody has gone past 1% of the story.
 - **In progress:**
   - [x] In-game overlay menu: change settings without leaving the game (merged 2026-10-18, in v0.2.1; F1 / Cmd+, / L3+R3).
   - [x] (merged 2026-10-18) Live A/B toggle file: the running game re-reads a `NAME=value` file (`PS3_TOGGLE_FILE`) and switches knobs on the fly, so an fps A/B compares the same scene in one run (branch `feat/live-toggles`).
@@ -214,7 +214,6 @@ Ideas from the God of War III PC port, ReShade and what players ask for; not don
 - [ ] **Trophies:** a corner notice when one is earned (through the overlay) and the list in the app; the game already writes them to `<data dir>/trophies`.
 - [ ] **App auto-update:** download and install the new version (`tauri-plugin-updater` with a `latest.json` signed in CI), beyond today's notice.
 - [ ] **Steam shortcut** (non-Steam game) with art generated from the player's copy, to play from Big Picture with a controller.
-- [ ] (optional) **Discord Rich Presence**: game name and time played, off by default.
 
 ### Other platforms
 

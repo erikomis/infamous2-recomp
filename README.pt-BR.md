@@ -9,7 +9,7 @@ gráficos em Metal. Não é um emulador.
 
 **O jogo inicia, mostra os menus e as cutscenes, e New Marais é jogável**, no
 limite de 30 fps do próprio jogo em Macs com Apple silicon. Baixe o app na
-[**release alpha v0.2.0**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+[**release alpha v0.2.4**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
 e ele recompila o jogo a partir da sua própria cópia ([como](#baixar-e-jogar)).
 
 | | |
@@ -54,11 +54,12 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Prólogo em Empire City (a Besta, o cargueiro) | ✅ |
 | New Marais: primeiras missões, jogadas com janela e DualSense | ✅ |
 | Desempenho | ✅ ~30 fps andando em New Marais (o limite do próprio jogo) nas execuções sem janela em Apple silicon: frames de 29,7–30,4 ms, folga de ~33–36 fps. Falta confirmar com janela |
-| Controle (DualSense testado; DualShock 4 e Xbox pelo SDL), vibração | ✅ |
-| Teclado e mouse (câmera no mouse, remapeáveis) | 🧪 mapeados, pouco testados com janela |
+| Controle (DualSense testado; DualShock 4 e Xbox pelo SDL), vibração, reconexão sem reiniciar | ✅ |
+| Teclado e mouse (câmera no mouse, remapeáveis, também ao vivo no menu dentro do jogo) | 🧪 mapeados, pouco testados com janela |
+| Menu dentro do jogo (F1 / Cmd+, / L3+R3): imagem, áudio, controles, HUD de desempenho | ✅ desde a v0.2.4 (mudanças ao vivo) |
 | Saves e troféus (em `~/Library/Application Support`), gerenciador de saves no app | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), outros idiomas que a sua cópia traz, DLC | ✅ |
-| O app: instalar, recompilar, jogar, ajustes, controles, saves, reportar problema | ✅ [alpha v0.2.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0) |
+| O app: instalar, recompilar, jogar, ajustes, controles, saves, modo de depuração | ✅ [alpha v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) |
 | Jogo inteiro | ❓ ninguém passou ainda de 1% |
 | Linux e Windows | ⏳ planejado |
 
@@ -70,8 +71,8 @@ Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
 (a versão da PSN `NPUA80638`, por exemplo instalada no
 [RPCS3](https://rpcs3.net) com a licença `.rap`).
 
-1. Baixe o `infamous2-recomp_0.2.0_aarch64.dmg` da
-   [release v0.2.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+1. Baixe o `infamous2-recomp_0.2.4_aarch64.dmg` da
+   [release v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
    e arraste o app para Aplicativos. Ele não é notarizado: na primeira vez,
    botão direito > Abrir (ou Ajustes do Sistema > Privacidade e Segurança >
    Abrir Mesmo Assim).
@@ -98,7 +99,9 @@ Controles e Avançado.
 - **Instalar / recompilar** com barra de progresso: confere e instala as
   ferramentas, acha a sua cópia e o `.rap`, descriptografa com ou sem o RPCS3.
 - **Gráficos:** janela, tela cheia ou sem bordas, tela, vsync, gamma, filtragem
-  anisotrópica, FXAA, nitidez (CAS), ampliação MetalFX, contador de fps.
+  anisotrópica, FXAA ou SMAA, nitidez (CAS), vibrance, contraste, ampliação
+  MetalFX, contador de fps e perfis prontos (Desempenho / Equilibrado /
+  Qualidade). O Modo Jogo do macOS liga em tela cheia.
 - **Controles:** remapeamento de teclado, mouse e controle, câmera no mouse,
   vibração; **áudio** (volume e saída); **idioma do jogo** (os que a sua
   cópia traz).
@@ -116,6 +119,15 @@ Controles e Avançado.
   E um **visualizador do log do jogo** que acompanha o log ao vivo.
 - **Cartão de Atualizações:** avisa quando sai uma release nova ou quando o
   jogo instalado é mais antigo que as fontes do app, e oferece recompilar.
+- **O ícone da sua cópia** no Dock para o app e para o jogo (lido da sua
+  instalação, nunca distribuído).
+
+**Dentro do jogo,** F1 (fn+F1), Cmd+, ou L3+R3 abre o **menu dentro do
+jogo**: imagem (gama, nitidez, FXAA/SMAA, vibrance, contraste, MetalFX, vsync,
+modo de tela), volume, controles (remapeamento ao vivo de teclado, mouse e
+controle, "jogar com" controle / teclado e mouse / os dois, vibração, mouse)
+e um HUD de desempenho (fps, tempo de quadro, CPU/GPU). Um DualSense que
+desliga volta sozinho em cerca de um segundo.
 
 | | |
 | --- | --- |
@@ -126,11 +138,13 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 
 ## Problemas conhecidos
 
-- Em algumas vistas de perto ao entardecer, os passes de occlusion volume
-  deixavam fachadas inteiras (e o Cole) pretas; o `run.sh` os desliga por
-  enquanto (perde-se só o escurecimento suave de contato perto de objetos)
-  enquanto a conta deles é conferida. `PS3RECOMP_ENG_SKIP_FP=` (vazio) os
-  desenha de novo.
+- Em algumas vistas de perto ao entardecer, fachadas inteiras (e o Cole)
+  ficavam pretas; o `run.sh` desliga os passes de occlusion volume por
+  enquanto (perde-se só o escurecimento suave de contato perto de objetos). O
+  port reproduz a conta deles exatamente; a causa real provável, os mapas de
+  sombra lidos com borda preta em vez de branca fora do alcance do sol, tem
+  uma correção em teste. `PS3RECOMP_ENG_SKIP_FP=` (vazio) desenha os volumes
+  de novo.
 - Corrigido na v0.2.2: a falha rara do SPU no job de geometria do Edge
   (cerca de 1 execução em 8) e o travamento raro em que o job de luz não
   terminava o frame eram o mesmo bug, um cache desatualizado de código SPU
@@ -143,16 +157,19 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 
 O que está sendo feito agora (detalhes no [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md)):
 
-- Um **menu sobreposto dentro do jogo**, para mudar ajustes sem sair do jogo.
-- Um **arquivo de alternância A/B ao vivo**: o jogo rodando relê um arquivo de
-  texto e troca opções na hora, para comparar antes/depois numa mesma
-  execução.
-- Uma **quinta rodada de pull requests** para o
-  [ps3recomp](https://github.com/sp00nznet/ps3recomp) com as correções do
-  toolkit feitas neste port.
-- **Correções adotadas do upstream:** ps3recomp #358, #340, #326, #349, #360,
-  #366 e a correção dos limites de log da issue #364 entraram na v0.2.0; outras
-  conforme forem saindo.
+- **30 fps ou mais o tempo todo:** achar e cortar as quedas que ainda
+  sobram (momentos de 26-28 fps) em New Marais.
+- **Fachadas escuras:** a correção da borda dos mapas de sombra acima, e
+  depois religar os occlusion volumes.
+- **Mais efeitos no estilo do ReShade** no passo final da imagem (SMAA,
+  vibrance e contraste já entraram): LUTs de cor, contraste local, granulado e
+  vinheta.
+- **Pull requests para o [ps3recomp](https://github.com/sp00nznet/ps3recomp)**
+  com as correções do toolkit feitas aqui (#372-#375 abertos), e correções do
+  upstream adotadas aqui (#358, #340, #326, #349, #360, #366, issue #364).
+- Ideias novas (cache de shaders, patches da comunidade, tecla de captura
+  dentro do jogo, troféus, atualização automática do app, atalho na Steam)
+  estão no roadmap.
 
 ## Montar a partir do código
 
