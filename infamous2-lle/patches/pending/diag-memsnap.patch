@@ -1,0 +1,35 @@
+--- a/libs/video/rsx_draw_engine.c	2026-10-22 03:31:49
++++ b/libs/video/rsx_draw_engine.c	2026-10-22 03:31:49
+@@ -3627,6 +3627,32 @@
+               memset(s_pres_n, 0, sizeof s_pres_n); memset(s_pres_drew, 0, sizeof s_pres_drew);
+               memset(s_pres_ns, 0, sizeof s_pres_ns);
+               pf = b0 = b1 = bw = 0; t0 = now; } } }
++    /* PS3RECOMP_ENG_MEMSNAP=<sec>[/<sec>..]:<dir>:<hexEA>:<hexLen>[,<hexEA>:<hexLen>..]:
++     * DIAGNOSTIC. Raw guest bytes of every listed range, written to
++     * <dir>/t<sec>_<EA>.bin at each listed time (seconds after the first
++     * draw), so heap structures can be walked offline (pointers followed
++     * within the dumped ranges) and compared between game states. */
++    { static int sinit; static u32 ssec[8], nsec, sdone; static char sdir[400];
++      static u32 sea[32], slen[32], nr; static struct timespec st0;
++      if (!sinit) { sinit = 1; const char* e = getenv("PS3RECOMP_ENG_MEMSNAP");
++          if (e) { char* d = (char*)e;
++              while (nsec < 8) { ssec[nsec++] = (u32)strtoul(d, &d, 10); if (*d == '/') d++; else break; }
++              if (*d == ':') { d++; const char* c = strchr(d, ':'); size_t n = c ? (size_t)(c - d) : 0;
++                  if (n && n < sizeof sdir) { memcpy(sdir, d, n); sdir[n] = 0; d = (char*)c + 1;
++                      while (*d && nr < 32) { sea[nr] = (u32)strtoul(d, &d, 16); if (*d != ':') break;
++                          slen[nr] = (u32)strtoul(d + 1, &d, 16); nr++; if (*d == ',') d++; else break; } } }
++              clock_gettime(CLOCK_MONOTONIC, &st0); } }
++      if (nr && sdone < nsec) {
++          struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
++          const double el = (double)(now.tv_sec - st0.tv_sec) + (double)(now.tv_nsec - st0.tv_nsec) * 1e-9;
++          if (el >= (double)ssec[sdone]) {
++              extern uint8_t* vm_base;
++              for (u32 i = 0; i < nr && vm_base; i++) {
++                  char path[512]; snprintf(path, sizeof path, "%s/t%u_%08X.bin", sdir, ssec[sdone], sea[i]);
++                  FILE* f = fopen(path, "wb"); if (f) { fwrite(vm_base + sea[i], 1, slen[i], f); fclose(f); } }
++              fprintf(stderr, "[rsx memsnap] t=%us: %u range(s) -> %s\n", ssec[sdone], nr, sdir);
++              sdone++;
++          } } }
+     /* PS3RECOMP_ENG_MEMDUMP=<hexEA>:<hexLen>:<worldframe>[:file]: at that world
+      * frame, write the guest range as hex words, 16 bytes per line -- the same
+      * format as the RPCS3 oracle's RPCS3_LP_DUMP, so the two diff directly.
