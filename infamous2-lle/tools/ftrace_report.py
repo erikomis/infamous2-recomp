@@ -34,8 +34,9 @@ import sys
 # include/ps3emu/ps3_toggles.h, enum ps3_toggle_id (append-only there too).
 TOGGLE_NAMES = ["PS3RECOMP_ENG_VCACHE", "PS3RECOMP_ENG_TEXHASH_FULL", "PS3RECOMP_ENG_SKIP_FP",
                 "PS3_SPU_FASTJOB", "PS3_SPU_STUB_MICRO", "PS3_SPU_STACK_HINT", "PS3_SPU_DRAIN_INLINE",
-                "PS3_DISPLAY_GAMMA", "PS3_SHARPEN", "PS3_AA", "PS3_ANISO", "PS3RECOMP_METAL_FPS"]
-TOGGLE_STRING = {2, 7, 8, 9}   # marks carry a hash of the text
+                "PS3_DISPLAY_GAMMA", "PS3_SHARPEN", "PS3_AA", "PS3_ANISO", "PS3RECOMP_METAL_FPS",
+                "PS3_VIBRANCE", "PS3_CONTRAST"]
+TOGGLE_STRING = {2, 7, 8, 9, 12, 13}   # marks carry a hash of the text
 # What --phases reads (and tools/ab_live.sh records: PS3_FTRACE_KINDS).
 PHASE_KINDS = (SPU_BUSY, SEMA, SEMA_GAVEUP, DRAIN, FLIP_REQ, PRESENT, TOGGLE)
 

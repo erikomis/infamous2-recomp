@@ -22,6 +22,8 @@ interface Settings {
   aniso: number;
   aa: string;
   sharpen: number;
+  vibrance: number;
+  contrast: number;
   upscale: string;
   mouse: boolean;
   mouseSens: number;
@@ -405,6 +407,8 @@ function bindSettings() {
       aniso: 0,
       aa: "",
       sharpen: 0,
+      vibrance: 0,
+      contrast: 1,
       upscale: "",
       mouse: true,
       mouseSens: 1.0,
@@ -455,6 +459,8 @@ function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: numb
   bindSelect("upscale", "upscale");
   bindSelect("q-upscale", "upscale");
   bindRange("sharpen", "sharpen", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
+  bindRange("vibrance", "vibrance", (v) => (Math.abs(v) >= 0.005 ? `${v > 0 ? "+" : ""}${Math.round(v * 100)}%` : t("settings.off")));
+  bindRange("contrast", "contrast", (v) => (Math.abs(v - 1) >= 0.005 ? `${Math.round(v * 100)}%` : t("settings.normal")));
   bindPreset();
 }
 
