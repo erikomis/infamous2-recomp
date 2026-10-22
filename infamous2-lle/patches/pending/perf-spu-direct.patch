@@ -1,17 +1,17 @@
 --- a/include/ps3emu/ps3_toggles.h
 +++ b/include/ps3emu/ps3_toggles.h
-@@ -62,6 +62,7 @@
-     PS3T_METAL_FPS,          /* rsx_metal_backend.m: window-title fps counter     */
-     PS3T_VIBRANCE,           /* rsx_metal_backend.m: vibrance (-1..1)             */
-     PS3T_CONTRAST,           /* rsx_metal_backend.m: contrast (0.5..1.5)          */
+@@ -66,6 +66,7 @@
+     PS3T_GRAIN,              /* rsx_metal_backend.m: film grain (0..1)            */
+     PS3T_LUT_STRENGTH,       /* rsx_metal_backend.m: colour LUT mix (0..1)        */
+     PS3T_BUTTON_ICONS,       /* rsx_button_icons.c: prompt glyph set (auto/...)   */
 +    PS3T_SPU_DIRECT,         /* spu_context.h: lifted direct branches tail-call   */
      PS3T_COUNT
  };
  
-@@ -94,6 +95,7 @@
-         { "PS3RECOMP_METAL_FPS",        PS3_TK_IS1,  0 },
-         { "PS3_VIBRANCE",               PS3_TK_STR,  0 },
-         { "PS3_CONTRAST",               PS3_TK_STR,  0 },
+@@ -102,6 +103,7 @@
+         { "PS3_GRAIN",                  PS3_TK_STR,  0 },
+         { "PS3_LUT_STRENGTH",           PS3_TK_STR,  0 },
+         { "PS3_BUTTON_ICONS",           PS3_TK_STR,  0 },
 +        { "PS3_SPU_DIRECT",             PS3_TK_NOT0, 1 },
      };
      return &d[id];
