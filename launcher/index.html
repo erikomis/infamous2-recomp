@@ -87,8 +87,13 @@
 
         <div id="home-update" class="notice-bar hidden">
           <svg class="ico"><use href="#i-bolt" /></svg>
-          <div id="home-update-text" class="grow"></div>
+          <div class="grow">
+            <div id="home-update-text"></div>
+            <div class="update-progress hidden"><div class="progress"><div class="update-bar"></div></div><div class="update-progress-text small muted"></div></div>
+          </div>
           <button id="home-update-rebuild" class="primary hidden" data-i18n="update.rebuild">Recompilar o jogo</button>
+          <button id="home-update-install" class="primary hidden" data-i18n="update.install">Baixar e instalar</button>
+          <button id="home-update-restart" class="primary hidden" data-i18n="update.restart">Reiniciar para concluir</button>
           <button id="home-update-open" class="hidden" data-i18n="update.open">Ver a versão nova</button>
         </div>
 
@@ -138,6 +143,8 @@
               <button id="open-log" class="link" data-i18n="home.openLog">Abrir log do jogo</button>
               <button class="link" data-go="advanced:updates" data-i18n="update.title">Atualizações</button>
               <button id="make-shortcut" class="link hidden" data-i18n="home.shortcut" data-i18n-title="home.shortcutHint">Atalho Jogar na Mesa</button>
+              <button id="steam-add" class="link hidden" data-i18n="steam.add" data-i18n-title="steam.hint">Adicionar à Steam</button>
+              <button id="steam-remove" class="link hidden" data-i18n="steam.remove" data-i18n-title="steam.removeHint">Remover da Steam</button>
             </div>
           </div>
         </div>
@@ -677,11 +684,18 @@
           <div id="update-card" class="card">
             <h3 class="card-title" data-i18n="update.title">Atualizações</h3>
             <div id="update-info" class="update-info"></div>
+            <div class="update-progress hidden"><div class="progress"><div class="update-bar"></div></div><div class="update-progress-text small muted"></div></div>
             <div class="row">
               <button id="update-rebuild" class="primary hidden" data-i18n="update.rebuild">Recompilar o jogo</button>
+              <button id="update-install" class="primary hidden" data-i18n="update.install">Baixar e instalar</button>
+              <button id="update-restart" class="primary hidden" data-i18n="update.restart">Reiniciar para concluir</button>
               <button id="update-open" class="hidden" data-i18n="update.open">Ver a versão nova</button>
               <button id="update-check" data-i18n="update.check">Procurar de novo</button>
             </div>
+            <label id="update-auto-row" class="opt">
+              <span class="opt-text"><span class="opt-label" data-i18n="update.auto">Procurar atualizações automaticamente</span><span class="hint" data-i18n="update.autoHint"></span></span>
+              <span class="switch"><input id="update-auto" type="checkbox" /><i></i></span>
+            </label>
             <p class="hint" data-i18n="update.hint"></p>
           </div>
           <div id="shadercache-card" class="card">

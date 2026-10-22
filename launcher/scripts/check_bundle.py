@@ -4,8 +4,9 @@
     python3 launcher/scripts/check_bundle.py <path>...
 
 Each <path> is a folder (the staging folder, a .app) or a finished bundle
-(.dmg, .zip, .deb, .AppImage, .msi, NSIS .exe), which is unpacked into a
-temporary folder first. Every file is checked by name and by its first
+(.dmg, .zip, .tar.gz (the updater's .app.tar.gz), .deb, .AppImage, .msi,
+NSIS .exe), which is unpacked into a temporary folder first; a small file
+that goes next to them (.sig, .json, .txt) is checked on its own. Every file is checked by name and by its first
 bytes; a hit on any of these fails the check:
 
   - licences and keys: *.rap, *.rif, act.dat, idps, *.edat/*.sdat
@@ -34,6 +35,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import zipfile
 
@@ -44,6 +46,9 @@ BAD_DIRS = ('dev_hdd0', 'dev_hdd1', 'dev_flash', 'ps3_game', 'usrdir', 'recompil
             'jobmods')
 MAGIC = ((b'SCE\0', 'SCE header (SELF/SPRX)'), (b'SCEUF', 'PUP firmware'), (b'\x7fPKG', 'PS3 PKG'),
          (b'\0PSF', 'PARAM.SFO'), (b'PSAR', 'psarc archive'), (b'NPD\0', 'NPD (EDAT/SDAT)'))
+# small files published next to the bundles (signatures, the updater's
+# latest.json, checksums): checked, but they carry no port of their own
+SIDECARS = ('.sig', '.json', '.txt')
 PORT_MAX_FILE = 4 * 1024 * 1024
 PORT_MAX_PATCH = 16 * 1024 * 1024
 EXPECT = ('port', 'infamous2-lle', 'tools', 'rebuild.py')
@@ -116,6 +121,16 @@ def unpack(path, tmp):
         with zipfile.ZipFile(path) as z:
             z.extractall(tmp)
         return tmp, None
+    if low.endswith(('.tar.gz', '.tgz')):
+        with tarfile.open(path, 'r:gz') as t:
+            if hasattr(tarfile, 'data_filter'):
+                t.extractall(tmp, filter='data')  # no paths outside tmp, no device files
+            else:
+                t.extractall(tmp)
+        return tmp, None
+    if low.endswith(SIDECARS):
+        shutil.copy2(path, tmp)
+        return tmp, None
     if low.endswith('.dmg'):
         mnt = os.path.join(tmp, 'mnt')
         os.makedirs(mnt)
@@ -171,7 +186,7 @@ def main(argv=None):
                 except RuntimeError as e:
                     print('warning: %s' % e, file=sys.stderr)
             shutil.rmtree(tmp, ignore_errors=True)
-        if a.expect_port and not found:
+        if a.expect_port and not found and not path.lower().endswith(SIDECARS):
             problems.append('%s: port/infamous2-lle/tools/rebuild.py not in the bundle' % label)
         for p in problems:
             print('FAIL ' + p)

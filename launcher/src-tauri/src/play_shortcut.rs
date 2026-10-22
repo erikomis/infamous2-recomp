@@ -10,12 +10,30 @@
 //! Its icon is the launcher's own placeholder `.icns` (never game art); the
 //! player's ICON0 square goes on it as a Finder icon only at runtime, like
 //! the launcher's own "Use as the app's Finder icon".
+//!
+//! "Add to Steam" (steam.rs) reuses it: a second copy of the bundle in the
+//! launcher's data folder (`Kind::Steam`) is the non-Steam game's executable.
+//! Its script waits (`open -W`) until the launcher quits and passes
+//! `--exit-with-game`, which closes the launcher once the game ends normally,
+//! so Steam sees the game running exactly as long as it is and Big Picture
+//! comes back by itself.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The argument that asks for the game straight away.
 pub const ARG: &str = "--play";
+
+/// With ARG: quit the launcher once that game has ended normally (the Steam
+/// shortcut).
+pub const EXIT_ARG: &str = "--exit-with-game";
+
+/// Which shortcut: the one on the Desktop, or the Steam entry's executable.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    Desktop,
+    Steam,
+}
 
 /// The shortcut's file name on the Desktop.
 pub const NAME: &str = "Play inFAMOUS 2.app";
@@ -25,9 +43,22 @@ pub fn requested<I: IntoIterator<Item = String>>(args: I) -> bool {
     args.into_iter().skip(1).any(|a| a == ARG)
 }
 
-/// The shortcut's own bundle id: the launcher's plus `.play`.
+/// Whether the command line asks to quit after the game (only with ARG).
+pub fn exit_requested(args: &[String]) -> bool {
+    requested(args.iter().cloned()) && args.iter().skip(1).any(|a| a == EXIT_ARG)
+}
+
+/// The shortcut's own bundle id: the launcher's plus `.play` (`.steam` for
+/// the Steam one, so the two never pass for each other).
 pub fn shortcut_id(launcher_id: &str) -> String {
     format!("{launcher_id}.play")
+}
+
+fn kind_id(launcher_id: &str, kind: Kind) -> String {
+    match kind {
+        Kind::Desktop => shortcut_id(launcher_id),
+        Kind::Steam => format!("{launcher_id}.steam"),
+    }
 }
 
 fn sh_quote(v: &str) -> String {
@@ -39,19 +70,30 @@ fn xml_escape(v: &str) -> String {
 }
 
 /// The bundle's executable.
-pub fn script(launcher_id: &str) -> String {
-    format!(
-        "#!/bin/sh\n\
-         # Made by the inFAMOUS 2 recomp launcher (Home > Status > Play shortcut).\n\
-         # Opens the launcher, which starts the game with your saved settings.\n\
-         # If the launcher is already open it only comes to the front.\n\
-         exec /usr/bin/open -b {} --args {ARG}\n",
-        sh_quote(launcher_id)
-    )
+pub fn script_for(launcher_id: &str, kind: Kind) -> String {
+    match kind {
+        Kind::Desktop => format!(
+            "#!/bin/sh\n\
+             # Made by the inFAMOUS 2 recomp launcher (Home > Status > Play shortcut).\n\
+             # Opens the launcher, which starts the game with your saved settings.\n\
+             # If the launcher is already open it only comes to the front.\n\
+             exec /usr/bin/open -b {} --args {ARG}\n",
+            sh_quote(launcher_id)
+        ),
+        Kind::Steam => format!(
+            "#!/bin/sh\n\
+             # Made by the inFAMOUS 2 recomp launcher (Home > Status > Add to Steam).\n\
+             # Steam runs this: it opens the launcher, which starts the game with your\n\
+             # saved settings and closes when the game ends; this waits for that, so\n\
+             # Steam sees the game running as long as it is.\n\
+             exec /usr/bin/open -W -b {} --args {ARG} {EXIT_ARG}\n",
+            sh_quote(launcher_id)
+        ),
+    }
 }
 
 /// The bundle's Info.plist. `icon`: the icon file's name in Resources.
-pub fn info_plist(launcher_id: &str, icon: Option<&str>) -> String {
+fn plist_for(launcher_id: &str, icon: Option<&str>, kind: Kind) -> String {
     let icon = icon
         .map(|i| format!("  <key>CFBundleIconFile</key>\n  <string>{}</string>\n", xml_escape(i)))
         .unwrap_or_default();
@@ -77,7 +119,7 @@ pub fn info_plist(launcher_id: &str, icon: Option<&str>) -> String {
 </dict>
 </plist>
 "#,
-        xml_escape(&shortcut_id(launcher_id))
+        xml_escape(&kind_id(launcher_id, kind))
     )
 }
 
@@ -99,18 +141,27 @@ pub fn bundle_icns(bundle: &Path) -> Option<PathBuf> {
     found.into_iter().next()
 }
 
-/// Whether `path` is a shortcut this module wrote (safe to replace).
-fn is_ours(path: &Path, launcher_id: &str) -> bool {
+/// Whether `path` is a shortcut of this kind this module wrote (safe to replace).
+pub fn is_ours(path: &Path, launcher_id: &str, kind: Kind) -> bool {
     fs::read_to_string(path.join("Contents/Info.plist"))
-        .is_ok_and(|p| p.contains(&format!("<string>{}</string>", xml_escape(&shortcut_id(launcher_id)))))
+        .is_ok_and(|p| p.contains(&format!("<string>{}</string>", xml_escape(&kind_id(launcher_id, kind)))))
+}
+
+/// The bundle's executable inside it.
+pub fn executable(bundle: &Path) -> PathBuf {
+    bundle.join("Contents/MacOS/play")
 }
 
 /// Write the shortcut into `dir` (an older one of ours is replaced; anything
 /// else with that name is left alone). Returns its path.
 pub fn write(dir: &Path, launcher_id: &str, icns: Option<&Path>) -> Result<PathBuf, String> {
+    write_kind(dir, launcher_id, icns, Kind::Desktop)
+}
+
+pub fn write_kind(dir: &Path, launcher_id: &str, icns: Option<&Path>, kind: Kind) -> Result<PathBuf, String> {
     let path = dir.join(NAME);
     if path.exists() || path.symlink_metadata().is_ok() {
-        if !is_ours(&path, launcher_id) {
+        if !is_ours(&path, launcher_id, kind) {
             return Err(format!("{}: something else already has that name", path.display()));
         }
         fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -127,9 +178,9 @@ pub fn write(dir: &Path, launcher_id: &str, icns: Option<&Path>) -> Result<PathB
         }
         None => None,
     };
-    fs::write(contents.join("Info.plist"), info_plist(launcher_id, icon_name)).map_err(|e| e.to_string())?;
-    let exe = macos.join("play");
-    fs::write(&exe, script(launcher_id)).map_err(|e| e.to_string())?;
+    fs::write(contents.join("Info.plist"), plist_for(launcher_id, icon_name, kind)).map_err(|e| e.to_string())?;
+    let exe = executable(&path);
+    fs::write(&exe, script_for(launcher_id, kind)).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -163,10 +214,10 @@ mod tests {
 
     #[test]
     fn script_opens_the_launcher_by_id() {
-        let s = script(ID);
+        let s = script_for(ID, Kind::Desktop);
         assert!(s.starts_with("#!/bin/sh\n"));
         assert!(s.contains("exec /usr/bin/open -b 'io.github.erikomis.infamous2recomp' --args --play\n"));
-        assert!(script("a'b").contains(r"-b 'a'\''b'"));
+        assert!(script_for("a'b", Kind::Desktop).contains(r"-b 'a'\''b'"));
     }
 
     #[test]
@@ -182,7 +233,7 @@ mod tests {
         assert!(plist.contains("<key>CFBundleExecutable</key>\n  <string>play</string>"));
         assert_eq!(fs::read(p.join("Contents/Resources/AppIcon.icns")).unwrap(), b"icns");
         let exe = p.join("Contents/MacOS/play");
-        assert_eq!(fs::read_to_string(&exe).unwrap(), script(ID));
+        assert_eq!(fs::read_to_string(&exe).unwrap(), script_for(ID, Kind::Desktop));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -195,6 +246,25 @@ mod tests {
         assert!(!p.join("Contents/Resources").exists());
         assert!(!fs::read_to_string(p.join("Contents/Info.plist")).unwrap().contains("CFBundleIconFile"));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn steam_kind_waits_and_exits_with_the_game() {
+        let s = script_for(ID, Kind::Steam);
+        assert!(s.contains("exec /usr/bin/open -W -b 'io.github.erikomis.infamous2recomp' --args --play --exit-with-game\n"));
+        let d = tmp("steam");
+        let p = write_kind(&d, ID, None, Kind::Steam).unwrap();
+        assert!(is_ours(&p, ID, Kind::Steam));
+        assert!(!is_ours(&p, ID, Kind::Desktop));
+        assert!(fs::read_to_string(p.join("Contents/Info.plist")).unwrap().contains("<string>io.github.erikomis.infamous2recomp.steam</string>"));
+        assert_eq!(fs::read_to_string(executable(&p)).unwrap(), s);
+        // the Desktop kind does not replace the Steam one (and the other way round)
+        assert!(write_kind(&d, ID, None, Kind::Desktop).is_err());
+        let _ = fs::remove_dir_all(&d);
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(exit_requested(&args(&["l", "--play", "--exit-with-game"])));
+        assert!(!exit_requested(&args(&["l", "--exit-with-game"])));
+        assert!(!exit_requested(&args(&["l", "--play"])));
     }
 
     #[test]

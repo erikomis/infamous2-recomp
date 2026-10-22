@@ -86,7 +86,10 @@ Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
 4. **Instalar** (a primeira recompilação leva alguns minutos), depois
    **Jogar**.
 
-Depois de atualizar o app, o cartão de Atualizações na tela inicial oferece
+A partir da release depois da v0.2.6, o app se atualiza sozinho: o cartão de
+Atualizações na tela inicial oferece **Baixar e instalar** e depois
+**Reiniciar para concluir** (assinado e conferido; "Procurar atualizações
+automaticamente" pode ser desligado). Depois de atualizar, ele oferece
 **Recompilar o jogo**. A release não traz arquivos do jogo: o app recompila o
 jogo no seu Mac.
 
@@ -123,12 +126,16 @@ Controles e Avançado.
   desenvolvedor ou um agente percorrer), e **Criar .zip** junta tudo para uma
   issue. Detalhes em [launcher/README.md](launcher/README.md#debug-mode-report-a-problem).
   E um **visualizador do log do jogo** que acompanha o log ao vivo.
-- **Cartão de Atualizações:** avisa quando sai uma release nova ou quando o
-  jogo instalado é mais antigo que as fontes do app, e oferece recompilar.
+- **Cartão de Atualizações:** baixa e instala uma versão nova do app
+  (assinada, conferida, um clique e reiniciar), e oferece recompilar quando o
+  jogo instalado é mais antigo que as fontes do app.
 - **O ícone da sua cópia** no Dock para o app e para o jogo (lido da sua
   instalação, nunca distribuído).
 - **Atalho Jogar** (Início > Status): um ícone "Play inFAMOUS 2" na Mesa que
   abre o app e já começa o jogo com os seus ajustes.
+- **Adicionar à Steam** (Início > Status, opcional): o inFAMOUS 2 como jogo
+  não-Steam, com capas feitas a partir da sua cópia, para abrir pelo Big
+  Picture com o controle; **Remover da Steam** tira de novo.
 
 **Dentro do jogo,** F1 (fn+F1), Cmd+, ou L3+R3 abre o **menu dentro do
 jogo**: imagem (gama, nitidez, FXAA/SMAA, vibrance, contraste, MetalFX, vsync,
@@ -180,9 +187,10 @@ O que está sendo feito agora (detalhes no [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md))
   todos os PRs deste port até o #375 foram aceitos em 2026-10-19; a sexta
   rodada (#470 SMAA, vibrance e contraste; #472 reconexão do controle; #476
   cor da borda das texturas) está aberta.
-- Ideias novas (atualização automática do app, atalho na Steam, combinação
-  no controle para a captura, tecla de captura de tela em PNG) estão no
-  roadmap.
+- Ideias novas (combinação no controle para a captura, tecla de captura de
+  tela em PNG) estão no roadmap; a atualização automática do app e o atalho
+  na Steam estão implementados e esperando a próxima release / um teste com
+  a Steam.
 
 ## Montar a partir do código
 
