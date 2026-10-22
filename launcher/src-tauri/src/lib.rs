@@ -1932,6 +1932,83 @@ fn log_paths(state: State<'_, AppState>) -> BTreeMap<String, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Shader cache
+// ---------------------------------------------------------------------------
+
+/// The port's shader cache (PS3_SHADER_CACHE, the toolkit's Metal backend):
+/// the extra variables' value, else the folder run.sh points windowed play
+/// at; None when the variables turn it off (empty or 0).
+fn shader_cache_dir(extra_env: &str) -> Option<PathBuf> {
+    match parse_env_lines(extra_env).into_iter().find(|(k, _)| k == "PS3_SHADER_CACHE") {
+        Some((_, v)) if v.is_empty() || v == "0" => None,
+        Some((_, v)) => Some(PathBuf::from(v)),
+        None => Some(data_root().join("shader-cache")),
+    }
+}
+
+/// Bytes and files under `dir` (0, 0 when it does not exist).
+fn dir_usage(dir: &Path) -> (u64, u64) {
+    let (mut bytes, mut files) = (0u64, 0u64);
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            match e.metadata() {
+                Ok(m) if m.is_dir() => {
+                    let (b, f) = dir_usage(&e.path());
+                    bytes += b;
+                    files += f;
+                }
+                Ok(m) => {
+                    bytes += m.len();
+                    files += 1;
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    (bytes, files)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderCacheInfo {
+    path: Option<String>,
+    bytes: u64,
+    files: u64,
+}
+
+fn shader_cache_info_now() -> ShaderCacheInfo {
+    match shader_cache_dir(&load_settings_file().extra_env) {
+        Some(d) => {
+            let (bytes, files) = dir_usage(&d);
+            ShaderCacheInfo { path: Some(d.to_string_lossy().into_owned()), bytes, files }
+        }
+        None => ShaderCacheInfo { path: None, bytes: 0, files: 0 },
+    }
+}
+
+#[tauri::command]
+fn shader_cache_info() -> ShaderCacheInfo {
+    shader_cache_info_now()
+}
+
+/// Delete the cache (the game rebuilds it as it meets each shader again).
+/// Refused while the game runs: it writes there.
+#[tauri::command]
+fn shader_cache_clear(state: State<'_, AppState>) -> Result<ShaderCacheInfo, String> {
+    let game = state.game.lock().unwrap();
+    if game.is_some() || process_running(GAME_PROCESS) {
+        return Err("the game is running: close it before clearing the shader cache".into());
+    }
+    if let Some(d) = shader_cache_dir(&load_settings_file().extra_env) {
+        if d.exists() {
+            fs::remove_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+    }
+    drop(game);
+    Ok(shader_cache_info_now())
+}
+
+// ---------------------------------------------------------------------------
 // Saves
 // ---------------------------------------------------------------------------
 
@@ -2079,6 +2156,8 @@ pub fn run() {
             reveal,
             log_paths,
             read_game_log,
+            shader_cache_info,
+            shader_cache_clear,
             saves_overview,
             saves_backup,
             saves_restore,
