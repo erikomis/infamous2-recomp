@@ -231,6 +231,13 @@ const en = {
   "settings.game": "Game",
   "settings.gameLang": "Dub, subtitles and menus",
   "settings.gameLangHint": "Only languages your copy ships. The game reads it at startup.",
+  "settings.voiceLang": "Voice",
+  "settings.voiceLangHint": "The dub (dialogue and the movies' voice) in another language. Korean, Chinese and UK English have none of their own.",
+  "settings.textLang": "Subtitles and menus",
+  "settings.textLangHint": "Subtitles, menus and HUD change together (the font with the letters comes with the menus).",
+  "settings.langSame": "Same as the game language",
+  "settings.langRunning": "The game is running: the language changes when it starts again.",
+  "settings.langRestart": "Restart the game now",
   "settings.graphics": "Graphics",
   "settings.gpuLight": "Light pass on the GPU",
   "settings.gpuLightHint": "Faster. Off runs it on the emulated SPUs, like the console.",
@@ -751,6 +758,13 @@ const ptBR: Partial<Record<Key, string>> = {
   "settings.game": "Jogo",
   "settings.gameLang": "Dublagem, legendas e menus",
   "settings.gameLangHint": "Só os idiomas que a sua cópia traz. O jogo lê na inicialização.",
+  "settings.voiceLang": "Voz",
+  "settings.voiceLangHint": "A dublagem (diálogos e a voz dos filmes) em outro idioma. Coreano, chinês e inglês do Reino Unido não têm dublagem própria.",
+  "settings.textLang": "Legendas e menus",
+  "settings.textLangHint": "Legendas, menus e HUD mudam juntos (a fonte com as letras vem com os menus).",
+  "settings.langSame": "Igual ao idioma do jogo",
+  "settings.langRunning": "O jogo está aberto: o idioma muda quando ele abrir de novo.",
+  "settings.langRestart": "Reiniciar o jogo agora",
   "settings.graphics": "Gráficos",
   "settings.gpuLight": "Iluminação na GPU",
   "settings.gpuLightHint": "Mais rápido. Desligado, roda nas SPUs emuladas, como no console.",
@@ -1059,21 +1073,27 @@ export function translateDom(root: ParentNode = document) {
   });
 }
 
-/** Game languages (PS3_LANG). "pt" is the one that selects the Brazilian dub
- * on this Americas release; see infamous2-lle/run.sh. */
-export const GAME_LANGS: { code: string; pt: string; en: string }[] = [
-  { code: "pt", pt: "Português (Brasil)", en: "Portuguese (Brazil)" },
-  { code: "en", pt: "Inglês (EUA)", en: "English (US)" },
-  { code: "en-gb", pt: "Inglês (Reino Unido)", en: "English (UK)" },
-  { code: "es", pt: "Espanhol", en: "Spanish" },
-  { code: "fr", pt: "Francês", en: "French" },
-  { code: "de", pt: "Alemão", en: "German" },
-  { code: "it", pt: "Italiano", en: "Italian" },
-  { code: "nl", pt: "Holandês", en: "Dutch" },
-  { code: "pl", pt: "Polonês", en: "Polish" },
-  { code: "ru", pt: "Russo", en: "Russian" },
-  { code: "tr", pt: "Turco", en: "Turkish" },
-  { code: "ja", pt: "Japonês", en: "Japanese" },
-  { code: "ko", pt: "Coreano (legendas)", en: "Korean (subtitles)" },
-  { code: "zh-t", pt: "Chinês tradicional (legendas)", en: "Chinese, traditional (subtitles)" },
+/** Game languages (PS3_LANG) and the name of their files in the copy
+ * (cache/psarc/<file>.psarc, <file>_text.psarc). This Americas release picks
+ * its own files only for pt, es, en and fr ("pt" is the Brazilian dub, "es"
+ * the Latin American one; see infamous2-lle/run.sh) and plays the others in
+ * English; the toolkit serves those languages' files (ppu_fs_lang.h). The
+ * Voice and Subtitles selects use the file names. */
+export const GAME_LANGS: { code: string; file: string; pt: string; en: string }[] = [
+  { code: "pt", file: "brazilian", pt: "Português (Brasil)", en: "Portuguese (Brazil)" },
+  { code: "pt-pt", file: "portuguese", pt: "Português (Portugal)", en: "Portuguese (Portugal)" },
+  { code: "en", file: "english", pt: "Inglês (EUA)", en: "English (US)" },
+  { code: "en-gb", file: "british", pt: "Inglês (Reino Unido)", en: "English (UK)" },
+  { code: "es", file: "latino", pt: "Espanhol (América Latina)", en: "Spanish (Latin America)" },
+  { code: "es-es", file: "spanish", pt: "Espanhol (Espanha)", en: "Spanish (Spain)" },
+  { code: "fr", file: "french", pt: "Francês", en: "French" },
+  { code: "de", file: "german", pt: "Alemão", en: "German" },
+  { code: "it", file: "italian", pt: "Italiano", en: "Italian" },
+  { code: "nl", file: "dutch", pt: "Holandês", en: "Dutch" },
+  { code: "pl", file: "polish", pt: "Polonês", en: "Polish" },
+  { code: "ru", file: "russian", pt: "Russo", en: "Russian" },
+  { code: "tr", file: "turkish", pt: "Turco", en: "Turkish" },
+  { code: "ja", file: "japanese", pt: "Japonês", en: "Japanese" },
+  { code: "ko", file: "korean", pt: "Coreano (legendas)", en: "Korean (subtitles)" },
+  { code: "zh-t", file: "chinese", pt: "Chinês tradicional (legendas)", en: "Chinese, traditional (subtitles)" },
 ];

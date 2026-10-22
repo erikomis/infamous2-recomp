@@ -92,7 +92,15 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   the frame-rate counter `PS3RECOMP_METAL_FPS=1`: display fps, the game's own
   submission rate and frame times in the game window's title once a second,
   also as `[RSX FPS]` lines in the log).
-- **Game / Jogo**: game language (`PS3_LANG`), audio (master volume
+- **Game / Jogo**: game language (`PS3_LANG`, the ones the copy has), with
+  **Voice** (`PS3_VOICE_LANG`) and **Subtitles and menus** (`PS3_TEXT_LANG`)
+  selects that default to "same as the game language" and are passed only when
+  they differ from it (so a choice made in the in-game menu's Game tab is not
+  overridden). Both list the languages found in the copy's `cache/psarc`
+  folder (`game_languages`: `<name>.psarc` beside `<name>_text.psarc` for a
+  voice, every `<name>_text.psarc` for text). Changing any of them while the
+  game runs offers "Restart the game now" (the game reads its language at
+  boot). Then audio (master volume
   `PS3_AUDIO_VOLUME`, output `PS3_AUDIO_DEVICE` from `system_profiler
   SPAudioDataType`), the install folder, and the **saves manager**: the game's
   save slots (`BCUS98125*`, `NPUA80638*`) in the port and in RPCS3 side by

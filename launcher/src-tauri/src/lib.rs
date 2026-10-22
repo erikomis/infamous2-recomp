@@ -42,6 +42,13 @@ pub struct Settings {
     pub install_dir: String,
     /// PS3_LANG: dub, subtitles and menus. "pt" selects the Brazilian files.
     pub game_lang: String,
+    /// PS3_VOICE_LANG: the dub in another language, by the copy's file name
+    /// ("english", "brazilian", ...: cache/psarc/<name>.psarc); empty = the
+    /// game language's. PS3_TEXT_LANG: menus and subtitles likewise
+    /// (<name>_text.psarc). The toolkit serves those files in place of the
+    /// game language's (runtime/ppu/ppu_fs_lang.h).
+    pub voice_lang: String,
+    pub text_lang: String,
     /// PS3_PATCHES: community patches by name, read from the player's own
     /// RPCS3 patch.yml (game_patches.cpp).
     pub patches: Vec<String>,
@@ -128,6 +135,8 @@ impl Default for Settings {
             ui_lang: "pt-BR".into(),
             install_dir: default_install_dir().to_string_lossy().into_owned(),
             game_lang: "pt".into(),
+            voice_lang: String::new(),
+            text_lang: String::new(),
             patches: Vec::new(),
             gpu_light: true,
             gpu_ssao: true,
@@ -594,6 +603,16 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
         set("PS3_DEV_FLASH", inst.dev_flash.clone());
     }
     set("PS3_LANG", s.game_lang.clone());
+    // Voice and text in other languages: passed only when they differ from
+    // what the game language gives, so a choice made in the in-game menu
+    // (overlay.ini) stays when the launcher's says "same".
+    let base = lang_name(&s.game_lang);
+    for (k, v) in [("PS3_VOICE_LANG", &s.voice_lang), ("PS3_TEXT_LANG", &s.text_lang)] {
+        let v = v.trim();
+        if valid_lang_name(v) && Some(v) != base {
+            set(k, v.to_string());
+        }
+    }
     let patches: Vec<&str> = s.patches.iter().map(|p| p.trim()).filter(|p| !p.is_empty() && !p.contains(',')).collect();
     if !patches.is_empty() {
         set("PS3_PATCHES", patches.join(","));
@@ -1568,6 +1587,78 @@ fn cancel_rebuild(state: State<'_, AppState>) {
     }
 }
 
+/// The files' name for a PS3_LANG code on this (Americas) release: pt and es
+/// are the regional Brazilian and Latin American ones (the game's own pick);
+/// the toolkit serves the files of the codes the game itself plays in English.
+fn lang_name(code: &str) -> Option<&'static str> {
+    Some(match code.to_ascii_lowercase().as_str() {
+        "pt" | "pt-br" => "brazilian",
+        "pt-pt" => "portuguese",
+        "en" | "en-us" => "english",
+        "en-gb" => "british",
+        "es" | "es-419" => "latino",
+        "es-es" => "spanish",
+        "fr" => "french",
+        "de" => "german",
+        "it" => "italian",
+        "nl" => "dutch",
+        "pl" => "polish",
+        "ru" => "russian",
+        "tr" => "turkish",
+        "ja" => "japanese",
+        "ko" => "korean",
+        "zh-t" => "chinese",
+        _ => return None,
+    })
+}
+
+fn valid_lang_name(v: &str) -> bool {
+    !v.is_empty() && v.len() < 24 && v.bytes().all(|c| c.is_ascii_lowercase() || c == b'_')
+}
+
+/// The languages a copy has, by file name, sorted: voice = <name>.psarc with
+/// its <name>_text.psarc beside it, text = every <name>_text.psarc.
+#[derive(Serialize, Default, Debug, PartialEq)]
+pub struct GameLanguages {
+    voice: Vec<String>,
+    text: Vec<String>,
+}
+
+fn scan_languages(dir: &Path) -> GameLanguages {
+    let mut out = GameLanguages::default();
+    let Ok(rd) = fs::read_dir(dir) else { return out };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix("_text.psarc") else { continue };
+        if !valid_lang_name(stem) {
+            continue;
+        }
+        if dir.join(format!("{stem}.psarc")).is_file() {
+            out.voice.push(stem.to_string());
+        }
+        out.text.push(stem.to_string());
+    }
+    out.voice.sort();
+    out.text.sort();
+    out
+}
+
+/// Game page: the voice and text languages of the installed copy (empty
+/// lists when nothing is installed).
+#[tauri::command]
+async fn game_languages() -> GameLanguages {
+    let s = load_settings_file();
+    let Ok(inst) = resolve_install(&PathBuf::from(&s.install_dir)) else { return GameLanguages::default() };
+    let vfs = Path::new(&inst.vfs);
+    for sub in ["PS3_GAME/USRDIR/cache/psarc", "dev_hdd0/game/NPUA80638/USRDIR/cache/psarc"] {
+        let l = scan_languages(&vfs.join(sub));
+        if !l.text.is_empty() {
+            return l;
+        }
+    }
+    GameLanguages::default()
+}
+
 /// The equivalent command line, shown in Settings.
 #[tauri::command]
 fn launch_preview(settings: Settings) -> Result<String, String> {
@@ -2246,6 +2337,7 @@ pub fn run() {
             save_input_map,
             get_status,
             list_trophies,
+            game_languages,
             update::check_updates,
             detect_rpcs3,
             find_licence,
@@ -2325,6 +2417,49 @@ mod tests {
     }
 
     #[test]
+    fn voice_and_text_languages() {
+        let inst = InstallInfo {
+            layout: "install".into(),
+            title: String::new(),
+            app_ver: String::new(),
+            port_dir: "/p".into(),
+            run_sh: "/p/run.sh".into(),
+            executable: "/p/build/x".into(),
+            vfs: "/v".into(),
+            dev_flash: "/f".into(),
+            icon: String::new(),
+            background: String::new(),
+            built_at: String::new(),
+            port_commit: String::new(),
+            toolkit_commit: String::new(),
+        };
+        let none = InputEnv::default();
+        let mut s = Settings::default();
+        // "brazilian" is what pt gives: same as the game language, not passed.
+        s.voice_lang = "brazilian".into();
+        s.text_lang = "english".into();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert!(!env.contains_key("PS3_VOICE_LANG"));
+        assert_eq!(env.get("PS3_TEXT_LANG").map(String::as_str), Some("english"));
+        s.game_lang = "en".into();
+        s.voice_lang = "Bad Name".into();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert!(!env.contains_key("PS3_VOICE_LANG") && !env.contains_key("PS3_TEXT_LANG"));
+        assert_eq!(lang_name("es-es"), Some("spanish"));
+        assert_eq!(lang_name("xx"), None);
+
+        let dir = std::env::temp_dir().join(format!("i2l-lang-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for f in ["english.psarc", "english_text.psarc", "korean_text.psarc", "core.psarc", "music.psarc"] {
+            fs::write(dir.join(f), b"PSAR").unwrap();
+        }
+        let l = scan_languages(&dir);
+        assert_eq!(l.voice, vec!["english".to_string()]);
+        assert_eq!(l.text, vec!["english".to_string(), "korean".to_string()]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn env_from_settings() {
         let inst = InstallInfo {
             layout: "install".into(),
@@ -2345,6 +2480,7 @@ mod tests {
         let mut s = Settings::default();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3_LANG").map(String::as_str), Some("pt"));
+        assert!(!env.contains_key("PS3_VOICE_LANG") && !env.contains_key("PS3_TEXT_LANG"));
         assert!(!env.contains_key("PS3RECOMP_ENG_GPU_LIGHT")); // run.sh default stays
         assert!(!env.contains_key("PS3_DISPLAY_GAMMA"));
         s.gpu_light = false;
