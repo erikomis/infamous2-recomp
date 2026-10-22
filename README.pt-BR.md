@@ -131,10 +131,10 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
   enquanto (perde-se só o escurecimento suave de contato perto de objetos)
   enquanto a conta deles é conferida. `PS3RECOMP_ENG_SKIP_FP=` (vazio) os
   desenha de novo.
-- Raramente, um SPU rodando o job de geometria do Edge falha e o jogo para
-  (cerca de 1 execução em 8 antes das últimas mudanças no runtime; nenhuma nas
-  últimas 17 execuções de teste). Diagnosticado até um registrador
-  sobrescrito dentro de um laço atômico, ainda sem correção garantida.
+- Corrigido na v0.2.2: a falha rara do SPU no job de geometria do Edge
+  (cerca de 1 execução em 8) e o travamento raro em que o job de luz não
+  terminava o frame eram o mesmo bug, um cache desatualizado de código SPU
+  traduzido. Nenhum desde então, em nenhuma execução de teste.
 - Windows e Linux ainda não são suportados.
 - Com menos de uns 3 GB livres no disco o jogo mostra um erro de "espaço
   insuficiente" no boot, que na janela aparece só como tela preta.

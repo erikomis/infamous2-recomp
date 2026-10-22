@@ -125,10 +125,9 @@ builds only on macOS so far); the installers are not signed yet.
   facades (and Cole) black; `run.sh` skips them for now (only the soft
   contact darkening near props is lost) while their math is checked.
   `PS3RECOMP_ENG_SKIP_FP=` (empty) draws them again.
-- Rarely, an SPU running the Edge geometry job faults and the game stops
-  (about 1 run in 8 before the latest runtime changes; none in the last 17
-  test runs). Diagnosed down to a register clobbered inside an atomic loop,
-  not fixed for certain yet.
+- Fixed in v0.2.2: the rare Edge geometry SPU fault (about 1 run in 8) and
+  the rare hang where the light job never finished a frame were the same
+  bug, a stale cache of translated SPU code. None since, in any test run.
 - Windows and Linux are not supported yet.
 - With less than about 3 GB free on the disk the game shows a "not enough
   space" error at boot, which in the window is just a black screen.
