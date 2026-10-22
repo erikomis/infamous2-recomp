@@ -15,6 +15,8 @@ interface Settings {
   uiLang: string;
   installDir: string;
   gameLang: string;
+  voiceLang: string;
+  textLang: string;
   gpuLight: boolean;
   gpuSsao: boolean;
   skipOcclusion: boolean;
@@ -251,18 +253,64 @@ async function updatePreview() {
   }
 }
 
-function applyLang(l: Lang) {
-  setLang(l);
-  translateDom();
+// ---- game language (PS3_LANG, PS3_VOICE_LANG, PS3_TEXT_LANG) ------------------
+/** The copy's languages by file name (cache/psarc); empty until known. */
+let copyLangs: { voice: string[]; text: string[] } = { voice: [], text: [] };
+/** The three values the running game was started with (Restart offer). */
+let langAtStart = "";
+const langKey = () => [settings.gameLang, settings.voiceLang ?? "", settings.textLang ?? ""].join("|");
+const langLabel = (file: string) => {
+  const g = GAME_LANGS.find((x) => x.file === file);
+  return g ? (lang() === "en" ? g.en : g.pt) : file;
+};
+
+async function refreshCopyLangs() {
+  copyLangs = await invoke<{ voice: string[]; text: string[] }>("game_languages").catch(() => ({ voice: [], text: [] }));
+  renderLangs();
+}
+
+function renderLangs() {
   const sel = $<HTMLSelectElement>("game-lang");
   sel.innerHTML = "";
   for (const g of GAME_LANGS) {
+    // only what the copy has (all of them while the list is unknown)
+    if (copyLangs.text.length && !copyLangs.text.includes(g.file) && g.code !== settings.gameLang) continue;
     const o = document.createElement("option");
     o.value = g.code;
     o.textContent = `${lang() === "en" ? g.en : g.pt} (${g.code})`;
     sel.appendChild(o);
   }
   sel.value = settings.gameLang;
+  const fill = (id: string, files: string[], cur: string) => {
+    const s = $<HTMLSelectElement>(id);
+    s.innerHTML = "";
+    const same = document.createElement("option");
+    same.value = "";
+    same.textContent = t("settings.langSame");
+    s.appendChild(same);
+    const list = cur && !files.includes(cur) ? [...files, cur] : files;
+    for (const f of list) {
+      const o = document.createElement("option");
+      o.value = f;
+      o.textContent = langLabel(f);
+      s.appendChild(o);
+    }
+    s.value = cur;
+  };
+  fill("voice-lang", copyLangs.voice, settings.voiceLang ?? "");
+  fill("text-lang", copyLangs.text, settings.textLang ?? "");
+  renderLangRestart();
+}
+
+/** "Restart the game now" while a game started with other languages runs. */
+function renderLangRestart() {
+  show($("lang-restart-row"), gameRunning && !!langAtStart && langAtStart !== langKey());
+}
+
+function applyLang(l: Lang) {
+  setLang(l);
+  translateDom();
+  renderLangs();
   renderHome();
   if (status) renderFinderIcon();
   renderProgress();
@@ -408,7 +456,34 @@ function bindSettings() {
   gl.addEventListener("change", () => {
     settings.gameLang = gl.value;
     persist();
+    renderLangRestart();
     void refreshTrophies();
+  });
+  for (const [id, field] of [["voice-lang", "voiceLang"], ["text-lang", "textLang"]] as const) {
+    const sel = $<HTMLSelectElement>(id);
+    sel.addEventListener("change", () => {
+      settings[field] = sel.value;
+      persist();
+      renderLangRestart();
+    });
+  }
+  $("lang-restart").addEventListener("click", async () => {
+    const btn = $<HTMLButtonElement>("lang-restart");
+    btn.disabled = true;
+    try {
+      if (gameRunning) {
+        const exited = new Promise<void>((res) => {
+          gameExitWaiters.push(res);
+          setTimeout(res, 15000);
+        });
+        await invoke("stop_game").catch(() => {});
+        await exited;
+      }
+      await startGame(false);
+    } finally {
+      btn.disabled = false;
+      renderLangRestart();
+    }
   });
   const env = $<HTMLTextAreaElement>("extra-env");
   env.value = settings.extraEnv;
@@ -449,6 +524,8 @@ function bindSettings() {
     };
     Object.assign(settings, {
       gameLang: "pt",
+      voiceLang: "",
+      textLang: "",
       patches: [],
       gpuLight: true,
       gpuSsao: true,
@@ -732,6 +809,7 @@ async function startGame(diagnostic: boolean) {
   try {
     const r = await invoke<{ log: string; backup: string | null; backupError: string | null; report: string | null }>("play", { diagnostic });
     gameRunning = true;
+    langAtStart = langKey();
     msg.textContent =
       (r.report ? t("home.startedDiag", { dir: r.report }) : t("home.started", { log: r.log })) +
       (r.backup ? t("home.backedUp", { id: r.backup }) : "") +
@@ -1395,9 +1473,14 @@ listen<number>("rebuild-exit", (ev) => {
   if (code === 0 && !lastDry) progress.finish();
   flushLog();
   refreshStatus();
+  if (code === 0 && !lastDry) void refreshCopyLangs();
 });
+/** Resolved when the game exits (Restart the game now). */
+const gameExitWaiters: (() => void)[] = [];
 listen<number>("game-exit", (ev) => {
   gameRunning = false;
+  gameExitWaiters.splice(0).forEach((f) => f());
+  renderLangRestart();
   $("home-msg").textContent = t("home.exited", { code: ev.payload });
   renderHome();
   refreshReport();
@@ -1436,6 +1519,7 @@ async function main() {
   if (!decryptWith.value) decryptWith.value = "auto"; // a value the list does not offer
   applyLang(settings.uiLang as Lang);
   await refreshStatus();
+  void refreshCopyLangs();
   refreshReport();
   renderPrereqs();
   // opened by the Play shortcut (--play): start the game as the Play button would
