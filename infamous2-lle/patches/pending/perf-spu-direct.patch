@@ -1,0 +1,132 @@
+--- a/include/ps3emu/ps3_toggles.h
++++ b/include/ps3emu/ps3_toggles.h
+@@ -62,6 +62,7 @@
+     PS3T_METAL_FPS,          /* rsx_metal_backend.m: window-title fps counter     */
+     PS3T_VIBRANCE,           /* rsx_metal_backend.m: vibrance (-1..1)             */
+     PS3T_CONTRAST,           /* rsx_metal_backend.m: contrast (0.5..1.5)          */
++    PS3T_SPU_DIRECT,         /* spu_context.h: lifted direct branches tail-call   */
+     PS3T_COUNT
+ };
+ 
+@@ -94,6 +95,7 @@
+         { "PS3RECOMP_METAL_FPS",        PS3_TK_IS1,  0 },
+         { "PS3_VIBRANCE",               PS3_TK_STR,  0 },
+         { "PS3_CONTRAST",               PS3_TK_STR,  0 },
++        { "PS3_SPU_DIRECT",             PS3_TK_NOT0, 1 },
+     };
+     return &d[id];
+ }
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -1060,6 +1060,35 @@
+  * brsl/bisl frame is live (host_depth>0); at 0 the frame was destroyed (task
+  * resume / restack unwind) so dispatch to the link register instead -- faithful
+  * to CBEA `bi` (branch to word 0 of RA). pc set unconditionally. */
++/* A lifted cross-function branch with a known target (br, the conditional
++ * branches, a fall-through into the next function). It used to set the
++ * trampoline and return, and the enclosing drain loop called the target: a
++ * host return, a loop pass and an indirect call per transfer. Now it
++ * tail-calls the target directly (no host stack growth) when nothing the
++ * drain does per step applies: the target is not LS 0 (a job's end), not in
++ * the stack-reset hint table, and no interrupt is pending with interrupts
++ * enabled. Anything else takes the trampoline as before.
++ * PS3_SPU_DIRECT=0 (environment or PS3_TOGGLE_FILE) = always the trampoline;
++ * diagnostics that watch each drain step turn it off (spu_drain.c). */
++extern volatile int g_spu_direct;       /* -1 not read yet, 0 off, 1 on */
++extern uint8_t g_spu_stack_reset_hint[1024];
++#if defined(__clang__)
++#  define SPU_DIRECT_TAIL(ctx, fn) __attribute__((musttail)) return fn(ctx)
++#else
++#  define SPU_DIRECT_TAIL(ctx, fn) do { fn(ctx); return; } while (0)
++#endif
++#define SPU_DIRECT(ctx, PC, FN) do {                                         \
++        const uint32_t _dpc = (uint32_t)(PC);                                \
++        (ctx)->pc = _dpc;                                                    \
++        if (__builtin_expect(g_spu_direct > 0, 1) && (_dpc & SPU_LS_MASK) &&  \
++            !g_spu_stack_reset_hint[(_dpc >> 2) & 1023u] &&                  \
++            !((ctx)->int_enable && !(ctx)->irq_saved &&                      \
++              (spu_ev_get((ctx)) & (ctx)->event_mask)))                       \
++            SPU_DIRECT_TAIL(ctx, FN);                                        \
++        g_spu_trampoline_fn = FN;                                            \
++        return;                                                              \
++    } while (0)
++
+ #define SPU_RET(ctx) do {                                      \
+         (ctx)->pc = (ctx)->gpr[0]._u32[0];                     \
+         if ((ctx)->host_depth == 0)                            \
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -69,7 +69,30 @@
+ static void spu_tlc_plain_init(void)
+ {
+     ps3_toggle_watch(PS3T_SPU_DRAIN_INLINE, spu_drain_inline_set);
++}
++
++/* spu_context.h: SPU_DIRECT skips the per-step work of the loop below, so
++ * the diagnostics that watch every step (lockstep, the step/exit traces, the
++ * PM flow trace) keep it off. */
++volatile int g_spu_direct = -1;
++static int spu_step_diag(void)
++{
++    static int d = -1;
++    if (d < 0) d = (getenv("SPU_LOCKSTEP") || getenv("SPU_NO_LS0_END") || getenv("SPU_EXITTRACE") ||
++                    getenv("SPU_STEPTRACE") || getenv("SPU_JOBDRAIN") || getenv("SPURS_PM_FLOW")) ? 1 : 0;
++    return d;
++}
++static void spu_direct_set(int id, int on)
++{
++    (void)id;
++    __atomic_store_n(&g_spu_direct, !spu_step_diag() && on, __ATOMIC_RELAXED);
+ }
++static void spu_direct_init(void)
++{
++    static int once;
++    if (__atomic_exchange_n(&once, 1, __ATOMIC_ACQ_REL)) return;
++    ps3_toggle_watch(PS3T_SPU_DIRECT, spu_direct_set);
++}
+ static __attribute__((noinline)) void spu_task_launch_check_job_end(spu_context* ctx)
+ {
+     static int _n = 0;
+@@ -532,6 +555,7 @@
+ 
+ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+ {
++    if (__builtin_expect(g_spu_direct < 0, 0)) spu_direct_init();
+     spu_depth_guard(ctx);
+     /* The frame an interrupt taken in THIS loop returns to. It stays armed
+      * after the handler's first host function returns -- the handler keeps
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -576,8 +576,7 @@
+                          and (last_insn.raw & 0x3FFF) in LV2_RESUMING_STOPS))
+                 and end in getattr(self, "func_starts", set())):
+             func.body_lines.append(
+-                f"    {{ ctx->pc = {self._A(end)}; "
+-                f"g_spu_trampoline_fn = {self.prefix}spu_func_{end:08X}; return; }}")
++                f"    {{ SPU_DIRECT(ctx, {self._A(end)}, {self.prefix}spu_func_{end:08X}); }}")
+ 
+         # Infinite no-op self-loop (the SPU `br .` halt idiom): a function whose
+         # whole body is nops + an unconditional branch back into itself does
+@@ -965,8 +964,8 @@
+             self.branch_targets.add(tgt)
+             # Cross-function conditional branch = conditional tail: hand the
+             # target to the trampoline and unwind (enclosing SPU_DRAIN re-enters).
+-            return (f"if ({cond}) {{ ctx->pc = {self._A(tgt)}; "
+-                    f"g_spu_trampoline_fn = {self.prefix}spu_func_{tgt:08X}; return; }}")
++            return (f"if ({cond}) {{ SPU_DIRECT(ctx, {self._A(tgt)}, "
++                    f"{self.prefix}spu_func_{tgt:08X}); }}")
+         # Interrupt enable/disable bits on the bi family (bie/bid, irete/iretd,
+         # bisle(d)...): bit 0x40000 = E (enable), 0x80000 = D (disable), taking
+         # effect when the branch is TAKEN. The WWS jobmanager's poll loop runs
+@@ -1079,8 +1078,9 @@
+         self.branch_targets.add(tgt)
+         # Cross-function unconditional tail: hand the target to the trampoline
+         # and unwind so the enclosing SPU_DRAIN re-enters (no host-stack growth).
+-        return (f"{{ ctx->pc = {self._A(tgt)}; "
+-                f"g_spu_trampoline_fn = {self.prefix}spu_func_{tgt:08X}; return; }}")
++        # SPU_DIRECT (spu_context.h): a tail call when the drain has nothing
++        # to do on this step, the trampoline otherwise.
++        return (f"{{ SPU_DIRECT(ctx, {self._A(tgt)}, {self.prefix}spu_func_{tgt:08X}); }}")
+ 
+     # ------------------------------------------------------------------ #
+     def emit_header(self) -> str:
