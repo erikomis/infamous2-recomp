@@ -46,6 +46,15 @@
   const answers = {
     get_settings: () => settings,
     save_settings: () => null,
+    list_trophies: () => ({
+      commId: "NPWR01730", title: "inFAMOUS 2",
+      trophies: [
+        { id: 0, grade: "P", name: "Troféu de Platina do inFAMOUS 2", detail: "Ganhe todos os troféus.", hidden: false, unlockedAt: 0, icon: "" },
+        { id: 1, grade: "G", name: "A Dor Cria Carácter", detail: "Complete o jogo no modo difícil.", hidden: false, unlockedAt: 0, icon: "" },
+        { id: 12, grade: "S", name: "Exemplo oculto", detail: "", hidden: true, unlockedAt: 0, icon: "" },
+        { id: 28, grade: "B", name: "Cuidado Com o Degrau", detail: "Derrota um inimigo, destruindo o objecto em cima do qual ele se encontra.", hidden: false, unlockedAt: 1792039153, icon: "" },
+      ],
+    }),
     get_status: () => ({
       installDir: settings.installDir, install: flags.notInstalled ? null : install, installError: null, icon: null, background: null,
       lastSave: { title: "inFAMOUS 2", subtitle: "(Auto) 7. Sangue no gelo", detail: "Progresso: 34%\nKarma: Herói", modified: now - 3600 * 5, folder: "/saves/x" },

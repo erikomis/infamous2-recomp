@@ -822,10 +822,12 @@ def build_captures(tr, tm, events, log_path):
                 c['taken_t'] = rnd(tm.at(nxt[0][0]))
                 trig.remove(nxt[0])
             caps.append(c)
-    else:
-        for i, (off, n, present) in enumerate(trig, 1):
-            caps.append(OrderedDict([('n', i), ('utc', tm.wall(tm.at(off))), ('offset', off),
-                                     ('t', rnd(tm.at(off))), ('taken_line', n), ('surf_present', present)]))
+    # Dumps no launcher capture explains: the in-game capture key (F12), or a
+    # session without events.tsv.
+    for off, n, present in trig:
+        caps.append(OrderedDict([('n', len(caps) + 1), ('utc', tm.wall(tm.at(off))), ('offset', off),
+                                 ('t', rnd(tm.at(off))), ('taken_line', n), ('surf_present', present),
+                                 ('source', 'in-game key' if evcaps else 'log')]))
     for c in caps:
         off = c['offset']
         pf = [f for o, f in tr.pass_frames if o >= off]

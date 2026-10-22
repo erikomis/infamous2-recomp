@@ -7,12 +7,12 @@ comes next. `[x]` = done and verified; `[ ]` = to do. Items marked "(new)"
 came in with the 2026-10-15 revision; "Update" is what changed in an item that
 already existed.
 
-## Status at a glance (2026-10-18)
+## Status at a glance (2026-10-21)
 
 - **Runs:** boot, studio logos, Bink videos, the 3D main menu, pause and options, the Empire City prologue, in-engine cutscenes and the first missions in New Marais, played in a window with a DualSense. Screenshots in the [README](README.md).
 - **Speed:** ~30 fps walking in New Marais (the game's own cap) in headless runs on Apple silicon (frames 29.7–30.4 ms; median 36 fps uncapped in the 2026-10-18 runs). Still to confirm in a long windowed session.
-- **Released:** [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) and [v0.2.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0) alpha, a macOS/Apple-silicon `.dmg` of the app that rebuilds the game from the player's copy (see "App and releases" under Done).
-- **Known problems:** the occlusion-volume passes are skipped as a stopgap for the black facades at dusk (the real cause is still open); a rare Edge SPU fault (none in the last 17 runs); no Windows or Linux yet; nobody has gone past 1% of the story.
+- **Released:** alphas [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) to [v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) (the newest: in-game menu, SMAA, quality profiles, controller reconnect and live remapping) alpha, a macOS/Apple-silicon `.dmg` of the app that rebuilds the game from the player's copy (see "App and releases" under Done).
+- **Known problems:** the occlusion-volume passes are skipped as a stopgap for the black facades at dusk (the likely cause, the shadow maps' border, has a fix in testing); the rare Edge SPU fault was fixed in v0.2.2; no Windows or Linux yet; nobody has gone past 1% of the story.
 - **In progress:**
   - [x] In-game overlay menu: change settings without leaving the game (merged 2026-10-18, in v0.2.1; F1 / Cmd+, / L3+R3).
   - [x] (merged 2026-10-18) Live A/B toggle file: the running game re-reads a `NAME=value` file (`PS3_TOGGLE_FILE`) and switches knobs on the fly, so an fps A/B compares the same scene in one run (branch `feat/live-toggles`).
@@ -90,6 +90,7 @@ Update 2026-10-17: the New Marais walk now reaches the game's 30 fps cap in head
 
 ### Stability
 
+- [x] (2026-10-22) **Endless "Please wait..." box in play** (Erik, windowed, dusk in New Marais): opening an online feature started the PSN connect dialog; cellNetCtl answered "connected" although GetState says offline, so the game went on to a PSN terms-of-service check (`cellSysutilNpEula`, NID 0x59D1629A, unimplemented) that never answers. Offline, the dialog now ends as cancelled by the player (`CELL_NET_CTL_ERROR_DIALOG_CANCELED`), a path every title handles; `PS3_NET_ONLINE=1` keeps the old answer. Waiting for Erik to confirm in a window.
 - [ ] Freeze during gameplay (the image stops for good; ~1 run in 5 in New Marais, and on the `m2` daytime pier at ~40 s of play): the FIFO walker stops on a JUMP to itself (the "park" at the end of a command block built by the SPUs, which the game later swaps for a JUMP to the next block) and the "stuck-get" watchdog gives up on it after 8 passes, a few milliseconds, before the park's own deadline (`GCM_PARK_GRACE_MS`), jumping to `put` and losing the frame's commands. Fixed: the watchdog does not count passes stopped at a park (the 50 ms deadline decides). Validation in progress (3 runs from the save). Not the cause of the "cityfalls" scene hang: most of the runs that hang there have no stuck-get at all.
   - Update: the 3 validation runs went through without freezing (c1ba4b3). Still to confirm in long windowed sessions.
   - Update 2026-10-16: in 88 headless New Marais runs on 2026-10-15/16 (~4 min each, pier and walk to the street) none froze; 4 had a "FIFO resync (jump-park)" (the park's 50 ms deadline expired: one lost frame, not a freeze). Can be marked solved after a long windowed session by Erik.
@@ -206,15 +207,18 @@ An app for **macOS, Windows and Linux**, with the same interface on all three, t
 
 Ideas from the God of War III PC port, ReShade and what players ask for; not done yet.
 
-- [ ] **ReShade-style effects** in the final image pass (SMAA is in): vibrance/contrast/curves, colour LUTs (presets and the player's own), local contrast (Clarity), film grain and vignette. Switched in the app (Graphics) and in the F1 menu, live.
+- [ ] **ReShade-style effects** in the final image pass (SMAA is in; vibrance and contrast added 2026-10-21: `PS3_VIBRANCE`, `PS3_CONTRAST`, Graphics and the F1 menu, live): curves, colour LUTs (presets and the player's own), local contrast (Clarity), film grain and vignette. Switched in the app (Graphics) and in the F1 menu, live.
 - [ ] **Persistent pipeline cache** (`MTLBinaryArchive` with the translated shaders) and a background warm-up at start: removes the hitches the first time an effect or a place shows up.
-- [ ] **Community patches** read from the player's own RPCS3 `patch.yml` (nothing shipped here): "Skip Intro" (FlexBy) and "Extended FOV" (illusion) exist for NPUA80638 01.03. Data patches at load time; code patches on the EBOOT before translation (`rebuild.py`). Credited to their authors.
+- [x] **Community patches** read from the player's own RPCS3 `patch.yml` (nothing shipped here): "Skip Intro" (FlexBy) and "Extended FOV" (illusion) exist for NPUA80638 01.03. Data patches at load time; code patches on the EBOOT before translation (`rebuild.py`). Credited to their authors.
+  - Done 2026-10-21 (`infamous2-lle/game_patches.cpp`, `PS3_PATCHES`): the port computes RPCS3's PPU hash of the EBOOT (it is `PPU-41a7d047...` for NPUA80638 01.03, the block those patches are in) and applies the chosen patches to guest memory right after loading. All three of the game's patches write data (the splash movie's name string, a float, a table word), so no re-translation is needed. Checked headless: with Skip Intro the main menu is up at 20 s where the Sucker Punch logo still shows without it. In the app: Game > Community patches (Skip the intro, Wider field of view).
 - [ ] **In-game capture hotkey** for debug mode (a key and a controller combo), without switching to the app; and a normal **screenshot** to PNG.
+  - Update 2026-10-21: **F12** captures the current frame in debug mode (render targets, pass log, shaders; `[capture] in-game key` in the log, listed by `log_triage.py`), with a corner notice; outside debug mode it says how to start it. Still open: a controller combo and a plain PNG screenshot.
 - [ ] **Automatic capture when something hangs** in debug mode: a watchdog that saves the frame, the log and the threads' state when the GPU or the game stops for a few seconds.
-- [ ] **Trophies:** a corner notice when one is earned (through the overlay) and the list in the app; the game already writes them to `<data dir>/trophies`.
+- [x] **Trophies:** a corner notice when one is earned (through the overlay) and the list in the app; the game already writes them to `<data dir>/trophies`.
+  - Update 2026-10-21: the unlock notice is done. On an unlock the toolkit reads the trophy's name from the game's own `TROPHY.TRP` (`TROPDIR/<commId>_00`, in the `PS3_LANG` language: Portuguese uses TROP_07, the game has no Brazilian file) and the in-game menu shows "Trophy unlocked: <name>" in a corner. Checked offline on Erik's copy (#28 "Watch That First Step" / "Cuidado Com o Degrau"). Still open: the list in the app.
+  - Done 2026-10-21: the list in the app too (Game > Trophies, `launcher/src-tauri/src/trophies.rs`): the 52 trophies with name, description, grade and icon from the copy's TROPHY.TRP, unlocked first with their date, hidden ones masked until earned.
 - [ ] **App auto-update:** download and install the new version (`tauri-plugin-updater` with a `latest.json` signed in CI), beyond today's notice.
 - [ ] **Steam shortcut** (non-Steam game) with art generated from the player's copy, to play from Big Picture with a controller.
-- [ ] (optional) **Discord Rich Presence**: game name and time played, off by default.
 
 ### Other platforms
 

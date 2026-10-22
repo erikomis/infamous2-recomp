@@ -221,6 +221,14 @@
             <span class="slider"><input id="sharpen" type="range" min="0" max="1" step="0.05" /><output id="sharpen-out"></output></span>
           </div>
           <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="vibrance" data-i18n="settings.vibrance">Vibrance</label><span class="hint" data-i18n="settings.vibranceHint"></span></span>
+            <span class="slider"><input id="vibrance" type="range" min="-1" max="1" step="0.05" /><output id="vibrance-out"></output></span>
+          </div>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="contrast" data-i18n="settings.contrast">Contraste</label><span class="hint" data-i18n="settings.contrastHint"></span></span>
+            <span class="slider"><input id="contrast" type="range" min="0.5" max="1.5" step="0.05" /><output id="contrast-out"></output></span>
+          </div>
+          <div class="opt">
             <span class="opt-text"><label class="opt-label" for="aniso" data-i18n="settings.aniso">Filtragem anisotrópica</label><span class="hint" data-i18n="settings.anisoHint"></span></span>
             <select id="aniso">
               <option value="0" data-i18n="settings.off">Desligado</option>
@@ -300,6 +308,25 @@
             <span class="opt-text"><label class="opt-label" for="game-lang" data-i18n="settings.gameLang">Idioma</label><span class="hint" data-i18n="settings.gameLangHint"></span></span>
             <select id="game-lang"></select>
           </div>
+        </section>
+
+        <section class="section">
+          <h2 data-i18n="sec.patches">Patches da comunidade</h2>
+          <p class="hint" data-i18n="settings.patchesLead"></p>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.patchSkipIntro">Pular a abertura</span><span class="hint" data-i18n="settings.patchSkipIntroHint"></span></span>
+            <span class="switch"><input id="patch-skip-intro" type="checkbox" data-patch="Skip Intro" /><i></i></span>
+          </label>
+          <label class="opt">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.patchFov">Campo de visão maior</span><span class="hint" data-i18n="settings.patchFovHint"></span></span>
+            <span class="switch"><input id="patch-fov" type="checkbox" data-patch="Extended FOV" /><i></i></span>
+          </label>
+        </section>
+
+        <section class="section">
+          <h2 data-i18n="sec.trophies">Troféus</h2>
+          <div class="row"><span id="trophy-summary" class="muted"></span><button id="trophy-refresh" class="link" data-i18n="trophies.refresh">Atualizar</button></div>
+          <div id="trophy-list" class="trophy-list"></div>
         </section>
 
         <section class="section">

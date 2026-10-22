@@ -8,6 +8,7 @@ mod app_icon;
 mod input_map;
 mod report;
 mod saves;
+mod trophies;
 mod update;
 mod zipfile;
 
@@ -40,6 +41,9 @@ pub struct Settings {
     pub install_dir: String,
     /// PS3_LANG: dub, subtitles and menus. "pt" selects the Brazilian files.
     pub game_lang: String,
+    /// PS3_PATCHES: community patches by name, read from the player's own
+    /// RPCS3 patch.yml (game_patches.cpp).
+    pub patches: Vec<String>,
     /// PS3RECOMP_ENG_GPU_LIGHT: the SPU light pass on the GPU.
     pub gpu_light: bool,
     /// PS3RECOMP_ENG_GPU_SSAO: the SSAO job on the GPU (needs gpu_light).
@@ -55,6 +59,10 @@ pub struct Settings {
     pub aa: String,
     /// PS3_SHARPEN: contrast-adaptive sharpening, 0 (off) to 1.
     pub sharpen: f32,
+    /// PS3_VIBRANCE: -1 (muted) .. 0 (off) .. 1 (vivid).
+    pub vibrance: f32,
+    /// PS3_CONTRAST: 0.5 .. 1 (off) .. 1.5.
+    pub contrast: f32,
     /// PS3_UPSCALE: "" (off) or "metalfx" (macOS 13+).
     pub upscale: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
@@ -109,6 +117,7 @@ impl Default for Settings {
             ui_lang: "pt-BR".into(),
             install_dir: default_install_dir().to_string_lossy().into_owned(),
             game_lang: "pt".into(),
+            patches: Vec::new(),
             gpu_light: true,
             gpu_ssao: true,
             skip_occlusion: true,
@@ -117,6 +126,8 @@ impl Default for Settings {
             aniso: 0,
             aa: String::new(),
             sharpen: 0.0,
+            vibrance: 0.0,
+            contrast: 1.0,
             upscale: String::new(),
             mouse: true,
             mouse_sens: 1.0,
@@ -564,6 +575,10 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
         set("PS3_DEV_FLASH", inst.dev_flash.clone());
     }
     set("PS3_LANG", s.game_lang.clone());
+    let patches: Vec<&str> = s.patches.iter().map(|p| p.trim()).filter(|p| !p.is_empty() && !p.contains(',')).collect();
+    if !patches.is_empty() {
+        set("PS3_PATCHES", patches.join(","));
+    }
     if !s.gpu_light {
         set("PS3RECOMP_ENG_GPU_LIGHT", String::new());
     }
@@ -585,6 +600,12 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if s.sharpen >= 0.005 {
         set("PS3_SHARPEN", format!("{:.2}", s.sharpen.min(1.0)));
+    }
+    if s.vibrance.abs() >= 0.005 {
+        set("PS3_VIBRANCE", format!("{:.2}", s.vibrance.clamp(-1.0, 1.0)));
+    }
+    if (s.contrast - 1.0).abs() >= 0.005 && s.contrast > 0.0 {
+        set("PS3_CONTRAST", format!("{:.2}", s.contrast.clamp(0.5, 1.5)));
     }
     if s.upscale == "metalfx" {
         set("PS3_UPSCALE", "metalfx".into());
@@ -821,6 +842,14 @@ pub struct Status {
     /// and whether it has the custom Finder icon.
     app_bundle: Option<String>,
     finder_icon: bool,
+}
+
+/// The game's trophies with the player's unlocks (Game page).
+#[tauri::command]
+async fn list_trophies() -> Result<trophies::TrophyList, String> {
+    let s = load_settings_file();
+    let inst = resolve_install(&PathBuf::from(&s.install_dir))?;
+    trophies::list(Path::new(&inst.vfs), &gamedata_root(&s.extra_env), &s.game_lang, true)
 }
 
 #[tauri::command]
@@ -2063,6 +2092,7 @@ pub fn run() {
             get_input_map,
             save_input_map,
             get_status,
+            list_trophies,
             update::check_updates,
             detect_rpcs3,
             find_licence,
@@ -2302,6 +2332,13 @@ mod tests {
         assert!(!env.contains_key("PS3_AA"), "an unknown AA mode stays out");
         s.aniso = 1;
         s.sharpen = 0.0;
+        s.vibrance = 0.4;
+        s.contrast = 1.2;
+        let env2: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env2.get("PS3_VIBRANCE").map(String::as_str), Some("0.40"));
+        assert_eq!(env2.get("PS3_CONTRAST").map(String::as_str), Some("1.20"));
+        s.vibrance = 0.0;
+        s.contrast = 1.0;
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert!(!env.contains_key("PS3_ANISO"));
         assert!(!env.contains_key("PS3_SHARPEN"));

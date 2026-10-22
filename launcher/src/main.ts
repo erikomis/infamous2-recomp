@@ -8,6 +8,7 @@ import { initSaves, refresh as refreshSaves, render as renderSaves } from "./sav
 import { initUpdates, refreshUpdates, renderUpdates } from "./update";
 import { initLog, renderLog, showLog } from "./gamelog";
 import { flashSaved, human } from "./ui";
+import { initTrophies, refreshTrophies, renderTrophies } from "./trophies";
 
 // ---- types shared with src-tauri/src/lib.rs (camelCase) ----------------------
 interface Settings {
@@ -22,6 +23,9 @@ interface Settings {
   aniso: number;
   aa: string;
   sharpen: number;
+  patches: string[];
+  vibrance: number;
+  contrast: number;
   upscale: string;
   mouse: boolean;
   mouseSens: number;
@@ -233,6 +237,7 @@ function applyLang(l: Lang) {
   renderGame(lastSearch);
   renderControls();
   renderSaves();
+  renderTrophies();
   renderOutputs();
   renderReport();
   renderLog();
@@ -353,10 +358,23 @@ function bindSettings() {
   $("rumble-test").addEventListener("click", testRumble);
   $("finder-icon").addEventListener("click", toggleFinderIcon);
 
+  for (const el of Array.from(document.querySelectorAll<HTMLInputElement>("input[data-patch]"))) {
+    const name = el.dataset.patch!;
+    const sync = () => { el.checked = (settings.patches ?? []).includes(name); };
+    syncers.push(sync);
+    sync();
+    el.addEventListener("change", () => {
+      const set = new Set(settings.patches ?? []);
+      if (el.checked) set.add(name); else set.delete(name);
+      settings.patches = Array.from(set);
+      persist();
+    });
+  }
   const gl = $<HTMLSelectElement>("game-lang");
   gl.addEventListener("change", () => {
     settings.gameLang = gl.value;
     persist();
+    void refreshTrophies();
   });
   const env = $<HTMLTextAreaElement>("extra-env");
   env.value = settings.extraEnv;
@@ -397,6 +415,7 @@ function bindSettings() {
     };
     Object.assign(settings, {
       gameLang: "pt",
+      patches: [],
       gpuLight: true,
       gpuSsao: true,
       skipOcclusion: true,
@@ -405,6 +424,8 @@ function bindSettings() {
       aniso: 0,
       aa: "",
       sharpen: 0,
+      vibrance: 0,
+      contrast: 1,
       upscale: "",
       mouse: true,
       mouseSens: 1.0,
@@ -455,6 +476,8 @@ function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: numb
   bindSelect("upscale", "upscale");
   bindSelect("q-upscale", "upscale");
   bindRange("sharpen", "sharpen", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
+  bindRange("vibrance", "vibrance", (v) => (Math.abs(v) >= 0.005 ? `${v > 0 ? "+" : ""}${Math.round(v * 100)}%` : t("settings.off")));
+  bindRange("contrast", "contrast", (v) => (Math.abs(v - 1) >= 0.005 ? `${Math.round(v * 100)}%` : t("settings.normal")));
   bindPreset();
 }
 
@@ -1309,6 +1332,7 @@ async function main() {
   bindSettings();
   initControls();
   initLog();
+  initTrophies();
   initSaves({
     keep: () => settings.saveBackupsKeep ?? 10,
     setKeep: (n) => {

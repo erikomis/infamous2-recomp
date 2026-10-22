@@ -9,7 +9,7 @@ graphics on Metal. It is not an emulator.
 
 **It boots, shows its menus and cutscenes, and New Marais is playable**, at
 the game's own 30 fps cap on Apple silicon. Get the app from the
-[**v0.2.0 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+[**v0.2.4 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
 and it rebuilds the game from your own copy ([how](#download-and-play)).
 
 | | |
@@ -53,11 +53,12 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Empire City prologue (the Beast, the freighter) | ✅ |
 | New Marais: first missions, played in a window with a DualSense | ✅ |
 | Performance | ✅ ~30 fps walking in New Marais (the game's own cap) in headless runs on Apple silicon: frames of 29.7–30.4 ms, ~33–36 fps of headroom. Windowed confirmation pending |
-| Controller (DualSense tested; DualShock 4 and Xbox through SDL), rumble | ✅ |
-| Keyboard and mouse (mouse camera, remappable) | 🧪 mapped, little tested in a window |
+| Controller (DualSense tested; DualShock 4 and Xbox through SDL), rumble, reconnect without a restart | ✅ |
+| Keyboard and mouse (mouse camera, remappable, also live in the in-game menu) | 🧪 mapped, little tested in a window |
+| In-game menu (F1 / Cmd+, / L3+R3): image, audio, controls, performance HUD | ✅ since v0.2.4 (live changes) |
 | Saves and trophies (in `~/Library/Application Support`), saves manager in the app | ✅ |
 | Brazilian Portuguese dub and subtitles (default), other languages your copy ships, DLC | ✅ |
-| The app: install, rebuild, play, settings, controls, saves, report a problem | ✅ [v0.2.0 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0) |
+| The app: install, rebuild, play, settings, controls, saves, debug mode | ✅ [v0.2.4 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Linux and Windows | ⏳ planned |
 
@@ -69,8 +70,8 @@ You need an Apple-silicon Mac and your own copy of inFAMOUS 2 (the PSN
 release `NPUA80638`, for example installed in [RPCS3](https://rpcs3.net) with
 its `.rap` licence).
 
-1. Download `infamous2-recomp_0.2.0_aarch64.dmg` from the
-   [v0.2.0 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0)
+1. Download `infamous2-recomp_0.2.4_aarch64.dmg` from the
+   [v0.2.4 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
    and drag the app to Applications. It is not notarized: the first time,
    right-click > Open (or System Settings > Privacy & Security > Open Anyway).
 2. The app lists what your Mac still needs (Xcode Command Line Tools, a few
@@ -93,17 +94,22 @@ Advanced.
 - **Install / rebuild** with a progress bar: checks and installs the tools,
   finds your copy and its `.rap`, decrypts with RPCS3 or without it.
 - **Graphics:** window, fullscreen or borderless, screen, vsync, gamma,
-  anisotropic filtering, FXAA, sharpening (CAS), MetalFX upscaling, fps
-  counter.
+  anisotropic filtering, FXAA or SMAA, sharpening (CAS), vibrance, contrast,
+  MetalFX upscaling, fps counter, and ready-made profiles (Performance /
+  Balanced / Quality). macOS Game Mode turns on in fullscreen.
 - **Controls:** remap keyboard, mouse and controller, mouse camera,
   vibration; **audio** volume and output; **game language** (the ones your
   copy ships).
 - **Saves:** list, back up, restore, import/export with RPCS3, `.zip`.
+- **Trophies:** the game's trophies with your unlocks (names and icons from
+  your copy), and a "Trophy unlocked" notice in the game.
+- **Community patches** from your own RPCS3 patch file: skip the intro, a
+  wider field of view.
 - **Debug mode** (Advanced > Debug mode): play normally while the game logs
   what goes wrong (missing functions, shader/texture failures, GPU stalls,
   SPU faults, audio falling behind, files it cannot open, frame-rate drops)
-  and keeps a timed index of the session; press **Capture this frame** when
-  something looks wrong. Afterwards **Analyse** runs
+  and keeps a timed index of the session; press **F12** in the game (or
+  **Capture this frame** in the app) when something looks wrong. Afterwards **Analyse** runs
   `infamous2-lle/tools/log_triage.py` on the session and lists the top
   issues (also in `triage.md` in the session folder, for a developer or an
   agent to go through), and **Create .zip** packs it all for an issue.
@@ -111,6 +117,15 @@ Advanced.
   Plus a **game log viewer** that follows the log live.
 - **Updates card:** tells when a newer release is out or the installed game
   is older than the app's sources, and offers a rebuild.
+- **Your copy's icon** in the Dock for the app and the game (read from your
+  install, never shipped).
+
+**In the game,** F1 (fn+F1), Cmd+, or L3+R3 opens the **in-game menu**:
+image (gamma, sharpening, FXAA/SMAA, vibrance, contrast, MetalFX, vsync,
+display mode), audio volume, controls (live remapping of keyboard, mouse and
+controller, "play with" controller / keyboard and mouse / both, vibration,
+mouse) and a performance HUD (fps, frame time, CPU/GPU). A DualSense that
+switches off comes back by itself within about a second.
 
 | | |
 | --- | --- |
@@ -121,10 +136,12 @@ builds only on macOS so far); the installers are not signed yet.
 
 ## Known problems
 
-- In some close-up views at dusk the occlusion-volume passes turned whole
-  facades (and Cole) black; `run.sh` skips them for now (only the soft
-  contact darkening near props is lost) while their math is checked.
-  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws them again.
+- In some close-up views at dusk whole facades (and Cole) went black;
+  `run.sh` skips the occlusion-volume passes for now (only the soft contact
+  darkening near props is lost). The port reproduces their math exactly; the
+  likely real cause, shadow maps sampled with a black instead of a white
+  border outside the sun's frustum, has a fix in testing.
+  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws the volumes again.
 - Fixed in v0.2.2: the rare Edge geometry SPU fault (about 1 run in 8) and
   the rare hang where the light job never finished a frame were the same
   bug, a stale cache of translated SPU code. None since, in any test run.
@@ -136,13 +153,17 @@ builds only on macOS so far); the installers are not signed yet.
 
 What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
 
-- An **in-game overlay menu**, to change settings without leaving the game.
-- A **live A/B toggle file**: the running game re-reads a text file and
-  switches options on the fly, for fair before/after comparisons in one run.
-- A **fifth round of pull requests** to [ps3recomp](https://github.com/sp00nznet/ps3recomp)
-  with this port's toolkit fixes.
-- **Adopting upstream fixes:** ps3recomp #358, #340, #326, #349, #360, #366
-  and the log-cap fix from issue #364 are in since v0.2.0; more as they land.
+- **Steady 30 fps or more:** finding and cutting the remaining frame-time
+  dips (26-28 fps moments) in New Marais.
+- **Dark facades:** the shadow-map border fix above, then turning the
+  occlusion volumes back on.
+- **More ReShade-style effects** in the final image pass (SMAA, vibrance and
+  contrast are in): colour LUTs, local contrast, film grain and vignette.
+- **Pull requests to [ps3recomp](https://github.com/sp00nznet/ps3recomp)**
+  with this port's toolkit fixes (#372-#375 open), and upstream fixes adopted
+  here (#358, #340, #326, #349, #360, #366, issue #364).
+- New ideas (pipeline cache, community patches, an in-game capture key,
+  trophies, app auto-update, a Steam shortcut) are listed in the roadmap.
 
 ## Building from source
 
@@ -341,6 +362,9 @@ class; it did not raise the frame rate in tests and coincided with hangs.
 | `PS3_DISPLAY=<n>\|<name>` | the screen the game opens on, which fullscreen and borderless then cover: `1` is the one with the menu bar, `2` the next, or a screen's name as System Settings shows it (`DELL U2720Q`; any case, or a part of it). Default: the main screen |
 | `PS3_VSYNC=0` | presents frames without waiting for the screen's refresh (less latency, may tear in fullscreen). The game's 30 fps pacing comes from its own vblank clock and does not change |
 | `PS3_ANISO=2\|4\|8\|16` | anisotropic filtering: ground and walls seen at an angle stay sharp. Only the game's mipmapped textures change. Default off |
+| `PS3_PATCHES="Skip Intro,Extended FOV"` | Community patches by name, read from your own RPCS3 `patches/patch.yml` (`PS3_PATCH_YML` for another file) and applied when the game starts; only the block whose `PPU-<sha1>` matches this EBOOT counts. In the app: Game > Community patches |
+| `PS3_VIBRANCE=-1..1` | Vibrance: saturation raised most on dull colours (negative mutes). Default 0 (off) |
+| `PS3_CONTRAST=0.5..1.5` | Contrast around mid-grey. Default 1 (off) |
 | `PS3_AA=fxaa` / `smaa` | Anti-aliasing on the game's 1280x720 image, before any scaling: FXAA (cheapest, slightly soft) or SMAA 1x (sharper text and textures). Default off |
 | `PS3_SHARPEN=<0..1>` | contrast-adaptive sharpening (AMD CAS style) at the output resolution; 0 (default) is off |
 | `PS3_UPSCALE=metalfx` | MetalFX spatial upscaling from 1280x720 to the window's pixel size (macOS 13+), instead of the layer's plain stretch. Falls back to the plain path, with a line in the log, where MetalFX is missing. Default off |
