@@ -17,13 +17,15 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 name=${1:?run name}; mode=${2:-prologue}; secs=${3:-700}
 shift 3 2>/dev/null; points=${*:-"120 300 620"}
 
-windowed() { for p in $(pgrep -f "build/Infamous2Recomp"); do
+# By process name (-x), not command line: a shell or monitor whose command
+# merely mentions the path used to count as a windowed game for ever.
+windowed() { for p in $(pgrep -x Infamous2Recomp); do
                  ps eww -o command= -p "$p" | grep -q "HEADLESS=1" || return 0; done; return 1; }
 while windowed || pgrep -f "tools/boot.sh" >/dev/null; do
     echo "[profile] machine busy (another run or a windowed game); waiting"; sleep 60; done
 
 # The game process descended from this run's boot.sh (boot.sh -> caffeinate -> run.sh -> game).
-own_game() { for p in $(pgrep -f "build/Infamous2Recomp"); do q=$p
+own_game() { for p in $(pgrep -x Infamous2Recomp); do q=$p
                  while [ -n "$q" ] && [ "$q" -gt 1 ]; do
                      [ "$q" = "$boot" ] && { echo "$p"; return; }
                      q=$(ps -o ppid= -p "$q" | tr -d ' '); done; done; }
