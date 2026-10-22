@@ -488,10 +488,10 @@ index 0000000..3bb1978
 +#endif
 diff --git a/include/ps3emu/ps3_toggles.h b/include/ps3emu/ps3_toggles.h
 new file mode 100644
-index 0000000..e902615
+index 0000000..cd1fe37
 --- /dev/null
 +++ b/include/ps3emu/ps3_toggles.h
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,241 @@
 +/*
 + * ps3_toggles -- performance and debug knobs that change while the game runs.
 + *
@@ -560,6 +560,7 @@ index 0000000..e902615
 +    PS3T_GRAIN,              /* rsx_metal_backend.m: film grain (0..1)            */
 +    PS3T_LUT_STRENGTH,       /* rsx_metal_backend.m: colour LUT mix (0..1)        */
 +    PS3T_BUTTON_ICONS,       /* rsx_button_icons.c: prompt glyph set (auto/...)   */
++    PS3T_SPU_DIRECT,         /* spu_context.h: lifted direct branches tail-call   */
 +    PS3T_COUNT
 +};
 +
@@ -596,6 +597,7 @@ index 0000000..e902615
 +        { "PS3_GRAIN",                  PS3_TK_STR,  0 },
 +        { "PS3_LUT_STRENGTH",           PS3_TK_STR,  0 },
 +        { "PS3_BUTTON_ICONS",           PS3_TK_STR,  0 },
++        { "PS3_SPU_DIRECT",             PS3_TK_NOT0, 1 },
 +    };
 +    return &d[id];
 +}
@@ -19856,7 +19858,7 @@ index 89f3d8e..d72176c 100644
                          (void*)c, ((spu_context*)c)->image_id);
              __atomic_store_n(&s_coh_ctxs[i], NULL, __ATOMIC_RELEASE);
 diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
-index 53e07da..8451861 100644
+index 53e07da..2479681 100644
 --- a/runtime/spu/spu_context.h
 +++ b/runtime/spu/spu_context.h
 @@ -11,6 +11,7 @@
@@ -19937,6 +19939,42 @@ index 53e07da..8451861 100644
  {
      lsa &= SPU_LS_MASK & ~0xFu;
      uint8_t* p = &ctx->ls[lsa];
+@@ -1043,6 +1060,35 @@ static inline void spu_pchist_tick(const spu_context* ctx)
+  * brsl/bisl frame is live (host_depth>0); at 0 the frame was destroyed (task
+  * resume / restack unwind) so dispatch to the link register instead -- faithful
+  * to CBEA `bi` (branch to word 0 of RA). pc set unconditionally. */
++/* A lifted cross-function branch with a known target (br, the conditional
++ * branches, a fall-through into the next function). It used to set the
++ * trampoline and return, and the enclosing drain loop called the target: a
++ * host return, a loop pass and an indirect call per transfer. Now it
++ * tail-calls the target directly (no host stack growth) when nothing the
++ * drain does per step applies: the target is not LS 0 (a job's end), not in
++ * the stack-reset hint table, and no interrupt is pending with interrupts
++ * enabled. Anything else takes the trampoline as before.
++ * PS3_SPU_DIRECT=0 (environment or PS3_TOGGLE_FILE) = always the trampoline;
++ * diagnostics that watch each drain step turn it off (spu_drain.c). */
++extern volatile int g_spu_direct;       /* -1 not read yet, 0 off, 1 on */
++extern uint8_t g_spu_stack_reset_hint[1024];
++#if defined(__clang__)
++#  define SPU_DIRECT_TAIL(ctx, fn) __attribute__((musttail)) return fn(ctx)
++#else
++#  define SPU_DIRECT_TAIL(ctx, fn) do { fn(ctx); return; } while (0)
++#endif
++#define SPU_DIRECT(ctx, PC, FN) do {                                         \
++        const uint32_t _dpc = (uint32_t)(PC);                                \
++        (ctx)->pc = _dpc;                                                    \
++        if (__builtin_expect(g_spu_direct > 0, 1) && (_dpc & SPU_LS_MASK) &&  \
++            !g_spu_stack_reset_hint[(_dpc >> 2) & 1023u] &&                  \
++            !((ctx)->int_enable && !(ctx)->irq_saved &&                      \
++              (spu_ev_get((ctx)) & (ctx)->event_mask)))                       \
++            SPU_DIRECT_TAIL(ctx, FN);                                        \
++        g_spu_trampoline_fn = FN;                                            \
++        return;                                                              \
++    } while (0)
++
+ #define SPU_RET(ctx) do {                                      \
+         (ctx)->pc = (ctx)->gpr[0]._u32[0];                     \
+         if ((ctx)->host_depth == 0)                            \
 diff --git a/runtime/spu/spu_dispatch_mt.c b/runtime/spu/spu_dispatch_mt.c
 index c610dad..fed06c6 100644
 --- a/runtime/spu/spu_dispatch_mt.c
@@ -20361,7 +20399,7 @@ index 142931a..6ea46de 100644
                        spu->image_id, value, spu->mfc_tag_mask, mfc->tag_completed,
                        spu->mfc_tag_status,
 diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
-index 7c1089c..5ae1899 100644
+index 7c1089c..b081b43 100644
 --- a/runtime/spu/spu_drain.c
 +++ b/runtime/spu/spu_drain.c
 @@ -6,7 +6,12 @@
@@ -20385,7 +20423,7 @@ index 7c1089c..5ae1899 100644
  
  /* SPURS task-launch interception at a trampoline hop (milestone: SPURS kernel).
   * No-op until then. */
-@@ -45,10 +51,59 @@ void* volatile    g_pm_flow_ctx = 0;
+@@ -45,10 +51,82 @@ void* volatile    g_pm_flow_ctx = 0;
  extern void spu_halt(spu_context*);
  /* Last 32 drain steps on this host thread (pc), for post-mortems of a run that
   * ended where it should not have (spurs_policy.c, [pm-end]). */
@@ -20407,6 +20445,29 @@ index 7c1089c..5ae1899 100644
 +static void spu_tlc_plain_init(void)
 +{
 +    ps3_toggle_watch(PS3T_SPU_DRAIN_INLINE, spu_drain_inline_set);
++}
++
++/* spu_context.h: SPU_DIRECT skips the per-step work of the loop below, so
++ * the diagnostics that watch every step (lockstep, the step/exit traces, the
++ * PM flow trace) keep it off. */
++volatile int g_spu_direct = -1;
++static int spu_step_diag(void)
++{
++    static int d = -1;
++    if (d < 0) d = (getenv("SPU_LOCKSTEP") || getenv("SPU_NO_LS0_END") || getenv("SPU_EXITTRACE") ||
++                    getenv("SPU_STEPTRACE") || getenv("SPU_JOBDRAIN") || getenv("SPURS_PM_FLOW")) ? 1 : 0;
++    return d;
++}
++static void spu_direct_set(int id, int on)
++{
++    (void)id;
++    __atomic_store_n(&g_spu_direct, !spu_step_diag() && on, __ATOMIC_RELAXED);
++}
++static void spu_direct_init(void)
++{
++    static int once;
++    if (__atomic_exchange_n(&once, 1, __ATOMIC_ACQ_REL)) return;
++    ps3_toggle_watch(PS3T_SPU_DIRECT, spu_direct_set);
 +}
 +static __attribute__((noinline)) void spu_task_launch_check_job_end(spu_context* ctx)
 +{
@@ -20446,7 +20507,7 @@ index 7c1089c..5ae1899 100644
      /* A SPURS job returning to LS 0 is finished -- its crt tail-jumps to the
       * resident job manager, and with the job loaded at 0 that lands on its own
       * entry. Planting a return address in r0 catches the jobs that get there
-@@ -71,7 +126,7 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
+@@ -71,7 +149,7 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
      if (!s_no_ls0 && ctx->steps++ && (ctx->pc & SPU_LS_MASK) == 0 &&
          !ctx->policy_mode && ctx->image_id > 0) {
          static int _n = 0;
@@ -20455,7 +20516,7 @@ index 7c1089c..5ae1899 100644
              fprintf(stderr, "[spurs-job] img=%d branched to LS 0 -- job complete\n",
                      ctx->image_id);
          if (s_et >= 0 && ctx->image_id == s_et) {
-@@ -96,7 +151,7 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
+@@ -96,7 +174,7 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
            if (s_from >= 0 && !s_armed &&
                ((uint32_t)ctx->pc & SPU_LS_MASK) == (uint32_t)s_from) s_armed = 1;
            static int n = 0;
@@ -20464,7 +20525,7 @@ index 7c1089c..5ae1899 100644
                fprintf(stderr, "[step] pc=0x%05X r1=0x%05X r2=0x%08X r3=0x%08X r4=0x%08X\n",
                        (uint32_t)ctx->pc & SPU_LS_MASK, ctx->gpr[1]._u32[0],
                        ctx->gpr[2]._u32[0], ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0]);
-@@ -132,7 +187,7 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
+@@ -132,7 +210,7 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
          marked++;
      }
      static int _n = 0;
@@ -20473,7 +20534,7 @@ index 7c1089c..5ae1899 100644
          fprintf(stderr, "[pm-jobdrain] ring-full spin: marked %d pending records done\n", marked);
  }
  
-@@ -206,13 +261,50 @@ unsigned spu_sn_defer_ticks(void)
+@@ -206,13 +284,50 @@ unsigned spu_sn_defer_ticks(void)
   * the irete). State the handler legitimately publishes lives in LS/channels
   * and is untouched. Per-ctx slots; no nesting (interrupts stay disabled
   * until iret). */
@@ -20525,7 +20586,7 @@ index 7c1089c..5ae1899 100644
            fprintf(stderr, "[t0001-irq] NESTED TAKE while save armed: "
                    "old resume=%05X new resume=%05X (outer snapshot LOST)\n",
                    ctx->irq_resume_pc & SPU_LS_MASK, ctx->srr0 & SPU_LS_MASK); }
-@@ -248,11 +340,12 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
+@@ -248,11 +363,12 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
                   * loop head re-branching to the old resume pc triggers it. */
                  { uint64_t _age = ctx->steps - ctx->irq_save_steps;
                    static int _n = 0;
@@ -20539,7 +20600,7 @@ index 7c1089c..5ae1899 100644
                  memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
                  ctx->irq_saved = 0;
                  /* The iret completed below the frame that took the interrupt:
-@@ -261,20 +354,22 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
+@@ -261,20 +377,22 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
                  if (f && ctx->host_depth <= f->depth)
                      ctx->irq_frame = f->prev;      /* returned to its loop the ordinary way */
                  if (f && ctx->host_depth > f->depth) {
@@ -20564,7 +20625,7 @@ index 7c1089c..5ae1899 100644
                            fprintf(stderr, "[irq] IRET at depth %u unwinds to the driver (srr0=0x%05X)\n",
                                    ctx->host_depth, ctx->pc & SPU_LS_MASK); }
                      extern void spu_restart_dispatch(spu_context*);
-@@ -307,7 +402,7 @@ void (*spu_take_interrupt(spu_context* ctx,
+@@ -307,7 +425,7 @@ void (*spu_take_interrupt(spu_context* ctx,
          target = (((w >> 7) & 0xFFFF) << 2) & SPU_LS_MASK;
      } else {
          static int _w = 0;
@@ -20573,7 +20634,7 @@ index 7c1089c..5ae1899 100644
              fprintf(stderr, "[spu-int] pending (st=0x%X mask=0x%X) but LS0 word "
                      "0x%08X is no branch -- not taken\n",
                      spu_ev_get(ctx), ctx->event_mask, w);
-@@ -316,14 +411,47 @@ void (*spu_take_interrupt(spu_context* ctx,
+@@ -316,14 +434,47 @@ void (*spu_take_interrupt(spu_context* ctx,
      ctx->srr0 = ctx->pc;             /* resume point for iret */
      ctx->int_enable = 0;
      spu_irq_regs_save(ctx);          /* hardware contract: handler preserves regs */
@@ -20623,7 +20684,15 @@ index 7c1089c..5ae1899 100644
            /* WWS Load->Run diagnosis: the job-manager interrupt handler advances
             * g_WwsJob_loadJobState kReadCommands(1)->kExecuteCommands(2) only if
             * (a) the ch25 stall mask has tag 0 (kLoadJob_readCommands) AND
-@@ -423,8 +551,19 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -404,6 +555,7 @@ extern spu_drain_fn spu_lookup(uint32_t addr, int image_id);
+ 
+ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+ {
++    if (__builtin_expect(g_spu_direct < 0, 0)) spu_direct_init();
+     spu_depth_guard(ctx);
+     /* The frame an interrupt taken in THIS loop returns to. It stays armed
+      * after the handler's first host function returns -- the handler keeps
+@@ -423,8 +575,19 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
              void (*fn)(spu_context*) = g_spu_trampoline_fn;
              g_spu_trampoline_fn = 0;
              ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
@@ -20645,7 +20714,7 @@ index 7c1089c..5ae1899 100644
              if (ctx->int_enable && !ctx->irq_saved && (spu_ev_get(ctx) & ctx->event_mask)) {
                  void (*vf)(spu_context*) = spu_take_interrupt(ctx, fn);
                  if (!ctx->int_enable) {   /* taken (a take clears the enable; a deferral leaves it) */
-@@ -458,17 +597,22 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -458,17 +621,22 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
              uint32_t pc = ctx->pc & SPU_LS_MASK;
              spu_drain_fn fn = 0;
              int owned = 0;
@@ -97367,7 +97436,7 @@ index ab59cbe..6f63368 100644
                  # right after another branch (fallthrough entry)
                  while k > 0 and seg[k].addr not in targets and not _ends_block(seg[k - 1]):
 diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
-index 00b771d..a18e3d8 100644
+index 00b771d..91d3c48 100644
 --- a/tools/spu_lifter.py
 +++ b/tools/spu_lifter.py
 @@ -499,7 +499,11 @@ def compute_link_returns(insns, bounds) -> set:
@@ -97383,16 +97452,17 @@ index 00b771d..a18e3d8 100644
          self.functions: list[LiftedFunction] = []
          self.call_targets: set[int] = set()
          self.branch_targets: set[int] = set()
-@@ -572,7 +576,7 @@ class SPULifter:
+@@ -572,8 +576,7 @@ class SPULifter:
                           and (last_insn.raw & 0x3FFF) in LV2_RESUMING_STOPS))
                  and end in getattr(self, "func_starts", set())):
              func.body_lines.append(
 -                f"    {{ ctx->pc = 0x{end:X}; "
-+                f"    {{ ctx->pc = {self._A(end)}; "
-                 f"g_spu_trampoline_fn = {self.prefix}spu_func_{end:08X}; return; }}")
+-                f"g_spu_trampoline_fn = {self.prefix}spu_func_{end:08X}; return; }}")
++                f"    {{ SPU_DIRECT(ctx, {self._A(end)}, {self.prefix}spu_func_{end:08X}); }}")
  
          # Infinite no-op self-loop (the SPU `br .` halt idiom): a function whose
-@@ -596,6 +600,16 @@ class SPULifter:
+         # whole body is nops + an unconditional branch back into itself does
+@@ -596,6 +599,16 @@ class SPULifter:
          self.functions.append(func)
          return func
  
@@ -97409,7 +97479,7 @@ index 00b771d..a18e3d8 100644
      @staticmethod
      def _branch_target(insn: SPUInstruction):
          """The literal target of a direct branch, or None if it has none.
-@@ -856,8 +870,12 @@ class SPULifter:
+@@ -856,8 +869,12 @@ class SPULifter:
              if disp is not None:
                  return f"spu_ls_write128(ctx, {g(base)}._u32[0] + {disp}, {g(rt())});"
          if mn in ("lqa", "lqr"):
@@ -97422,7 +97492,7 @@ index 00b771d..a18e3d8 100644
              return f"spu_ls_write128(ctx, {_imm(ops[1])}, {g(rt())});"
          if mn == "lqx":
              return f"{g(rt())} = spu_ls_read128(ctx, {g(ra())}._u32[0] + {g(rb())}._u32[0]);"
-@@ -878,6 +896,9 @@ class SPULifter:
+@@ -878,6 +895,9 @@ class SPULifter:
          # ---- branches ----
          if mn in ("br", "bra"):
              tgt = self._branch_target(insn)
@@ -97432,7 +97502,7 @@ index 00b771d..a18e3d8 100644
              # SELF-LOOP TRAP: `br .` (target == this instruction) is an infinite
              # hang on real SPU -- a deliberate trap, no forward progress. Emitting
              # `goto loc_self` busy-spins the host thread forever; stop the SPU
-@@ -892,7 +913,14 @@ class SPULifter:
+@@ -892,7 +912,14 @@ class SPULifter:
              tgt = self._branch_target(insn)
              # Link register: preferred word only, other slots ZERO (real HW /
              # RPCS3 v128::from32r) -- splatting corrupts full-quadword link use.
@@ -97448,7 +97518,7 @@ index 00b771d..a18e3d8 100644
              # SELF-LOOP TRAP: `brsl rX, .` (target == this instruction) is an
              # infinite loop on real SPU (re-sets the link each pass, never
              # advances) -- a trap, NOT a call. Emitting a host call recurses
-@@ -917,6 +945,11 @@ class SPULifter:
+@@ -917,6 +944,11 @@ class SPULifter:
                  # `bi $r0` returns via host return) + SPU_DRAIN (drains the
                  # callee's own tail-chains so they don't grow the caller frame)
                  # + image save/restore (adopt-on-serve cannot leak upward).
@@ -97460,16 +97530,18 @@ index 00b771d..a18e3d8 100644
                  return (f"{link} {{ int32_t _si = (int32_t)ctx->image_id; "
                          f"ctx->host_depth++; {self.prefix}spu_func_{tgt:08X}(ctx); "
                          f"spu_drain_call(ctx, 0x{addr + 4:X}); ctx->host_depth--; spu_img_restore(ctx, _si); }}")
-@@ -932,7 +965,7 @@ class SPULifter:
+@@ -932,8 +964,8 @@ class SPULifter:
              self.branch_targets.add(tgt)
              # Cross-function conditional branch = conditional tail: hand the
              # target to the trampoline and unwind (enclosing SPU_DRAIN re-enters).
 -            return (f"if ({cond}) {{ ctx->pc = 0x{tgt:X}; "
-+            return (f"if ({cond}) {{ ctx->pc = {self._A(tgt)}; "
-                     f"g_spu_trampoline_fn = {self.prefix}spu_func_{tgt:08X}; return; }}")
+-                    f"g_spu_trampoline_fn = {self.prefix}spu_func_{tgt:08X}; return; }}")
++            return (f"if ({cond}) {{ SPU_DIRECT(ctx, {self._A(tgt)}, "
++                    f"{self.prefix}spu_func_{tgt:08X}); }}")
          # Interrupt enable/disable bits on the bi family (bie/bid, irete/iretd,
          # bisle(d)...): bit 0x40000 = E (enable), 0x80000 = D (disable), taking
-@@ -980,17 +1013,19 @@ class SPULifter:
+         # effect when the branch is TAKEN. The WWS jobmanager's poll loop runs
+@@ -980,17 +1012,19 @@ class SPULifter:
              # SPU_DRAIN + image save/restore) so the callee's tail-chains drain
              # here and its `bi $r0` returns via host return.
              # read the target BEFORE writing the link: rt may be the same register as ra
@@ -97494,15 +97566,18 @@ index 00b771d..a18e3d8 100644
                      f"if ((ctx->event_status & ctx->event_mask) != 0) {{ "
                      f"{_ied}ctx->pc = _tg; "
                      f"g_spu_trampoline_fn = spu_indirect_branch; return; }} }}")
-@@ -1044,7 +1079,7 @@ class SPULifter:
+@@ -1044,8 +1078,9 @@ class SPULifter:
          self.branch_targets.add(tgt)
          # Cross-function unconditional tail: hand the target to the trampoline
          # and unwind so the enclosing SPU_DRAIN re-enters (no host-stack growth).
 -        return (f"{{ ctx->pc = 0x{tgt:X}; "
-+        return (f"{{ ctx->pc = {self._A(tgt)}; "
-                 f"g_spu_trampoline_fn = {self.prefix}spu_func_{tgt:08X}; return; }}")
+-                f"g_spu_trampoline_fn = {self.prefix}spu_func_{tgt:08X}; return; }}")
++        # SPU_DIRECT (spu_context.h): a tail call when the drain has nothing
++        # to do on this step, the trampoline otherwise.
++        return (f"{{ SPU_DIRECT(ctx, {self._A(tgt)}, {self.prefix}spu_func_{tgt:08X}); }}")
  
      # ------------------------------------------------------------------ #
+     def emit_header(self) -> str:
 @@ -1089,7 +1124,7 @@ class SPULifter:
              lines.append(" * branches that escape a function's range). */")
              for t in externs:
