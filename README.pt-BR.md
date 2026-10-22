@@ -56,6 +56,7 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Desempenho | ✅ ~30 fps andando em New Marais (o limite do próprio jogo) nas execuções sem janela em Apple silicon: frames de 29,7–30,4 ms, folga de ~33–36 fps. Falta confirmar com janela |
 | Controle (DualSense testado; DualShock 4 e Xbox pelo SDL), vibração, reconexão sem reiniciar | ✅ |
 | Teclado e mouse (câmera no mouse, remapeáveis, também ao vivo no menu dentro do jogo) | 🧪 mapeados, pouco testados com janela |
+| Avisos de botão que seguem o controle (A/B/X/Y do Xbox, teclas do teclado) | 🧪 conferidos sem janela, falta testar com janela |
 | Menu dentro do jogo (F1 / Cmd+, / L3+R3): imagem, áudio, controles, HUD de desempenho | ✅ desde a v0.2.4 (mudanças ao vivo) |
 | Saves e troféus (em `~/Library/Application Support`), gerenciador de saves no app | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), outros idiomas que a sua cópia traz, DLC | ✅ |
@@ -339,7 +340,7 @@ apertados, nenhum chega. `PS3_OVERLAY_PAD=0` desliga a combinação no controle,
 | --- | --- |
 | Imagem | a gama própria (ou o brilho do próprio jogo), nitidez, FXAA, escala MetalFX, vsync, janela / tela cheia do macOS / sem bordas; a filtragem anisotrópica vale no próximo início |
 | Áudio | volume geral |
-| Controles | jogar com controle + teclado/mouse, só o controle ou só teclado/mouse; vibração liga/desliga e força; câmera no mouse liga/desliga, sensibilidade e inversão vertical/horizontal; uma tabela com cada botão do PS3 e sua tecla, botão do mouse e botão do controle: clique numa célula (ou escolha com o controle e aperte ✕), aperte a nova entrada e ela vale na hora (Esc cancela, botão direito limpa, "Restaurar padrões"). O aperto vai para o menu, nunca para o jogo. As trocas são salvas na hora no mesmo `input.toml` que a tela Controles do launcher edita |
+| Controles | jogar com controle + teclado/mouse, só o controle ou só teclado/mouse; os ícones dos botões nos avisos do jogo (automático, PlayStation, Xbox, teclado e mouse); vibração liga/desliga e força; câmera no mouse liga/desliga, sensibilidade e inversão vertical/horizontal; uma tabela com cada botão do PS3 e sua tecla, botão do mouse e botão do controle: clique numa célula (ou escolha com o controle e aperte ✕), aperte a nova entrada e ela vale na hora (Esc cancela, botão direito limpa, "Restaurar padrões"). O aperto vai para o menu, nunca para o jogo. As trocas são salvas na hora no mesmo `input.toml` que a tela Controles do launcher edita |
 | Desempenho | um painel pequeno num canto que fica com o menu fechado: fps, tempo de quadro com gráfico, núcleos de CPU em uso e threads ocupadas (≥ 80% de um núcleo: aqui sobretudo as das SPUs), o tempo de codificação Metal do RSX e a espera pela GPU por quadro; canto, opacidade e gráfico são opções |
 
 O que o menu muda é salvo quando ele fecha, em
@@ -395,6 +396,7 @@ fps e coincidiu com travamentos.
 | `PS3_RUMBLE=0` | sem vibração no controle. Ligada por padrão: a vibração do jogo chega a controles DualSense, DualShock 4 e Xbox pelo SDL |
 | `PS3_RUMBLE_STRENGTH=<0..200>` | intensidade da vibração em porcentagem (padrão 100); acima de 100 reforça as vibrações fracas, limitado ao máximo dos motores. `PS3_RUMBLE_LOG=1` mostra cada pedido que o jogo faz |
 | `PS3_INPUT_MODE=both\|controller\|keyboard` | com o que se joga: tudo (padrão), só o controle (teclas e mouse não fazem nada no jogo) ou só teclado e mouse (o controle ainda abre o menu com L3+R3). O menu do jogo troca na hora |
+| `PS3_BUTTON_ICONS=auto\|playstation\|xbox\|keyboard` | os símbolos dos botões nos avisos do jogo ("Pressione ✕ para continuar", as dicas do HUD). `auto` (padrão) segue o último aparelho usado: um controle Xbox (360/One/Series, e os que o SDL não chama de PlayStation nem de Nintendo) mostra A/B/X/Y, LB/RB/LT/RT, View/Menu e LS/RS; um DualShock/DualSense (e, por enquanto, um controle de Switch) os símbolos originais; o teclado e mouse as teclas e botões do mouse do `input.toml`. Troca no instante em que você pega o outro aparelho. Os símbolos são desenhados pelo port (formas simples, nenhuma arte copiada) no atlas de avisos do jogo quando ele é enviado à GPU; os arquivos do jogo não mudam. O menu do jogo (Controles) e o `PS3_TOGGLE_FILE` trocam na hora |
 
 Saves e troféus ficam em `~/Library/Application Support/infamous2-recomp/gamedata`
 (Linux: `~/.local/share/infamous2-recomp`), não importa de qual pasta o jogo é aberto;
@@ -431,8 +433,8 @@ mudança aparece no log como `[toggle] NOME antigo -> novo`. Ao vivo:
 `PS3RECOMP_ENG_VCACHE`, `PS3RECOMP_ENG_TEXHASH_FULL`, `PS3RECOMP_ENG_SKIP_FP`
 (a lista inteira), `PS3_SPU_FASTJOB`, `PS3_SPU_STUB_MICRO`,
 `PS3_SPU_STACK_HINT`, `PS3_SPU_DRAIN_INLINE` (a checagem de lançamento inline
-do dreno), `PS3_DISPLAY_GAMMA`, `PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO` e
-`PS3RECOMP_METAL_FPS`; o resto (entre elas as passadas de luz/SSAO na GPU)
+do dreno), `PS3_DISPLAY_GAMMA`, `PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO`,
+`PS3RECOMP_METAL_FPS` e `PS3_BUTTON_ICONS`; o resto (entre elas as passadas de luz/SSAO na GPU)
 continua lido uma vez na partida. Sem a variável nada muda.
 `tools/ab_live.sh <nome> <OPÇÃO> [B] [A]` usa isso para um A/B de fps dentro
 de uma só execução sem janela: alterna a opção a cada 20 s a partir dos 200 s
