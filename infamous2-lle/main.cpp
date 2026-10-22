@@ -227,8 +227,9 @@ static DWORD WINAPI frame_clock(LPVOID)
      * The FIFO has no doorbell: a put the guest writes, a flip it asks for,
      * waits here until the next pass, so this is also the latency of every
      * one of those. It was a fixed 4 ms; in the New Marais walk the RSX
-     * thread sat idle ~4 ms after each flip request, and 1 ms gave +6% fps
-     * (live A/B 2026-10-22: 35.9 vs 33.8 fps, mean frame 27.8 vs 29.6 ms).
+     * thread sat idle ~4 ms after each flip request; 1 ms gave +2..+5% fps
+     * (live A/B 2026-10-22, each stretch against its neighbours; 35.9 vs
+     * 33.8 fps over the whole window, mean frame 27.8 vs 29.6 ms).
      * Default 1000; 4000 is the old pacing. Read live (PS3_TOGGLE_FILE). */
     int clock_us_env = 1000;
     { const char* e = getenv("PS3_FRAMECLOCK_US"); if (e && atoi(e) > 0) clock_us_env = atoi(e); }
