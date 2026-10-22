@@ -107,6 +107,10 @@ Controles e Avançado.
   cópia traz).
 - **Saves:** listar, fazer backup, restaurar, importar/exportar com o RPCS3,
   `.zip`.
+- **Troféus:** os troféus do jogo com os seus desbloqueios (nomes e ícones da
+  sua cópia), e um aviso "Troféu desbloqueado" dentro do jogo.
+- **Patches da comunidade** do seu próprio arquivo de patches do RPCS3: pular
+  a abertura, campo de visão maior.
 - **Modo de depuração** (Avançado > Modo de depuração): jogue normalmente
   enquanto o jogo anota o que dá errado (funções que faltam, falhas de
   shader/textura, travadas da GPU, falhas das SPUs, áudio atrasando, arquivos

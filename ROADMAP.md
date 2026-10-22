@@ -213,8 +213,9 @@ Ideas from the God of War III PC port, ReShade and what players ask for; not don
 - [ ] **In-game capture hotkey** for debug mode (a key and a controller combo), without switching to the app; and a normal **screenshot** to PNG.
   - Update 2026-10-21: **F12** captures the current frame in debug mode (render targets, pass log, shaders; `[capture] in-game key` in the log, listed by `log_triage.py`), with a corner notice; outside debug mode it says how to start it. Still open: a controller combo and a plain PNG screenshot.
 - [ ] **Automatic capture when something hangs** in debug mode: a watchdog that saves the frame, the log and the threads' state when the GPU or the game stops for a few seconds.
-- [ ] **Trophies:** a corner notice when one is earned (through the overlay) and the list in the app; the game already writes them to `<data dir>/trophies`.
+- [x] **Trophies:** a corner notice when one is earned (through the overlay) and the list in the app; the game already writes them to `<data dir>/trophies`.
   - Update 2026-10-21: the unlock notice is done. On an unlock the toolkit reads the trophy's name from the game's own `TROPHY.TRP` (`TROPDIR/<commId>_00`, in the `PS3_LANG` language: Portuguese uses TROP_07, the game has no Brazilian file) and the in-game menu shows "Trophy unlocked: <name>" in a corner. Checked offline on Erik's copy (#28 "Watch That First Step" / "Cuidado Com o Degrau"). Still open: the list in the app.
+  - Done 2026-10-21: the list in the app too (Game > Trophies, `launcher/src-tauri/src/trophies.rs`): the 52 trophies with name, description, grade and icon from the copy's TROPHY.TRP, unlocked first with their date, hidden ones masked until earned.
 - [ ] **App auto-update:** download and install the new version (`tauri-plugin-updater` with a `latest.json` signed in CI), beyond today's notice.
 - [ ] **Steam shortcut** (non-Steam game) with art generated from the player's copy, to play from Big Picture with a controller.
 
