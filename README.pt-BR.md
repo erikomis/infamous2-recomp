@@ -371,6 +371,7 @@ fps e coincidiu com travamentos.
 | `PS3_DISPLAY=<n>\|<nome>` | a tela em que o jogo abre, que a tela cheia e a sem bordas passam a cobrir: `1` é a da barra de menus, `2` a seguinte, ou o nome da tela como aparece nos Ajustes do Sistema (`DELL U2720Q`; sem diferenciar maiúsculas, ou só um pedaço). Padrão: a tela principal |
 | `PS3_VSYNC=0` | apresenta os quadros sem esperar a atualização da tela (menos atraso, pode rasgar a imagem em tela cheia). O ritmo de 30 fps do jogo vem do próprio relógio de vblank e não muda |
 | `PS3_ANISO=2\|4\|8\|16` | filtragem anisotrópica: chão e paredes vistos de lado ficam nítidos. Só mudam as texturas do jogo com mipmaps. Padrão desligada |
+| `PS3_PATCHES="Skip Intro,Extended FOV"` | Patches da comunidade pelo nome, lidos do seu próprio `patches/patch.yml` do RPCS3 (`PS3_PATCH_YML` para outro arquivo) e aplicados quando o jogo abre; só vale o bloco cujo `PPU-<sha1>` bate com este EBOOT. No app: Jogo > Patches da comunidade |
 | `PS3_VIBRANCE=-1..1` | Vibrance: satura mais as cores apagadas (negativo deixa mais sóbrio). Padrão 0 (desligado) |
 | `PS3_CONTRAST=0.5..1.5` | Contraste em torno do cinza médio. Padrão 1 (desligado) |
 | `PS3_AA=fxaa` / `smaa` | Antisserrilhamento na imagem de 1280x720 do jogo, antes de qualquer ampliação: FXAA (o mais leve, um pouco suave) ou SMAA 1x (textos e texturas mais nítidos). Padrão desligado |

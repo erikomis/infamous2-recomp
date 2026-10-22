@@ -22,6 +22,7 @@ interface Settings {
   aniso: number;
   aa: string;
   sharpen: number;
+  patches: string[];
   vibrance: number;
   contrast: number;
   upscale: string;
@@ -355,6 +356,18 @@ function bindSettings() {
   $("rumble-test").addEventListener("click", testRumble);
   $("finder-icon").addEventListener("click", toggleFinderIcon);
 
+  for (const el of Array.from(document.querySelectorAll<HTMLInputElement>("input[data-patch]"))) {
+    const name = el.dataset.patch!;
+    const sync = () => { el.checked = (settings.patches ?? []).includes(name); };
+    syncers.push(sync);
+    sync();
+    el.addEventListener("change", () => {
+      const set = new Set(settings.patches ?? []);
+      if (el.checked) set.add(name); else set.delete(name);
+      settings.patches = Array.from(set);
+      persist();
+    });
+  }
   const gl = $<HTMLSelectElement>("game-lang");
   gl.addEventListener("change", () => {
     settings.gameLang = gl.value;
@@ -399,6 +412,7 @@ function bindSettings() {
     };
     Object.assign(settings, {
       gameLang: "pt",
+      patches: [],
       gpuLight: true,
       gpuSsao: true,
       skipOcclusion: true,
