@@ -51,7 +51,7 @@ pub struct Settings {
     pub gamma: f32,
     /// PS3_ANISO: anisotropic filtering, 0 (off), 2, 4, 8 or 16.
     pub aniso: u32,
-    /// PS3_AA: "" (off) or "fxaa".
+    /// PS3_AA: "" (off), "fxaa" or "smaa".
     pub aa: String,
     /// PS3_SHARPEN: contrast-adaptive sharpening, 0 (off) to 1.
     pub sharpen: f32,
@@ -580,8 +580,8 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     if s.aniso > 1 {
         set("PS3_ANISO", s.aniso.min(16).to_string());
     }
-    if s.aa == "fxaa" {
-        set("PS3_AA", "fxaa".into());
+    if s.aa == "fxaa" || s.aa == "smaa" {
+        set("PS3_AA", s.aa.clone());
     }
     if s.sharpen >= 0.005 {
         set("PS3_SHARPEN", format!("{:.2}", s.sharpen.min(1.0)));
@@ -2294,6 +2294,12 @@ mod tests {
         assert_eq!(env.get("PS3_AA").map(String::as_str), Some("fxaa"));
         assert_eq!(env.get("PS3_SHARPEN").map(String::as_str), Some("0.50"));
         assert_eq!(env.get("PS3_UPSCALE").map(String::as_str), Some("metalfx"));
+        s.aa = "smaa".into();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_AA").map(String::as_str), Some("smaa"));
+        s.aa = "bogus".into();
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert!(!env.contains_key("PS3_AA"), "an unknown AA mode stays out");
         s.aniso = 1;
         s.sharpen = 0.0;
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
