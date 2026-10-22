@@ -143,13 +143,14 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 
 ## Problemas conhecidos
 
-- Em algumas vistas de perto ao entardecer, fachadas inteiras (e o Cole)
-  ficavam pretas; o `run.sh` desliga os passes de occlusion volume por
-  enquanto (perde-se só o escurecimento suave de contato perto de objetos). O
-  port reproduz a conta deles exatamente; a causa real provável, os mapas de
-  sombra lidos com borda preta em vez de branca fora do alcance do sol, tem
-  uma correção em teste. `PS3RECOMP_ENG_SKIP_FP=` (vazio) desenha os volumes
-  de novo.
+- Corrigido na v0.2.5: fachadas viradas para longe do sol (e as costas e os
+  lados do Cole) ficavam pretas, e as sombras do sol faltavam no jogo todo. Os
+  mapas de sombra do sol eram lidos de um buffer de cor vazio no mesmo
+  endereço do buffer de profundidade, então tudo contava como no sol e o termo
+  do sol, sem limite, ficava negativo do lado oposto. Os passes de occlusion
+  volume, descartados como causa, continuam desligados por padrão até a
+  confirmação com janela (Desempenho > desmarcar o pulo das sombras de
+  oclusão, ou `PS3RECOMP_ENG_SKIP_FP=`, desenha de novo).
 - Corrigido na v0.2.2: a falha rara do SPU no job de geometria do Edge
   (cerca de 1 execução em 8) e o travamento raro em que o job de luz não
   terminava o frame eram o mesmo bug, um cache desatualizado de código SPU
