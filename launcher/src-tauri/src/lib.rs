@@ -8,6 +8,7 @@ mod app_icon;
 mod input_map;
 mod report;
 mod saves;
+mod trophies;
 mod update;
 mod zipfile;
 
@@ -841,6 +842,14 @@ pub struct Status {
     /// and whether it has the custom Finder icon.
     app_bundle: Option<String>,
     finder_icon: bool,
+}
+
+/// The game's trophies with the player's unlocks (Game page).
+#[tauri::command]
+async fn list_trophies() -> Result<trophies::TrophyList, String> {
+    let s = load_settings_file();
+    let inst = resolve_install(&PathBuf::from(&s.install_dir))?;
+    trophies::list(Path::new(&inst.vfs), &gamedata_root(&s.extra_env), &s.game_lang, true)
 }
 
 #[tauri::command]
@@ -2083,6 +2092,7 @@ pub fn run() {
             get_input_map,
             save_input_map,
             get_status,
+            list_trophies,
             update::check_updates,
             detect_rpcs3,
             find_licence,

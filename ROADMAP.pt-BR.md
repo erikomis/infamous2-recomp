@@ -214,8 +214,9 @@ Ideias levantadas olhando o port de God of War III para PC, o ReShade e o que os
 - [ ] **Atalho de captura dentro do jogo** para o modo de depuração (uma tecla e uma combinação no controle), sem trocar para o app; e **captura de tela** normal em PNG.
   - Atualização 2026-10-21: o **F12** captura o quadro atual no modo de depuração (render targets, log de passes, shaders; `[capture] in-game key` no log, listado pelo `log_triage.py`), com um aviso no canto; fora do modo de depuração ele explica como ligar. Falta: uma combinação no controle e a captura de tela simples em PNG.
 - [ ] **Captura automática quando algo trava** no modo de depuração: um vigia que salva o quadro, o log e o estado das threads quando a GPU ou o jogo param por alguns segundos.
-- [ ] **Troféus:** aviso no canto quando um troféu é ganho (pelo menu sobreposto) e a lista no app; o jogo já grava os troféus em `<pasta de dados>/trophies`.
+- [x] **Troféus:** aviso no canto quando um troféu é ganho (pelo menu sobreposto) e a lista no app; o jogo já grava os troféus em `<pasta de dados>/trophies`.
   - Atualização 2026-10-21: o aviso de desbloqueio está feito. Ao desbloquear, o toolkit lê o nome do troféu do próprio `TROPHY.TRP` do jogo (`TROPDIR/<commId>_00`, no idioma do `PS3_LANG`: português usa o TROP_07, o jogo não tem arquivo do Brasil) e o menu sobreposto mostra "Troféu desbloqueado: <nome>" num canto. Conferido offline na cópia do Erik (#28 "Cuidado Com o Degrau"). Falta: a lista no app.
+  - Feito em 2026-10-21: a lista no app também (Jogo > Troféus, `launcher/src-tauri/src/trophies.rs`): os 52 troféus com nome, descrição, grau e ícone do TROPHY.TRP da cópia, os desbloqueados primeiro com a data, os ocultos mascarados até serem ganhos.
 - [ ] **Atualização automática do app:** baixar e instalar a versão nova (`tauri-plugin-updater` com um `latest.json` assinado pelo CI), além do aviso que já existe.
 - [ ] **Atalho na Steam** (jogo não-Steam) com a arte gerada da cópia do jogador, para jogar pelo modo Big Picture com o controle.
 

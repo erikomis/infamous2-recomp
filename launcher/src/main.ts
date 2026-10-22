@@ -8,6 +8,7 @@ import { initSaves, refresh as refreshSaves, render as renderSaves } from "./sav
 import { initUpdates, refreshUpdates, renderUpdates } from "./update";
 import { initLog, renderLog, showLog } from "./gamelog";
 import { flashSaved, human } from "./ui";
+import { initTrophies, refreshTrophies, renderTrophies } from "./trophies";
 
 // ---- types shared with src-tauri/src/lib.rs (camelCase) ----------------------
 interface Settings {
@@ -236,6 +237,7 @@ function applyLang(l: Lang) {
   renderGame(lastSearch);
   renderControls();
   renderSaves();
+  renderTrophies();
   renderOutputs();
   renderReport();
   renderLog();
@@ -372,6 +374,7 @@ function bindSettings() {
   gl.addEventListener("change", () => {
     settings.gameLang = gl.value;
     persist();
+    void refreshTrophies();
   });
   const env = $<HTMLTextAreaElement>("extra-env");
   env.value = settings.extraEnv;
@@ -1329,6 +1332,7 @@ async function main() {
   bindSettings();
   initControls();
   initLog();
+  initTrophies();
   initSaves({
     keep: () => settings.saveBackupsKeep ?? 10,
     setKeep: (n) => {

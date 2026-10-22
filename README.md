@@ -101,6 +101,10 @@ Advanced.
   vibration; **audio** volume and output; **game language** (the ones your
   copy ships).
 - **Saves:** list, back up, restore, import/export with RPCS3, `.zip`.
+- **Trophies:** the game's trophies with your unlocks (names and icons from
+  your copy), and a "Trophy unlocked" notice in the game.
+- **Community patches** from your own RPCS3 patch file: skip the intro, a
+  wider field of view.
 - **Debug mode** (Advanced > Debug mode): play normally while the game logs
   what goes wrong (missing functions, shader/texture failures, GPU stalls,
   SPU faults, audio falling behind, files it cannot open, frame-rate drops)
