@@ -7,12 +7,12 @@ a seguir. `[x]` = feito e verificado; `[ ]` = a fazer. Itens marcados
 "(novo)" entraram na revisão de 2026-10-15; "Atualização" é o que mudou num item
 que já existia.
 
-## Resumo da situação (2026-10-18)
+## Resumo da situação (2026-10-21)
 
 - **Roda:** boot, logos dos estúdios, vídeos Bink, o menu principal 3D, pausa e opções, o prólogo em Empire City, as cutscenes no motor do jogo e as primeiras missões de New Marais, jogadas com janela e DualSense. Capturas de tela no [README](README.pt-BR.md).
 - **Velocidade:** ~30 fps andando em New Marais (o limite do próprio jogo) nas execuções sem janela em Apple silicon (quadros de 29,7–30,4 ms; mediana de 36 fps sem limite nas execuções de 2026-10-18). Falta confirmar numa sessão longa com janela.
-- **Lançado:** alpha [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) e [v0.2.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.0), um `.dmg` do app para macOS/Apple silicon que recompila o jogo a partir da cópia do jogador (veja "App e releases" em Feito).
-- **Problemas conhecidos:** os passes de occlusion volume são pulados como paliativo para as fachadas pretas ao entardecer (a causa real continua aberta); uma falha rara do SPU no Edge (nenhuma nas últimas 17 execuções); ainda sem Windows nem Linux; ninguém passou de 1% da história.
+- **Lançado:** alphas de [v0.1.0](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.1.0) a [v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) (a mais nova: menu dentro do jogo, SMAA, perfis de qualidade, reconexão do controle e remapeamento ao vivo), um `.dmg` do app para macOS/Apple silicon que recompila o jogo a partir da cópia do jogador (veja "App e releases" em Feito).
+- **Problemas conhecidos:** os passes de occlusion volume são pulados como paliativo para as fachadas pretas ao entardecer (a causa provável, a borda dos mapas de sombra, tem correção em teste); a falha rara do SPU no Edge foi corrigida na v0.2.2; ainda sem Windows nem Linux; ninguém passou de 1% da história.
 - **Em andamento:**
   - [x] Menu sobreposto dentro do jogo: mudar ajustes sem sair do jogo (juntado em 2026-10-18, na v0.2.1; F1 / Cmd+, / L3+R3).
   - [x] (juntado em 2026-10-18) Arquivo de alternância A/B ao vivo: o jogo rodando relê um arquivo `NOME=valor` (`PS3_TOGGLE_FILE`) e troca opções na hora, para um A/B de fps comparar a mesma cena numa execução só (branch `feat/live-toggles`).
@@ -91,6 +91,7 @@ Atualização 2026-10-17: a caminhada em New Marais já chega ao limite de 30 fp
 
 ### Estabilidade
 
+- [x] (2026-10-22) **Caixa "Aguarde..." sem fim no jogo** (Erik, com janela, entardecer em New Marais): abrir uma função online disparava o diálogo de conexão da PSN; o cellNetCtl respondia "conectado" embora o GetState diga offline, então o jogo seguia para a checagem dos termos da PSN (`cellSysutilNpEula`, NID 0x59D1629A, não implementada) que nunca responde. Offline, o diálogo agora termina como cancelado pelo jogador (`CELL_NET_CTL_ERROR_DIALOG_CANCELED`), um caminho que todo jogo trata; `PS3_NET_ONLINE=1` mantém a resposta antiga. Falta o Erik confirmar com janela.
 - [ ] Congelamento no gameplay (a imagem para de vez; ~1 execução em 5 em New Marais, e no píer diurno do `m2` aos ~40 s de jogo): o walker do FIFO para num JUMP para si mesmo (o "estacionamento" no fim de um bloco de comandos montado pelas SPUs, que o jogo depois troca por um JUMP para o bloco seguinte) e o watchdog "stuck-get" desiste dele depois de 8 passadas, poucos milissegundos, antes do prazo próprio do estacionamento (`GCM_PARK_GRACE_MS`), pulando para o `put` e perdendo os comandos do quadro. Corrigido: o watchdog não conta passadas paradas num estacionamento (o prazo de 50 ms decide). Validação em andamento (3 execuções a partir do save). Não é a causa do travamento da cena "cityfalls": a maioria das execuções travadas ali não tem nenhum stuck-get.
   - Atualização: as 3 execuções de validação rodaram sem congelar (c1ba4b3). Falta confirmar em sessões longas com janela.
   - Atualização 2026-10-16: em 88 execuções headless de New Marais de 2026-10-15/16 (~4 min cada, píer e caminhada até a rua) nenhuma congelou; 4 tiveram um "FIFO resync (jump-park)" (o prazo de 50 ms do estacionamento venceu: um quadro perdido, não um travamento). Pode ser marcado como resolvido depois de uma sessão longa do Erik na janela.
@@ -207,15 +208,18 @@ Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que lev
 
 Ideias levantadas olhando o port de God of War III para PC, o ReShade e o que os jogadores pedem; ainda não feitas.
 
-- [ ] **Efeitos no estilo do ReShade** no passo final da imagem (o SMAA já entrou): vibrance/contraste/curvas, LUT de cor (filtros prontos e o do próprio jogador), contraste local (Clarity), granulado e vinheta. Ligados no app (Gráficos) e no menu F1, ao vivo.
+- [ ] **Efeitos no estilo do ReShade** no passo final da imagem (o SMAA já entrou; vibrance e contraste entraram em 2026-10-21: `PS3_VIBRANCE`, `PS3_CONTRAST`, em Gráficos e no menu F1, ao vivo): curvas, LUT de cor (filtros prontos e o do próprio jogador), contraste local (Clarity), granulado e vinheta. Ligados no app (Gráficos) e no menu F1, ao vivo.
 - [ ] **Cache persistente de pipelines** (`MTLBinaryArchive` com os shaders já traduzidos) e aquecimento em segundo plano ao abrir o jogo: tira os engasgos da primeira vez que um efeito ou lugar aparece.
-- [ ] **Patches da comunidade** lidos do `patch.yml` do RPCS3 do próprio jogador (nada é distribuído aqui): "Skip Intro" (FlexBy) e "Extended FOV" (illusion) existem para o NPUA80638 01.03. Dados aplicados no carregamento; código, no EBOOT antes da tradução (`rebuild.py`). Com crédito aos autores.
+- [x] **Patches da comunidade** lidos do `patch.yml` do RPCS3 do próprio jogador (nada é distribuído aqui): "Skip Intro" (FlexBy) e "Extended FOV" (illusion) existem para o NPUA80638 01.03. Dados aplicados no carregamento; código, no EBOOT antes da tradução (`rebuild.py`). Com crédito aos autores.
+  - Feito em 2026-10-21 (`infamous2-lle/game_patches.cpp`, `PS3_PATCHES`): o port calcula o hash PPU do EBOOT como o RPCS3 (dá `PPU-41a7d047...` para o NPUA80638 01.03, o bloco onde estão esses patches) e aplica os patches escolhidos na memória do jogo logo depois de carregar. Os três patches do jogo escrevem dados (o nome do vídeo de abertura, um float, uma palavra de tabela), então não precisa retraduzir nada. Conferido sem janela: com o Skip Intro o menu principal já aparece aos 20 s, quando sem ele ainda está o logo da Sucker Punch. No app: Jogo > Patches da comunidade (Pular a abertura, Campo de visão maior).
 - [ ] **Atalho de captura dentro do jogo** para o modo de depuração (uma tecla e uma combinação no controle), sem trocar para o app; e **captura de tela** normal em PNG.
+  - Atualização 2026-10-21: o **F12** captura o quadro atual no modo de depuração (render targets, log de passes, shaders; `[capture] in-game key` no log, listado pelo `log_triage.py`), com um aviso no canto; fora do modo de depuração ele explica como ligar. Falta: uma combinação no controle e a captura de tela simples em PNG.
 - [ ] **Captura automática quando algo trava** no modo de depuração: um vigia que salva o quadro, o log e o estado das threads quando a GPU ou o jogo param por alguns segundos.
-- [ ] **Troféus:** aviso no canto quando um troféu é ganho (pelo menu sobreposto) e a lista no app; o jogo já grava os troféus em `<pasta de dados>/trophies`.
+- [x] **Troféus:** aviso no canto quando um troféu é ganho (pelo menu sobreposto) e a lista no app; o jogo já grava os troféus em `<pasta de dados>/trophies`.
+  - Atualização 2026-10-21: o aviso de desbloqueio está feito. Ao desbloquear, o toolkit lê o nome do troféu do próprio `TROPHY.TRP` do jogo (`TROPDIR/<commId>_00`, no idioma do `PS3_LANG`: português usa o TROP_07, o jogo não tem arquivo do Brasil) e o menu sobreposto mostra "Troféu desbloqueado: <nome>" num canto. Conferido offline na cópia do Erik (#28 "Cuidado Com o Degrau"). Falta: a lista no app.
+  - Feito em 2026-10-21: a lista no app também (Jogo > Troféus, `launcher/src-tauri/src/trophies.rs`): os 52 troféus com nome, descrição, grau e ícone do TROPHY.TRP da cópia, os desbloqueados primeiro com a data, os ocultos mascarados até serem ganhos.
 - [ ] **Atualização automática do app:** baixar e instalar a versão nova (`tauri-plugin-updater` com um `latest.json` assinado pelo CI), além do aviso que já existe.
 - [ ] **Atalho na Steam** (jogo não-Steam) com a arte gerada da cópia do jogador, para jogar pelo modo Big Picture com o controle.
-- [ ] (opcional) **Discord Rich Presence**: nome do jogo e tempo jogando, desligado por padrão.
 
 ### Outras plataformas
 

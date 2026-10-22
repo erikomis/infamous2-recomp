@@ -479,3 +479,15 @@ select.pad-pick { min-width: 0; width: auto; margin-left: 6px; padding: 3px 28px
 .backups .msg { word-break: normal; overflow-wrap: anywhere; font-size: 12px; }
 .backups button:not(.link) { padding: 4px 10px; font-size: 12px; }
 @media (max-width: 960px) { .saves-cols { grid-template-columns: 1fr; } }
+
+/* Game page: trophies */
+.trophy-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 8px; margin-top: 10px; }
+.trophy { display: flex; gap: 10px; align-items: center; padding: 8px; background: var(--panel-2); border: 1px solid var(--panel-3); border-radius: 8px; opacity: 0.55; }
+.trophy.got { opacity: 1; border-color: rgba(54, 214, 255, 0.35); }
+.trophy img { width: 44px; height: 44px; border-radius: 6px; flex: none; background: var(--panel-3); }
+.trophy:not(.got) img { filter: grayscale(1); }
+.trophy .what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.trophy .what b { font-weight: 600; }
+.trophy .meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+.trophy .grade { font-weight: 600; }
+.grade-P { color: #c9d6e3; } .grade-G { color: #f2c94c; } .grade-S { color: #b8c4cc; } .grade-B { color: #cd8b55; }
