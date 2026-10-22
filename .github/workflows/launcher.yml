@@ -4,6 +4,14 @@
 # (launcher/scripts/check_bundle.py). Every run uploads the bundles as
 # artifacts; a v* tag also creates a DRAFT release with them attached.
 #
+# App updates (launcher/README.md "App updates"): with the
+# TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) secrets the macOS job also builds the
+# signed updater bundle (<name>_<ver>_aarch64.app.tar.gz + .sig), and on a v*
+# tag the release job adds latest.json (darwin-aarch64 only) to the draft.
+# Players are only pointed at it once the release is published:
+# .github/workflows/updater.yml copies that latest.json to the fixed
+# `updater` release the app reads.
+#
 # Signing is optional and driven by repository secrets (none are required;
 # without them macOS gets an ad-hoc signature and Windows stays unsigned):
 #   macOS:   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
@@ -148,6 +156,10 @@ jobs:
         working-directory: launcher/src-tauri
         run: cargo test --locked
 
+      - name: Updater manifest script
+        if: matrix.test
+        run: python launcher/scripts/test_updater_json.py
+
       - name: Version from the tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -187,6 +199,23 @@ jobs:
             echo "::notice::no Apple certificate secrets: ad-hoc signature (players right-click > Open the first time)"
           fi
 
+      - name: Updater signature (macOS)
+        if: runner.os == 'macOS'
+        env:
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          # The key itself only reaches the build step (its env below); this
+          # only decides whether the updater bundle is made (tauri.updater.conf.json:
+          # bundle.createUpdaterArtifacts, which fails without the key).
+          if [ "$HAS_KEY" = "true" ]; then
+            echo "TAURI_UPDATER_CONFIG=--config $GITHUB_WORKSPACE/launcher/src-tauri/tauri.updater.conf.json" >> "$GITHUB_ENV"
+            echo "signed updater bundle (.app.tar.gz + .sig)"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::warning::no TAURI_SIGNING_PRIVATE_KEY secret: this release has no updater bundle, so installed apps will not update to it by themselves"
+          else
+            echo "::notice::no TAURI_SIGNING_PRIVATE_KEY secret (a fork's pull request): no updater bundle"
+          fi
+
       - name: Signing (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -212,11 +241,15 @@ jobs:
 
       - name: Build the bundles
         working-directory: launcher
+        env:
+          # the updater key, macOS only (used when TAURI_UPDATER_CONFIG asks for the updater bundle)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ runner.os == 'macOS' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
-          # TAURI_EXTRA_CONFIG / TAURI_SIGN_CONFIG are "--config <file>" or empty
+          # TAURI_EXTRA_CONFIG / TAURI_SIGN_CONFIG / TAURI_UPDATER_CONFIG are "--config <file>" or empty
           # shellcheck disable=SC2086
           npx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
-            --config "$GITHUB_WORKSPACE/launcher/src-tauri/tauri.bundle.conf.json" $TAURI_EXTRA_CONFIG $TAURI_SIGN_CONFIG
+            --config "$GITHUB_WORKSPACE/launcher/src-tauri/tauri.bundle.conf.json" $TAURI_EXTRA_CONFIG $TAURI_SIGN_CONFIG $TAURI_UPDATER_CONFIG
 
       - name: Collect
         run: |
@@ -231,6 +264,16 @@ jobs:
             n=$(basename "$app" .app)
             ditto -c -k --sequesterRsrc --keepParent "$app" "$OUT/${n}_${v}_aarch64.app.zip"
           done
+          # the updater bundle and its signature (only with the updater key)
+          for tgz in "$b"/macos/*.app.tar.gz; do
+            n=$(basename "$tgz" .app.tar.gz)
+            test -s "$tgz.sig"
+            cp "$tgz" "$OUT/${n}_${v}_aarch64.app.tar.gz"
+            cp "$tgz.sig" "$OUT/${n}_${v}_aarch64.app.tar.gz.sig"
+          done
+          if [ -n "${TAURI_UPDATER_CONFIG:-}" ]; then
+            ls "$OUT"/*.app.tar.gz "$OUT"/*.app.tar.gz.sig >/dev/null
+          fi
           ls -la "$OUT"
           test -n "$(ls -A "$OUT")"
 
@@ -263,6 +306,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v4
         with:
           path: release
@@ -286,7 +331,21 @@ jobs:
             playing the game are not supported there yet.
 
           Checksums: \`SHA256SUMS-*.txt\`.
+
+          Installed apps update themselves from this version on (Advanced >
+          Updates > Download and install): keep \`latest.json\` and the
+          \`.app.tar.gz\` (+ \`.sig\`) on the release. They are offered once it is
+          published (\`.github/workflows/updater.yml\`).
           EOF
+          # the updater manifest: darwin-aarch64 only, pointing at this release's asset
+          shopt -s nullglob
+          tgz=(release/*_aarch64.app.tar.gz)
+          if [ ${#tgz[@]} -eq 1 ] && [ -s "${tgz[0]}.sig" ]; then
+            python3 launcher/scripts/updater_json.py make --tag "$TAG" --repo "$GH_REPO" \
+              --asset "${tgz[0]}" --sig "${tgz[0]}.sig" --notes-file notes.md --out release/latest.json
+          else
+            echo "::warning::no signed updater bundle in the artifacts: no latest.json for $TAG"
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release/* --clobber
           else

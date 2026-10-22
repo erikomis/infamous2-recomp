@@ -82,8 +82,10 @@ its `.rap` licence).
    `dev_flash` folder or Sony's `PS3UPDAT.PUP`). No keys ship with the app.
 4. **Install** (the first rebuild takes a few minutes), then **Play**.
 
-After updating the app, the Updates card on Home offers **Rebuild the game**.
-The release ships no game files: the app recompiles the game on your Mac.
+From the release after v0.2.6 on, the app updates itself: the Updates card
+on Home offers **Download and install**, then **Restart to finish** (signed
+and checked; "Check for updates automatically" can be turned off). After an
+update it offers **Rebuild the game**. The release ships no game files: the app recompiles the game on your Mac.
 
 ## The app
 
@@ -117,12 +119,16 @@ Advanced.
   agent to go through), and **Create .zip** packs it all for an issue.
   Details in [launcher/README.md](launcher/README.md#debug-mode-report-a-problem).
   Plus a **game log viewer** that follows the log live.
-- **Updates card:** tells when a newer release is out or the installed game
-  is older than the app's sources, and offers a rebuild.
+- **Updates card:** downloads and installs a newer app version (signed,
+  verified, one click and a restart), and offers a rebuild when the installed
+  game is older than the app's sources.
 - **Your copy's icon** in the Dock for the app and the game (read from your
   install, never shipped).
 - **Play shortcut** (Home > Status): a "Play inFAMOUS 2" icon on the Desktop
   that opens the app and starts the game at once with your settings.
+- **Add to Steam** (Home > Status, optional): inFAMOUS 2 as a non-Steam game
+  with cover art made from your copy, to start from Big Picture with the
+  controller; **Remove from Steam** takes it out again.
 
 **In the game,** F1 (fn+F1), Cmd+, or L3+R3 opens the **in-game menu**:
 image (gamma, sharpening, FXAA/SMAA, vibrance, contrast, MetalFX, vsync,
@@ -172,8 +178,9 @@ What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
   all of this port's PRs up to #375 were merged on 2026-10-19; the sixth
   round (#470 SMAA, vibrance and contrast; #472 controller hot-plug; #476
   texture border colour) is open.
-- New ideas (an app auto-update, a Steam shortcut, a controller combo for the
-  capture, a PNG screenshot key) are listed in the roadmap.
+- New ideas (a controller combo for the capture, a PNG screenshot key) are
+  listed in the roadmap; the app auto-update and the Steam shortcut are
+  implemented and waiting for the next release / a test with Steam.
 
 ## Building from source
 
