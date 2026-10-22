@@ -57,6 +57,7 @@ interface Settings {
   firmwarePath: string;
   decryptWith: string;
   saveBackupsKeep: number;
+  autoUpdateCheck: boolean;
 }
 interface InstallInfo {
   layout: "install" | "dev";
@@ -717,6 +718,7 @@ async function refreshStatus() {
   renderHome();
   renderFinderIcon();
   refreshUpdates();
+  refreshSteam();
 }
 
 const TITLE_ID = "NPUA80638";
@@ -748,6 +750,7 @@ function renderHome() {
   play.disabled = rebuildRunning || !status.hostSupported;
   show($("run-state"), gameRunning);
   show($("make-shortcut"), !!status.appBundle && status.os === "macos" && !!inst);
+  renderSteam();
   renderStatusList();
   renderReport();
   show($("home-unsupported"), !status.hostSupported);
@@ -845,6 +848,101 @@ $("make-shortcut").addEventListener("click", async () => {
     btn.disabled = false;
   }
 });
+
+// ---- Add to Steam (src-tauri/src/steam.rs): optional, only on the player's click ----
+interface SteamStatus {
+  available: boolean;
+  installed: boolean;
+  running: boolean;
+  users: number;
+  added: number;
+}
+interface SteamAdded {
+  users: number;
+  art: boolean;
+}
+let steam: SteamStatus | null = null;
+let steamBusy = false;
+
+async function refreshSteam() {
+  steam = await invoke<SteamStatus>("steam_status").catch(() => null);
+  renderSteam();
+}
+
+/** The links show only where they can work: the macOS app, Steam installed
+ * and signed in to, the game installed. */
+function renderSteam() {
+  const ok = !!steam?.available && steam.installed && status?.os === "macos" && !!status?.install;
+  const add = $<HTMLButtonElement>("steam-add");
+  const remove = $<HTMLButtonElement>("steam-remove");
+  show(add, ok && steam!.added < steam!.users);
+  show(remove, ok && steam!.added > 0);
+  add.disabled = remove.disabled = steamBusy;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Steam rewrites shortcuts.vdf when it quits: offer to quit it, then wait. */
+async function steamClosed(msg: HTMLElement): Promise<boolean> {
+  const st = await invoke<SteamStatus>("steam_status").catch(() => null);
+  if (!st?.running) return true;
+  const quit = await ask(t("steam.quitAsk"), {
+    title: "Steam",
+    kind: "warning",
+    okLabel: t("steam.quit"),
+    cancelLabel: t("install.cancel"),
+  });
+  if (!quit) {
+    msg.textContent = t("steam.running");
+    return false;
+  }
+  msg.textContent = t("steam.quitting");
+  await invoke("steam_quit").catch(() => {});
+  for (let i = 0; i < 40; i++) {
+    await sleep(500);
+    const s = await invoke<SteamStatus>("steam_status").catch(() => null);
+    if (!s?.running) {
+      await sleep(1000); // let it finish writing its files
+      return true;
+    }
+  }
+  msg.textContent = t("steam.quitFailed");
+  return false;
+}
+
+async function steamAction(kind: "add" | "remove") {
+  const msg = $("home-msg");
+  if (steamBusy) return;
+  if (kind === "add") {
+    const yes = await ask(t("steam.confirmAdd"), {
+      title: t("steam.add"),
+      kind: "info",
+      okLabel: t("steam.add"),
+      cancelLabel: t("install.cancel"),
+    });
+    if (!yes) return;
+  }
+  steamBusy = true;
+  renderSteam();
+  try {
+    if (!(await steamClosed(msg))) return;
+    if (kind === "add") {
+      const r = await invoke<SteamAdded>("steam_add");
+      msg.textContent = t("steam.added", { n: r.users }) + (r.art ? "" : " " + t("steam.noArt"));
+    } else {
+      const n = await invoke<number>("steam_remove");
+      msg.textContent = t(n ? "steam.removed" : "steam.notThere");
+    }
+  } catch (e) {
+    msg.textContent = String(e) === "steam-running" ? t("steam.running") : t("steam.failed", { e: String(e) });
+  } finally {
+    steamBusy = false;
+    await refreshSteam();
+  }
+}
+$("steam-add").addEventListener("click", () => steamAction("add"));
+$("steam-remove").addEventListener("click", () => steamAction("remove"));
+
 $("go-install").addEventListener("click", () => showView("advanced", "install"));
 $("go-saves").addEventListener("click", () => {
   showView("game");
@@ -1507,6 +1605,12 @@ async function main() {
     rebuild: () => {
       showView("advanced", "install");
       startRebuild(false);
+    },
+    busy: () => (gameRunning ? "game" : rebuildRunning ? "rebuild" : null),
+    auto: () => settings.autoUpdateCheck ?? true,
+    setAuto: (on) => {
+      settings.autoUpdateCheck = on;
+      persist();
     },
   });
   refreshOutputs();

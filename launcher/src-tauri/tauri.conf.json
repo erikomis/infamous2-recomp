@@ -34,5 +34,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERCRDlBRDRCOERCQjY3NTEKUldSUlo3dU5TNjNaMnpjMzFtN0dVdG9QTXpGVi9ZaVl3QXFYWFRNdTZ3NWRuUGdZVUVzTlRQQWEK",
+      "endpoints": [
+        "https://github.com/erikomis/infamous2-recomp/releases/download/updater/latest.json",
+        "https://github.com/erikomis/infamous2-recomp/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
+    }
   }
 }

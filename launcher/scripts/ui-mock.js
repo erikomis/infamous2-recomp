@@ -7,7 +7,8 @@
 // It answers the commands the window calls with an installed game, a save and
 // a log, and no cover art (the art only ever comes from the player's copy).
 // window.__UI_MOCK__ = { notInstalled: true } or { running: true }, set by an
-// earlier init script, shows those states instead.
+// earlier init script, shows those states instead; { update: true } offers a
+// newer app version, { steamAdded: true } has the game in Steam already.
 (() => {
   const flags = window.__UI_MOCK__ || {};
   const settings = {
@@ -18,7 +19,7 @@
     gameIcon: false, display: "", vsync: true, audioVolume: 85, audioDevice: "", rumble: true, rumbleStrength: 100,
     showFps: false, extraEnv: "", gamePaths: ["/Users/player/Library/Application Support/rpcs3/dev_hdd0/game/NPUA80638"],
     rapPath: "/Users/player/Library/Application Support/rpcs3/dev_hdd0/home/00000001/exdata/UP9000-NPUA80638_00-XXXXXXXXXXXXXXXX.rap",
-    keysPath: "", firmwarePath: "", decryptWith: "auto", saveBackupsKeep: 10,
+    keysPath: "", firmwarePath: "", decryptWith: "auto", saveBackupsKeep: 10, autoUpdateCheck: true,
   };
   const now = Math.floor(Date.now() / 1000);
   const install = {
@@ -66,9 +67,14 @@
       hostSupported: true, os: "macos", appBundle: "/Applications/infamous2-recomp.app", finderIcon: false,
     }),
     check_updates: () => ({
-      appVersion: "0.1.0", sourcesCommit: "89216bb", installedCommit: "89216bb", rebuildSuggested: false,
-      checkedOnline: true, latestVersion: "0.1.0", latestUrl: null, newerRelease: false, checkError: null,
+      appVersion: "0.2.6", sourcesCommit: "89216bb", installedCommit: "89216bb", rebuildSuggested: false, disabled: false,
+      checkedOnline: true, latestVersion: flags.update ? "0.2.7" : "0.2.6",
+      latestUrl: "https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.7",
+      latestNotes: flags.update ? "Launcher v0.2.7. It ships no game files: it rebuilds the game from your own copy." : null,
+      latestDate: "2026-10-23T12:00:00Z", newerRelease: !!flags.update, checkError: null, installBlocker: null, installedPending: null,
     }),
+    install_update: () => new Promise((r) => setTimeout(() => r("0.2.7"), 1500)),
+    steam_status: () => ({ available: true, installed: true, running: false, users: 1, added: flags.steamAdded ? 1 : 0 }),
     list_outputs: () => ({ screens: ["Tela Retina integrada", "DELL U2720Q"], audioOutputs: ["Alto-falantes (MacBook Pro)", "AirPods Pro"] }),
     get_input_map: () => ({ path: "/Users/player/Library/Application Support/infamous2-recomp/input.toml", exists: true, bindings: { keyboard: {}, mouseButtons: {}, controller: {} } }),
     save_input_map: () => "/x/input.toml",

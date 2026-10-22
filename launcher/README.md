@@ -72,13 +72,16 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   "NPUA80638 · version 01.03" line, build date and port commit; a big
   **Play/Jogar** (Stop in orange while the game runs; **Capture this frame**
   next to it when the game was started in debug mode). A bar under it
-  when there is news from Updates (rebuild needed, newer app). Then three
+  when there is news from Updates (rebuild needed, newer app: **Download and
+  install** with a progress bar, then **Restart to finish**). Then three
   cards: **Quick settings** (display mode, upscaling, vsync, fps counter: the
   same settings as the Graphics/Performance pages, kept in sync), **Last
   save** (title, progress, date; manage saves, saves folder) and **Status**
   (installed/running/debug mode, version, build, port commit, folder; links to
   the log viewer, the log file and Updates, and on macOS **Play shortcut on
-  the Desktop**: see "The Play shortcut" below). A strip at the bottom leads
+  the Desktop**: see "The Play shortcut" below, and **Add to Steam** /
+  **Remove from Steam** when Steam is installed: see "Add to Steam"). A
+  strip at the bottom leads
   to Debug mode. Play first backs up the saves (see Saves).
 - **Graphics / Gráficos**: Display (window mode `PS3_WINDOW_MODE`, size
   `PS3_WINDOW_SIZE`, screen `PS3_DISPLAY` from AppKit's screen names through
@@ -140,12 +143,12 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
     than the app carries (install.json's `port_commit` against the bundled
     `BUILD_INFO.json`, or the checkout's `git` HEAD in development), with
     **Rebuild the game**, which runs the Install tab's rebuild (only the steps
-    whose inputs changed run again); and, from GitHub's latest published
-    release (`api.github.com/repos/erikomis/infamous2-recomp/releases/latest`,
-    once per session through `curl`, again on "Check again"; drafts and
-    pre-releases are skipped), whether a newer app version is out, with a link
-    to it. `INFAMOUS2_NO_UPDATE_CHECK=1` turns the online check off
-    (`src-tauri/src/update.rs`).
+    whose inputs changed run again); and whether a newer app version is out
+    (the release manifest `latest.json`, once per session when **Check for
+    updates automatically** is on, the default, and on "Check again"), with
+    its notes, **Download and install**, **Restart to finish** and a link to
+    the release page. See "App updates" below; `INFAMOUS2_NO_UPDATE_CHECK=1`
+    turns all of it off (`src-tauri/src/update.rs`).
   - **Game log**: the end of the log the last game this app started wrote
     (`logs/game.log`, or the session folder's in debug mode; at most the
     last 512 KB, cut at a line), read by `read_game_log`. Followed every 2 s
@@ -355,7 +358,14 @@ npm run tauri dev        # the app, with the frontend hot-reloaded
 npm run tauri build      # .app and .dmg in src-tauri/target/release/bundle/
 npm run typecheck        # frontend only
 (cd src-tauri && cargo test)
+python3 scripts/test_updater_json.py   # the updater manifest script
 ```
+
+Two `cargo test` checks are ignored by default and run on files you give
+them: `I2_VDF=<a copy of a shortcuts.vdf> cargo test real_file -- --ignored`
+(round trip, add and remove on that copy; it writes `<copy>.added.vdf` next
+to it) and `I2_ART_ICON0=<ICON0.PNG> I2_ART_PIC1=<PIC1.PNG> I2_ART_OUT=<dir>
+cargo test art_from_files -- --ignored` (the four Steam images, to look at).
 
 The screenshots in `docs/screenshots/` come from the built frontend in a
 plain browser with a fake backend: `npm run build && npx vite preview --port
@@ -389,8 +399,9 @@ port/infamous2-lle/patches/     the toolkit patch
 `src-tauri/tauri.bundle.conf.json` maps that folder to the `port/`
 resource; it is passed with `--config` only when packaging, so `tauri dev`
 and `cargo check` do not need the staging. `scripts/check_bundle.py`
-unpacks every bundle (`.app`, `.dmg`, `.zip`, `.deb`, `.AppImage`, `.msi`,
-NSIS `.exe`) and fails on licences and keys (`*.rap`, `*.rif`, `act.dat`,
+unpacks every bundle (`.app`, `.dmg`, `.zip`, the updater's `.app.tar.gz`,
+`.deb`, `.AppImage`, `.msi`, NSIS `.exe`; a `.sig` or `.json` next to them is
+checked as it is) and fails on licences and keys (`*.rap`, `*.rif`, `act.dat`,
 `*.edat`), game code and data (`EBOOT*`, `*.self`, `*.sprx`, `*.prx`,
 `*.elf`, `*.pkg`, `*.psarc`, `*.pup`, `PARAM.SFO`, `NPUA80638*`, folders
 `dev_hdd0`, `dev_flash`, `PS3_GAME`, `USRDIR`), the game's art and sound
@@ -417,18 +428,21 @@ staged port files (`infamous2-lle/*`, `infamous2-lle/tools/**`,
 
 | Job | Runner | Bundles (artifact `infamous2-launcher-<job>`) |
 |---|---|---|
-| `macos-arm64` | `macos-14` | `infamous2-recomp_<ver>_aarch64.dmg`, `infamous2-recomp_<ver>_aarch64.app.zip` |
+| `macos-arm64` | `macos-14` | `infamous2-recomp_<ver>_aarch64.dmg`, `infamous2-recomp_<ver>_aarch64.app.zip`, and with the updater key `infamous2-recomp_<ver>_aarch64.app.tar.gz` + `.sig` |
 | `windows-x64` | `windows-latest` | `infamous2-recomp_<ver>_x64-setup.exe` (NSIS), `infamous2-recomp_<ver>_x64_en-US.msi` |
 | `linux-x64` | `ubuntu-22.04` | `infamous2-recomp_<ver>_amd64.AppImage`, `infamous2-recomp_<ver>_amd64.deb` |
 
 Each job stages the port, runs the staged `rebuild.py --check-json` and
 `--dry-run` (the host check must fail on Windows/Linux), type-checks and
-builds the frontend, runs `cargo test` (macOS, Linux), builds the bundles,
+builds the frontend, runs `cargo test` and `test_updater_json.py` (macOS,
+Linux), builds the bundles,
 runs `check_bundle.py` on them, writes `SHA256SUMS-<job>.txt` and uploads
 everything (kept 30 days). npm and cargo are cached. A `v*` tag also sets
 the app version from the tag (`vX.Y.Z`) and the `release` job creates a
 **draft** GitHub release with all artifacts attached (or updates the draft
-on a rerun); publishing it stays a manual step.
+on a rerun); publishing it stays a manual step. With the updater key (below)
+the macOS job also builds `infamous2-recomp_<ver>_aarch64.app.tar.gz` and its
+`.sig`, and the release job adds `latest.json`; see "App updates".
 
 ### Signing (optional secrets)
 
@@ -445,6 +459,8 @@ Security > Open Anyway) and the Windows installers are unsigned
 | `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | notarization (app-specific password); only used together with the certificate |
 | `WINDOWS_CERTIFICATE` | code-signing certificate, `.pfx` as base64 |
 | `WINDOWS_CERTIFICATE_PASSWORD` | its password |
+| `TAURI_SIGNING_PRIVATE_KEY` | the app updater's minisign private key (the contents of the key file `tauri signer generate` writes); its public half is `plugins.updater.pubkey` in `tauri.conf.json` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | that key's password |
 
 Only secrets that are set reach the build (Tauri would treat an empty
 `APPLE_ID` as a request to notarize).
@@ -510,7 +526,103 @@ ships). Pressing the button again replaces it; a file of the same name that
 the launcher did not make is left alone. When the launcher is already open,
 macOS only brings it to the front (the arguments of a second `open` are not
 passed on), so press Play there. Steam or any other front end can run the
-same `open` line.
+same `open` line; for Steam the launcher can also write the entry itself
+(see "Add to Steam").
+
+## App updates
+
+The app downloads and installs its own new versions (`src-tauri/src/update.rs`,
+`src/update.ts`, `tauri-plugin-updater` 2.14).
+
+- **Where it looks.** `latest.json`, at the first of
+  `plugins.updater.endpoints` (`tauri.conf.json`) that has one:
+  `releases/download/updater/latest.json` (a fixed pre-release named
+  `updater` that holds only that file), then
+  `releases/latest/download/latest.json` (works once releases are published
+  as normal releases instead of pre-releases, which GitHub's "latest" skips).
+  The manifest lists only `darwin-aarch64`:
+  `{"version", "notes", "pub_date", "platforms": {"darwin-aarch64": {"url", "signature"}}}`.
+- **When.** Once per session when the app opens, if **Check for updates
+  automatically** is on (`autoUpdateCheck` in `launcher.json`, on by
+  default), and on **Check again**. Nothing is downloaded until the player
+  presses **Download and install**. `INFAMOUS2_NO_UPDATE_CHECK=1` turns the
+  check and the install off.
+- **Install.** The plugin downloads the `.app.tar.gz` (progress on the card),
+  verifies it against the minisign public key in `tauri.conf.json`
+  (`requireSignedVersion`: the signature must name the announced version, so
+  an old signed bundle cannot be passed off as a new one) and swaps the
+  `.app` in place (an administrator prompt if the folder needs it). Refused
+  while the game or a rebuild runs, from the `.dmg` (drag the app to
+  Applications first), from a translocated copy (macOS runs a downloaded app
+  from a read-only place until it is moved) and in a development build. Play
+  and the rebuild wait while it installs; the rebuild also waits for the
+  restart. **Restart to finish** relaunches into the new version, whose
+  Updates card then offers **Rebuild the game** when the bundled port
+  changed. A Finder icon set with "Use as the app's Finder icon" goes with
+  the old bundle (press it again).
+- **Releases.** On a `v*` tag, with the `TAURI_SIGNING_PRIVATE_KEY` secrets
+  set, the macOS job passes `src-tauri/tauri.updater.conf.json`
+  (`bundle.createUpdaterArtifacts`; only in CI, so a local `tauri build`
+  needs no key) and gets the signed `.app.tar.gz`; the release job writes
+  `latest.json` with `scripts/updater_json.py` (tested by
+  `scripts/test_updater_json.py`) and attaches it to the draft. Players are
+  offered it only once the release is **published**:
+  `.github/workflows/updater.yml` (on `release: published`) copies that
+  `latest.json`, with the published notes and date, to the `updater`
+  release (made on first use), after checking that the version is the
+  tag's, that the download is an asset of that release and that the
+  signature names that version. It never moves players back unless run by
+  hand (Actions > updater > Run workflow with a tag: the rollback). When
+  removing the Windows/Linux files from a release, keep `latest.json` and
+  the `.app.tar.gz` (+ `.sig`).
+- **The key.** Made once with `npx tauri signer generate -w
+  ~/.tauri/infamous2-updater.key` (password in
+  `~/.tauri/infamous2-updater.key.password`). Back both up: without the
+  private key no future release can be signed for the apps already
+  installed, and they would have to be updated by hand once to a new key.
+- **Trying a release.** Install the previous release's `.dmg` into
+  Applications, open it, publish the new release, then Advanced > Updates >
+  Check again: **Download and install**, **Restart to finish**, and the
+  sidebar shows the new version.
+
+## Add to Steam
+
+Optional; nothing happens unless the player presses it. Home > Status >
+**Add to Steam** (macOS app, shown when Steam is installed and someone has
+signed in to it, and the game is installed) adds inFAMOUS 2 to the Steam
+library as a non-Steam game, to start from Big Picture with the controller
+(`src-tauri/src/steam.rs`, `vdf.rs`, `steam_art.rs`):
+
+- **The entry.** Written into every account's
+  `~/Library/Application Support/Steam/userdata/<id>/config/shortcuts.vdf`
+  (binary VDF, read and written by `vdf.rs`; whatever it does not change is
+  written back byte for byte, so other games' entries are untouched; tested).
+  The file is copied to `shortcuts.vdf.infamous2-backup` first and replaced
+  through a rename. `AppName` "inFAMOUS 2", `Exe` a Steam copy of the Play
+  shortcut kept in the data folder (`steam/Play inFAMOUS 2.app`, whose
+  script runs `open -W -b <launcher id> --args --play --exit-with-game`).
+  The launcher starts the game and, with `--exit-with-game`, closes once the
+  game ends normally (a crash or debug mode keeps it open); `open -W` waits
+  for that, so Steam sees the game running exactly as long as it is and Big
+  Picture comes back by itself. If the launcher is already open, it only
+  comes to the front (press Play there). Pressing Add again brings the entry
+  up to date and keeps what Steam or the player changed in it (play time,
+  hidden, tags).
+- **The app id** is Steam's own for non-Steam games: CRC32 of the quoted
+  `Exe` followed by the name, top bit set. It names the art.
+- **The art**, drawn at that moment from the player's own `ICON0.PNG` and
+  `PIC1.PNG` (as the Home hero; nothing ships) into `config/grid/`:
+  `<appid>p.png` (600x900), `<appid>.png` (920x430), PIC1 blurred and
+  darkened with a cyan glow and ICON0 centred as a card with a cyan rim;
+  `<appid>_hero.png` (1920x620, PIC1's upper part, which leaves out the
+  audio trademarks printed lower down); `<appid>_icon.png` (the Dock icon's
+  square, also the entry's `icon`).
+- **Steam must be closed**: it keeps the list in memory and writes it back
+  when it quits. While it runs the buttons offer **Quit Steam** (an
+  AppleScript `quit`), wait for it to close, then go on.
+- **Remove from Steam** takes the entry out (the others renumbered as Steam
+  does, their contents untouched), deletes the four images it made and the
+  Steam copy of the shortcut.
 
 ## The rebuild script on its own
 
@@ -538,6 +650,7 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
   done. Old report folders are not cleaned up yet.
 - Homebrew itself is not installed by the app (it needs the administrator
   password in Terminal); the app shows the command.
-- From the God of War III PC launcher, not done yet: button-prompt icon
-  styles, mods, "Add to Steam", downloading and installing app updates, a GUI
-  scale option. (The "Play" shortcut is done: see above.)
+- From the God of War III PC launcher, not done yet: mods, a GUI scale
+  option. (The "Play" shortcut, "Add to Steam" and app updates are done: see
+  above; app updates wait for the next release to be tried end to end, and
+  Add to Steam for a test with Steam's Big Picture.)

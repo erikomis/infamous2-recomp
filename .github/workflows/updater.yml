@@ -1,0 +1,84 @@
+# Points installed apps at a release once it is PUBLISHED (pre-releases
+# included; drafts never). The app reads its update manifest from a fixed
+# place (launcher/src-tauri/tauri.conf.json, plugins.updater.endpoints):
+#
+#   https://github.com/<repo>/releases/download/updater/latest.json
+#
+# so this copies the published release's latest.json (made by launcher.yml's
+# release job, darwin-aarch64 only) to the `updater` release (a pre-release
+# holding only that file; made on first use), with the published release's
+# notes and date. GitHub's own "latest release" link skips pre-releases, which
+# is why there is a fixed release at all; the app also tries
+# releases/latest/download/latest.json, for when releases stop being
+# pre-releases.
+#
+# It never moves players back to an older version, unless run by hand
+# (Actions > updater > Run workflow, with the tag): that is the rollback.
+name: updater
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release to offer (vX.Y.Z); an older one than the current offer rolls back'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: updater
+  cancel-in-progress: false
+
+jobs:
+  point:
+    name: point the updater at the release
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Copy latest.json to the updater release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          mkdir -p w/cur w/new
+          gh release view "$TAG" --json isDraft,publishedAt,body,assets > w/release.json
+          python3 - <<'EOF'
+          import json
+          r = json.load(open('w/release.json'))
+          if r['isDraft']:
+              raise SystemExit('%s is still a draft: publish it first' % r)
+          open('w/body.md', 'w').write(r['body'] or '')
+          open('w/pub_date', 'w').write(r['publishedAt'])
+          open('w/assets.txt', 'w').write('\n'.join(a['name'] for a in r['assets']) + '\n')
+          EOF
+          if ! grep -qx 'latest.json' w/assets.txt; then
+            echo "::notice::$TAG has no latest.json (built without the updater key): the updater stays where it is"
+            exit 0
+          fi
+          gh release download "$TAG" -p latest.json -D w
+          python3 launcher/scripts/updater_json.py refresh --manifest w/latest.json --tag "$TAG" \
+            --notes-file w/body.md --pub-date "$(cat w/pub_date)" --assets w/assets.txt --out w/new/latest.json
+          if gh release view updater >/dev/null 2>&1; then
+            if gh release download updater -p latest.json -D w/cur 2>/dev/null; then
+              older=$(python3 -c 'import json,sys
+          v=lambda p: tuple(int(x) for x in json.load(open(p))["version"].split("."))
+          print("yes" if v("w/new/latest.json") < v("w/cur/latest.json") else "no")')
+              if [ "$older" = yes ] && [ "$MANUAL" != true ]; then
+                echo "::notice::$TAG is older than the version the updater offers now: left as it is (run this workflow by hand to roll back)"
+                exit 0
+              fi
+            fi
+          else
+            gh release create updater --prerelease --target "$GITHUB_SHA" --title "App updater manifest" \
+              --notes "Holds only latest.json, which installed apps read to find the newest version (.github/workflows/updater.yml). Download the app from the versioned releases."
+          fi
+          gh release upload updater w/new/latest.json --clobber
+          echo "the updater now offers $(python3 -c 'import json; print(json.load(open("w/new/latest.json"))["version"])')"

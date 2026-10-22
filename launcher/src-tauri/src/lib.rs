@@ -9,8 +9,11 @@ mod input_map;
 mod play_shortcut;
 mod report;
 mod saves;
+mod steam;
+mod steam_art;
 mod trophies;
 mod update;
+mod vdf;
 mod zipfile;
 
 use input_map::{Bindings, InputEnv};
@@ -127,6 +130,9 @@ pub struct Settings {
     /// Automatic backups of the saves made before each "Play" that are kept
     /// (the newest ones); 0 turns them off.
     pub save_backups_keep: u32,
+    /// Look for a new app version when the launcher starts (update.rs; the
+    /// Updates card's "Check again" works either way).
+    pub auto_update_check: bool,
 }
 
 impl Default for Settings {
@@ -177,6 +183,7 @@ impl Default for Settings {
             firmware_path: String::new(),
             decrypt_with: "auto".into(),
             save_backups_keep: 10,
+            auto_update_check: true,
         }
     }
 }
@@ -457,6 +464,14 @@ pub struct AppState {
     /// `--play` on the command line (the Play shortcut): the window starts the
     /// game once it is up; taken by take_play_request.
     play_request: Mutex<bool>,
+    /// `--play --exit-with-game` (the Steam shortcut): quit once a game this
+    /// launcher started has ended normally.
+    exit_with_game: Mutex<bool>,
+    /// An app update is being downloaded/installed (update.rs).
+    updating: Mutex<bool>,
+    /// The version an update put on disk in this session; the app still runs
+    /// the old one until it restarts.
+    update_installed: Mutex<Option<String>>,
 }
 
 /// A GUI app on macOS starts with a bare PATH; Homebrew's tools (cmake,
@@ -1072,6 +1087,138 @@ async fn create_play_shortcut(app: AppHandle) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Add to Steam (steam.rs, steam_art.rs)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamStatus {
+    /// The button can work here: macOS, a packaged .app (the entry starts it
+    /// through LaunchServices by its bundle id).
+    available: bool,
+    /// Steam is installed and someone has signed in to it.
+    installed: bool,
+    running: bool,
+    users: usize,
+    /// Accounts that have the entry.
+    added: usize,
+}
+
+/// Where the Steam entry's executable lives (the Play shortcut's Steam kind).
+fn steam_dir() -> PathBuf {
+    data_root().join("steam")
+}
+
+fn steam_target() -> steam::Target {
+    steam::Target::new(&play_shortcut::executable(&steam_dir().join(play_shortcut::NAME)))
+}
+
+fn steam_available() -> bool {
+    cfg!(target_os = "macos") && app_icon::app_bundle().is_some()
+}
+
+/// The library art from the player's copy: ICON0 (required) and PIC1, from
+/// the install, else from the game folder chosen on Install (as the Home hero).
+fn steam_art(s: &Settings) -> Option<steam::Art> {
+    let icon0 = icon_source(s)?;
+    let pic1 = match resolve_install(Path::new(&s.install_dir)) {
+        Ok(i) if Path::new(&i.background).is_file() => i.background,
+        _ => copy_art(&s.game_paths).1,
+    };
+    let icon0 = app_icon::decode_png(&fs::read(icon0).ok()?).ok()?;
+    let pic1 = fs::read(&pic1).ok().and_then(|b| app_icon::decode_png(&b).ok());
+    let imgs = steam_art::draw(&icon0, pic1.as_ref());
+    let enc = |i: &app_icon::Rgba| app_icon::encode_png(i).ok();
+    Some([enc(&imgs.portrait)?, enc(&imgs.landscape)?, enc(&imgs.hero)?, enc(&imgs.icon)?])
+}
+
+#[tauri::command]
+async fn steam_status() -> SteamStatus {
+    tauri::async_runtime::spawn_blocking(|| {
+        let users = steam::users(&steam::root(&home()));
+        let t = steam_target();
+        SteamStatus {
+            available: steam_available(),
+            installed: !users.is_empty(),
+            running: steam::running(),
+            users: users.len(),
+            added: users.iter().filter(|u| steam::user_has(u, &t)).count(),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .unwrap_or(SteamStatus { available: false, installed: false, running: false, users: 0, added: 0 })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamAdded {
+    users: usize,
+    /// The library art was drawn (the copy's ICON0.PNG was found).
+    art: bool,
+}
+
+/// "Add to Steam": the entry and its art in every Steam account here.
+/// Refused while Steam runs ("steam-running").
+#[tauri::command]
+async fn steam_add(app: AppHandle) -> Result<SteamAdded, String> {
+    if !steam_available() {
+        return Err("Add to Steam needs the packaged app on macOS".into());
+    }
+    let id = app.config().identifier.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let users = steam::users(&steam::root(&home()));
+        if users.is_empty() {
+            return Err("Steam is not installed here, or nobody has signed in to it yet".to_string());
+        }
+        if steam::running() {
+            return Err("steam-running".to_string());
+        }
+        let icns = app_icon::app_bundle().and_then(|b| play_shortcut::bundle_icns(&b));
+        fs::create_dir_all(steam_dir()).map_err(|e| e.to_string())?;
+        play_shortcut::write_kind(&steam_dir(), &id, icns.as_deref(), play_shortcut::Kind::Steam)?;
+        let art = steam_art(&load_settings_file());
+        let t = steam_target();
+        for u in &users {
+            steam::add(u, &t, art.as_ref())?;
+        }
+        Ok(SteamAdded { users: users.len(), art: art.is_some() })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// "Remove from Steam": our entry and the art it made, from every account,
+/// and the executable it pointed at. Returns the number of accounts it was in.
+#[tauri::command]
+async fn steam_remove(app: AppHandle) -> Result<usize, String> {
+    let id = app.config().identifier.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if steam::running() {
+            return Err("steam-running".to_string());
+        }
+        let t = steam_target();
+        let mut n = 0;
+        for u in &steam::users(&steam::root(&home())) {
+            n += steam::remove(u, &t)? as usize;
+        }
+        let bundle = steam_dir().join(play_shortcut::NAME);
+        if play_shortcut::is_ours(&bundle, &id, play_shortcut::Kind::Steam) {
+            fs::remove_dir_all(&bundle).map_err(|e| format!("{}: {e}", bundle.display()))?;
+        }
+        Ok(n)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// "Quit Steam" (it saves shortcuts.vdf on the way out).
+#[tauri::command]
+async fn steam_quit() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(steam::quit).await.map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------------------
 // Finding the player's copy and licence
 // ---------------------------------------------------------------------------
 
@@ -1517,6 +1664,13 @@ pub struct RebuildRequest {
 #[tauri::command]
 fn start_rebuild(app: AppHandle, state: State<'_, AppState>, req: RebuildRequest) -> Result<(), String> {
     require_supported_host()?;
+    // the bundled port sources are being replaced, or already are
+    if *state.updating.lock().unwrap() {
+        return Err("the app is updating: wait for it to finish".into());
+    }
+    if state.update_installed.lock().unwrap().is_some() {
+        return Err("the app was updated: restart it first (Updates > Restart to finish)".into());
+    }
     let mut slot = state.rebuild.lock().unwrap();
     if slot.is_some() {
         return Err("a rebuild is already running".into());
@@ -1694,6 +1848,9 @@ pub struct PlayStarted {
 #[tauri::command]
 fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) -> Result<PlayStarted, String> {
     require_supported_host()?;
+    if *state.updating.lock().unwrap() {
+        return Err("the app is updating: wait for it to finish".into());
+    }
     let mut slot = state.game.lock().unwrap();
     if slot.is_some() {
         return Err("the game is already running".into());
@@ -1770,9 +1927,15 @@ fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) ->
             *live = false;
         }
         let _ = a.emit("game-exit", code);
+        let debug = session.is_some();
         if let Some(d) = session {
             session_exit(&d, status.ok(), started);
             let _ = a.emit("report-changed", ());
+        }
+        // started from Steam: back to Big Picture once the game has ended
+        // normally (a crash or a debug session keeps the launcher open)
+        if code == 0 && !debug && *st.exit_with_game.lock().unwrap() {
+            a.exit(0);
         }
     });
     Ok(PlayStarted {
@@ -2324,10 +2487,14 @@ async fn saves_import_zip(state: State<'_, AppState>, path: String) -> Result<sa
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
         .setup(|app| {
             sync_app_icon(app.handle()); // the player's icon in the Dock from the start
-            *app.state::<AppState>().play_request.lock().unwrap() = play_shortcut::requested(std::env::args());
+            let args: Vec<String> = std::env::args().collect();
+            let st = app.state::<AppState>();
+            *st.play_request.lock().unwrap() = play_shortcut::requested(args.iter().cloned());
+            *st.exit_with_game.lock().unwrap() = play_shortcut::exit_requested(&args);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2339,6 +2506,8 @@ pub fn run() {
             list_trophies,
             game_languages,
             update::check_updates,
+            update::install_update,
+            update::restart_app,
             detect_rpcs3,
             find_licence,
             check_prereqs,
@@ -2373,7 +2542,11 @@ pub fn run() {
             report_zip,
             finder_icon,
             take_play_request,
-            create_play_shortcut
+            create_play_shortcut,
+            steam_status,
+            steam_add,
+            steam_remove,
+            steam_quit
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");

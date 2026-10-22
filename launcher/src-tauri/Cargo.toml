@@ -24,6 +24,7 @@ crc32fast = "1"
 # the launcher's Dock icon from the player's copy (src/app_icon.rs): PNG in and
 # out, already in the tree through tauri (muda)
 png = "0.18"
+tauri-plugin-updater = "2.14"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # NSApplication/NSWorkspace for the Dock and Finder icons (the versions and

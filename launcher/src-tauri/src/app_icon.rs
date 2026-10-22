@@ -101,7 +101,7 @@ pub fn encode_png(img: &Rgba) -> Result<Vec<u8>, String> {
 
 /// Signed distance from (px, py) to a rounded rectangle centred at (cx, cy)
 /// with half sizes (hw, hh) and corner radius r: negative inside.
-fn rr_dist(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
+pub(crate) fn rr_dist(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
     let qx = (px - cx).abs() - (hw - r);
     let qy = (py - cy).abs() - (hh - r);
     let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
@@ -109,7 +109,7 @@ fn rr_dist(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 
 }
 
 /// Anti-aliased coverage of a pixel whose centre is `d` from an edge.
-fn cover(d: f32) -> f32 {
+pub(crate) fn cover(d: f32) -> f32 {
     (0.5 - d).clamp(0.0, 1.0)
 }
 
@@ -125,7 +125,7 @@ pub fn art_rect(w: u32, h: u32, n: u32) -> (f32, f32, f32, f32) {
 
 /// Bilinear sample of the source at (sx, sy) in its pixel space,
 /// premultiplied (so transparent edges do not bleed dark).
-fn sample(src: &Rgba, sx: f32, sy: f32) -> [f32; 4] {
+pub(crate) fn sample(src: &Rgba, sx: f32, sy: f32) -> [f32; 4] {
     let x = sx.clamp(0.0, (src.w - 1) as f32);
     let y = sy.clamp(0.0, (src.h - 1) as f32);
     let (x0, y0) = (x.floor() as u32, y.floor() as u32);
