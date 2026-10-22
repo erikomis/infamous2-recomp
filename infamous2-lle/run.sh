@@ -14,12 +14,6 @@ export PS3_VFS_ROOT="$vfs"
 export PS3_HDD0_ROOT="$vfs/dev_hdd0"
 export PS3_DEV_FLASH="${PS3_DEV_FLASH:-$HOME/Library/Application Support/rpcs3/dev_flash}"
 export PS3_TITLE="inFAMOUS 2"
-# Dub, subtitles and menus in Brazilian Portuguese (cache/psarc/brazilian*.psarc).
-# The game (2011) treats every system language above 16 as unknown, so the
-# console's later "Portuguese (Brazil)" (17) falls back to English; on this
-# Americas build plain "Portuguese" (7) is what selects the Brazilian files
-# (func_0009D9DC). PS3_LANG=en (or es, fr, ...) to change.
-export PS3_LANG="${PS3_LANG:-pt}"
 [ -n "$HEADLESS" ] && export PS3RECOMP_METAL_HEADLESS=1
 # Saves and trophies live in one fixed place for windowed play, so opening the
 # game from another directory no longer starts without a save. The first run
@@ -62,6 +56,19 @@ if [ -z "$HEADLESS" ] && [ -z "${PS3_OVERLAY_INI+set}" ]; then
         *)      cfg="${XDG_DATA_HOME:-$HOME/.local/share}/infamous2-recomp" ;;
     esac
     export PS3_OVERLAY_INI="$cfg/overlay.ini"
+fi
+# Dub, subtitles and menus in Brazilian Portuguese (cache/psarc/brazilian*.psarc).
+# This Americas release answers only en, fr, es and pt with their own files
+# (english, french, latino, brazilian) and plays every other system language
+# in English (func_0009D9DC); plain "Portuguese" (7) is what selects the
+# Brazilian files. PS3_LANG=en (or es, fr, ...) to change; the toolkit serves
+# the files of the other languages the copy has (ru, ja, de, en-gb, pt-pt,
+# es-es...: runtime/ppu/ppu_fs_lang.h). PS3_VOICE_LANG=<name> and
+# PS3_TEXT_LANG=<name> (english, brazilian, latino, ...: the file names) split
+# the dub from the menus and subtitles. A PS3_LANG line in overlay.ini (the
+# in-game menu's Game tab) takes the place of this default.
+if [ -z "$PS3_LANG" ] && ! { [ -n "$PS3_OVERLAY_INI" ] && grep -q '^PS3_LANG=' "$PS3_OVERLAY_INI" 2>/dev/null; }; then
+    export PS3_LANG=pt
 fi
 # Shader cache (the toolkit's rsx_metal_backend.m, PS3_SHADER_CACHE): a guest
 # shader's first use translates its HLSL to MSL on the RSX thread, which made
