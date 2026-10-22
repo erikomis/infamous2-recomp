@@ -126,6 +126,8 @@ Controles e Avançado.
   jogo instalado é mais antigo que as fontes do app, e oferece recompilar.
 - **O ícone da sua cópia** no Dock para o app e para o jogo (lido da sua
   instalação, nunca distribuído).
+- **Atalho Jogar** (Início > Status): um ícone "Play inFAMOUS 2" na Mesa que
+  abre o app e já começa o jogo com os seus ajustes.
 
 **Dentro do jogo,** F1 (fn+F1), Cmd+, ou L3+R3 abre o **menu dentro do
 jogo**: imagem (gama, nitidez, FXAA/SMAA, vibrance, contraste, MetalFX, vsync,
@@ -163,19 +165,23 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 
 O que está sendo feito agora (detalhes no [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md)):
 
-- **30 fps ou mais o tempo todo:** achar e cortar as quedas que ainda
-  sobram (momentos de 26-28 fps) em New Marais.
-- **Fachadas escuras:** a correção da borda dos mapas de sombra acima, e
-  depois religar os occlusion volumes.
+- **30 fps ou mais o tempo todo:** o cache de shaders, o relógio de quadros
+  de 1 ms e a poda do cache de vértices (2026-10-22) tiraram os engasgos de
+  primeiro uso e parte das quedas; o que sobra em New Marais é sobretudo tempo
+  das SPUs.
+- **Fachadas escuras:** corrigido na main (os mapas de sombra do sol, acima);
+  confirmado isso numa janela, os occlusion volumes voltam.
+- **Ícones de teclado nos prompts de botão**, no lugar dos do PS3.
 - **Mais efeitos no estilo do ReShade** no passo final da imagem (SMAA,
-  vibrance e contraste já entraram): LUTs de cor, contraste local, granulado e
-  vinheta.
-- **Pull requests para o [ps3recomp](https://github.com/sp00nznet/ps3recomp)**
-  com as correções do toolkit feitas aqui (#372-#375 abertos), e correções do
-  upstream adotadas aqui (#358, #340, #326, #349, #360, #366, issue #364).
-- Ideias novas (cache de shaders, patches da comunidade, tecla de captura
-  dentro do jogo, troféus, atualização automática do app, atalho na Steam)
-  estão no roadmap.
+  vibrance, contraste, LUTs de cor, vinheta e granulado já entraram): curvas
+  e contraste local.
+- **Pull requests para o [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
+  todos os PRs deste port até o #375 foram aceitos em 2026-10-19; a sexta
+  rodada (#470 SMAA, vibrance e contraste; #472 reconexão do controle; #476
+  cor da borda das texturas) está aberta.
+- Ideias novas (atualização automática do app, atalho na Steam, combinação
+  no controle para a captura, tecla de captura de tela em PNG) estão no
+  roadmap.
 
 ## Montar a partir do código
 
