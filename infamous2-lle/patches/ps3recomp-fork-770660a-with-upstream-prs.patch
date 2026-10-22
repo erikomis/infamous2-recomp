@@ -7961,7 +7961,7 @@ index 78de69b..15a1a97 100644
                      method, arg);
          return;
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..f1434a6 100644
+index 9a76e67..dd9975b 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -1,3 +1,5 @@
@@ -9624,7 +9624,7 @@ index 9a76e67..f1434a6 100644
      { float* alpha = (float*)(g.fp_cb + nslots * 16u);
        alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
        /* WPOS y = pos.y * alpha[1] + alpha[2]: SHADER_WINDOW (0x1D88) bits
-@@ -2056,6 +3186,115 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2056,6 +3186,127 @@ static void sink_end(void* user, const rsx_dispatch* r)
        alpha[2] = bottom ? (float)(win & 0xFFFu) : 0.0f;
        alpha[3] = 0.0f; }
  
@@ -9643,10 +9643,16 @@ index 9a76e67..f1434a6 100644
 +    { static int oinit; static u64 ofp[4] = { 0x5f740845528b0e62ull, 0x7875289ea6b856a6ull }; static int nofp = 2;
 +      static long osec = -1; static char odir[400]; static unsigned long long ot0;
 +      static u32 oframe = ~0u, on_draw, olast_h, olast_w, olast_hh; static int ostate; /* 0 wait, 1 capturing, 2 done */
-+      static u32 oluts[64], nluts; static int odone_u[2]; static char ocur[460]; static u32 ondump;
++      static u32 oluts[64], nluts; static int odone_u[16]; static char ocur[460]; static u32 ondump; static u32 ounits = 3;
 +      static const char* otrig;
 +      if (!oinit) { oinit = 1; const char* e = getenv("PS3RECOMP_ENG_OCCDUMP");
 +          otrig = getenv("PS3RECOMP_ENG_OCCDUMP_TRIGGER");
++          /* PS3RECOMP_ENG_OCCDUMP_UNITS=<hex mask>: which texture units of the
++           * listed programs to read back (default 3: depth snapshot, normals);
++           * only 8-bit ARGB images (a cube or another format is skipped). With
++           * the composite's hash (f384f111ad5956ba) and 0x3F, every input of
++           * the lighting composite in one frame. */
++          { const char* m = getenv("PS3RECOMP_ENG_OCCDUMP_UNITS"); if (m) ounits = (u32)strtoul(m, 0, 16); }
 +          if (e) { char* d; osec = strtol(e, &d, 10);
 +                   if (*d == ':') { const char* p = d + 1; const char* c = strchr(p, ':');
 +                       size_t n = c ? (size_t)(c - p) : strlen(p); if (n >= sizeof odir) n = sizeof odir - 1;
@@ -9677,7 +9683,7 @@ index 9a76e67..f1434a6 100644
 +              if (tf) { fclose(tf); remove(otrig); arm = 1;
 +                  snprintf(ocur, sizeof ocur, "%s/d%02u", odir, ++ondump); mkdir(ocur, 0755); } }
 +          else arm = vol && ps3_ms_now() - ot0 >= (unsigned long long)osec * 1000ull;
-+          if (ostate == 0 && arm) { ostate = 3; on_draw = 0; olast_h = 0; nluts = 0; odone_u[0] = odone_u[1] = 0; }
++          if (ostate == 0 && arm) { ostate = 3; on_draw = 0; olast_h = 0; nluts = 0; memset(odone_u, 0, sizeof odone_u); }
 +          if (vol && ostate == 3) { ostate = 1; oframe = g.frames; }
 +          if (vol && ostate == 1 && g.frames == oframe && n_targets) {
 +              const eng_surface* es = &g.surfaces[targets[0]];
@@ -9688,10 +9694,16 @@ index 9a76e67..f1434a6 100644
 +                  FILE* f = fopen(path, "wb"); if (f) { fwrite(px, 1, (size_t)es->w * es->h * 4, f); fclose(f); }
 +                  free(px); }
 +              olast_h = es->handle; olast_w = es->w; olast_hh = es->h;
-+              for (u32 u = 0; u < 2; u++) {
++              for (u32 u = 0; u < 16; u++) {
++                  if (!(ounits >> u & 1u)) continue;
 +                  rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
 +                  snprintf(path, sizeof path, "%s/unit%u.rgba", ocur, u);
-+                  if (!t.enabled || !textures[u] || !t.width || !t.height || odone_u[u]) continue; odone_u[u] = 1;
++                  if (!t.enabled || !textures[u] || !t.width || !t.height || odone_u[u] || t.cubemap ||
++                      (u >= 2 && (t.format & 0x9Fu) != 0x85u)) continue;
++                  odone_u[u] = 1;
++                  { char ip[512]; snprintf(ip, sizeof ip, "%s/units.txt", ocur); FILE* fi = fopen(ip, "a");
++                    if (fi) { fprintf(fi, "unit %u fp %016llx loc %u off 0x%08X fmt 0x%02X %ux%u remap 0x%08X addr 0x%08X\n", u,
++                                      (unsigned long long)fk, t.location, t.offset, t.format, t.width, t.height, t.remap, t.wrap); fclose(fi); } }
 +                  u8* tp = (u8*)malloc((size_t)t.width * t.height * 4);
 +                  if (!tp) continue;
 +                  g.be->readback(g.be->user, textures[u], 0, 0, t.width, t.height, tp, t.width * 4);
@@ -9740,7 +9752,7 @@ index 9a76e67..f1434a6 100644
      /* The depth attachment is cleared the first time it is bound, so a title
       * that never clears its shadow zeta still tests against something. */
      const u32 depth_handle = (zslot != ENG_INVALID) ? g.zdepths[zslot].handle : 0;
-@@ -2109,8 +3348,12 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2109,8 +3360,12 @@ static void sink_end(void* user, const rsx_dispatch* r)
  
      const u32 uploaded = indexed ? dc.n_verts : n_draw;
      DS_MARK(ns_bind);
@@ -9755,7 +9767,7 @@ index 9a76e67..f1434a6 100644
      DS_MARK(ns_draw);
  #undef DS_MARK
      /* Counted only when the draw ran the guest's OWN programs, which is what
-@@ -2126,8 +3369,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2126,8 +3381,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
          ds.ns_rest += eng_ds_now() - ds_t0;
      }
  
@@ -9777,7 +9789,7 @@ index 9a76e67..f1434a6 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2138,6 +3393,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2138,6 +3405,21 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
      const u32 n_targets = eng_current_target_set(targets);
      if (!n_targets) return;
  
@@ -9799,7 +9811,7 @@ index 9a76e67..f1434a6 100644
      if (mask & (RSX_CLEAR_COLOR_R | RSX_CLEAR_COLOR_G |
                  RSX_CLEAR_COLOR_B | RSX_CLEAR_COLOR_A)) {
          const u32 c = rsx_dsp_clear_color(&g.rsx);
-@@ -2347,13 +3617,23 @@ presented:;
+@@ -2347,13 +3629,23 @@ presented:;
                pf = b0 = b1 = bw = 0; t0 = now; } } }
      /* PS3RECOMP_ENG_MEMDUMP=<hexEA>:<hexLen>:<worldframe>[:file]: at that world
       * frame, write the guest range as hex words, 16 bytes per line -- the same
@@ -9827,7 +9839,21 @@ index 9a76e67..f1434a6 100644
            extern uint8_t* vm_base;
            FILE* f = fopen(dpath, "w");
            if (f && vm_base) {
-@@ -2408,6 +3688,20 @@ presented:;
+@@ -2375,9 +3667,10 @@ presented:;
+           if (me) { char* d; mloc = (u32)strtoul(me, &d, 10); moff = (u32)strtoul(d + 1, &d, 16); mlen = (u32)strtoul(d + 1, 0, 0); } }
+       if (me && g.guest_draws > 1000) { static u32 n; if ((n++ % 20) == 0) {
+           const u8* q = eng_guest_ptr(NULL, mloc, moff, mlen);
+-          u32 nz = 0; if (q) for (u32 k = 0; k < mlen; k++) nz += q[k] != 0;
+-          fprintf(stderr, "[rsx memprobe] world frame %u: loc %u off 0x%08X: %u/%u nonzero%s\n",
+-                  n - 1, mloc, moff, nz, mlen, q ? "" : " (unmapped)"); } } }
++          u32 nz = 0, hsh = 2166136261u; if (q) for (u32 k = 0; k < mlen; k++) { nz += q[k] != 0; hsh = (hsh ^ q[k]) * 16777619u; }
++          fprintf(stderr, "[rsx memprobe] world frame %u: loc %u off 0x%08X: %u/%u nonzero hash %08X first %02X%02X%02X%02X%s\n",
++                  n - 1, mloc, moff, nz, mlen, hsh, q && mlen >= 4 ? q[0] : 0, q && mlen >= 4 ? q[1] : 0,
++                  q && mlen >= 4 ? q[2] : 0, q && mlen >= 4 ? q[3] : 0, q ? "" : " (unmapped)"); } } }
+     /* PS3RECOMP_ENG_PROBE=<hex offset>[,<file.ppm>]: on world frames, read
+      * back the newest target at that guest address and print its mean --
+      * handles are not stable across runs, addresses are. */
+@@ -2408,6 +3701,20 @@ presented:;
                }
            } } }
      eng_constlog_frame_end();
@@ -9848,7 +9874,7 @@ index 9a76e67..f1434a6 100644
      g.frames++;
      eng_ds_frame_end(g.guest_draws);
      g.last_guest_draws = g.guest_draws;
-@@ -2531,6 +3825,102 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +3838,102 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
