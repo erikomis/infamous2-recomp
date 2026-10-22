@@ -1,0 +1,120 @@
+diff -ru a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+--- a/libs/video/rsx_draw_engine.c	2026-10-21 22:22:39
++++ b/libs/video/rsx_draw_engine.c	2026-10-21 22:22:39
+@@ -1159,6 +1159,27 @@
+  * max LOD at [18:7] and min LOD at [30:19], both 4.8 fixed point. RSX's LOD
+  * bias, SET_TEXTURE_FILTER [12:0], is not applied: the reference engine
+  * leaves it at zero too. */
++/* SET_TEXTURE_BORDER_COLOR as rsx_be_sampler_desc.border. inFAMOUS 2's sun
++ * shadow maps (DEPTH24_D8 1024x1024, wrap BORDER, compare GREATER) set
++ * 0x00FFFFFF -- depth 1.0 -- so a lookup outside the map compares against
++ * the far plane; read as transparent black it compared against 0 instead and
++ * flipped the shadow term for everything the map does not cover. */
++static u8 eng_border_class(u32 format, u32 border)
++{
++    static int on = -1;   /* PS3RECOMP_ENG_BORDER=0: always transparent black (the old behaviour) */
++    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_BORDER"); on = e ? atoi(e) : 1; }
++    if (!on) return 0u;
++    const u32 base = format & 0x9Fu;
++    if (base >= 0x90u && base <= 0x93u) {          /* DEPTH24_D8 / _FLOAT, DEPTH16 / _FLOAT */
++        const u32 d = border & 0x00FFFFFFu;
++        return d == 0x00FFFFFFu ? 2u : 0u;          /* 1.0 -> white (r = 1); 0 -> black */
++    }
++    if (border == 0x00000000u) return 0u;
++    if (border == 0xFF000000u) return 1u;
++    if (border == 0xFFFFFFFFu) return 2u;
++    return 3u;                                      /* not expressible: edge clamp */
++}
++
+ static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
+                                rsx_be_sampler_desc* out)
+ {
+@@ -2566,6 +2587,31 @@
+         if (!t.enabled || !(fp_reads >> u & 1u)) continue;
+         mask |= 1u << u;
+         eng_decode_sampler(t.filter, t.wrap, t.control0, &samplers[u]);
++        samplers[u].border = eng_border_class(t.format, t.border_color);
++        /* Wrap modes that read SET_TEXTURE_BORDER_COLOR (4 BORDER, 5 CLAMP,
++         * 7 MIRROR_ONCE_BORDER, 8 MIRROR_ONCE_CLAMP) with a colour the
++         * backends cannot express (they sample one of transparent black,
++         * opaque black, opaque white): each distinct (program, unit, format,
++         * wrap, border) is reported once. PS3RECOMP_ENG_BORDERLOG=0 silences,
++         * =2 also reports the expressible ones. */
++        { static int on = -1; if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_BORDERLOG"); on = e ? atoi(e) : 1; }
++          const u32 ws = t.wrap & 0xFu, wt = (t.wrap >> 8) & 0xFu, wr = (t.wrap >> 16) & 0xFu;
++          #define ENG_WRAP_USES_BORDER(w) ((w) == 4u || (w) == 5u || (w) == 7u || (w) == 8u)
++          const u32 b = t.border_color, cls = samplers[u].border;
++          const int exact = cls == 1 || cls == 2 ||
++                            (cls == 0 && (b == 0 || ((t.format & 0x9Fu) >= 0x90u && (t.format & 0x9Fu) <= 0x93u && !(b & 0xFFFFFFu))));
++          if (on && (!exact || on >= 2) && (ENG_WRAP_USES_BORDER(ws) || ENG_WRAP_USES_BORDER(wt) ||
++                     (t.dimension == 3 && ENG_WRAP_USES_BORDER(wr)))) {
++              static u64 seen[64]; static u32 ns;
++              const u64 fk = eng_current_fp_structural();
++              const u64 key = fk ^ ((u64)u << 59) ^ ((u64)t.format << 48) ^ ((u64)(t.wrap & 0xF0F0Fu) << 20) ^ b;
++              u32 k = 0; while (k < ns && seen[k] != key) k++;
++              if (k == ns && ns < 64) { seen[ns++] = key;
++                  fprintf(stderr, "[rsx engine] border wrap: fp %016llx unit %u fmt 0x%02X %ux%u addr 0x%08X border 0x%08X -> %s\n",
++                          (unsigned long long)fk, u, t.format, t.width, t.height, t.wrap, b,
++                          cls == 2 ? "opaque white" : cls == 1 ? "opaque black" : cls == 3 ? "edge clamp (INEXACT)" : exact ? "transparent black" : "transparent black (INEXACT)"); } }
++          #undef ENG_WRAP_USES_BORDER
++        }
+         /* PS3RECOMP_ENG_SIGNLOG=1: units bound with SET_TEXTURE_FILTER's
+          * signed bits (a,r,g,b at [28..31]) or SET_TEXTURE_ADDRESS's
+          * UNSIGNED_REMAP_BIASED (bit 12), once per (unit, format, address). */
+@@ -2709,6 +2755,7 @@
+         rsx_dsp_vertex_texture vt;
+         rsx_dsp_get_vertex_texture(&g.rsx, u, &vt);
+         eng_decode_sampler(vt.filter, vt.wrap, vt.control0, &samplers[u]);
++        samplers[u].border = eng_border_class(vt.format, vt.border_color);
+         /* A vertex unit has no crossbar, so its remap is the identity. */
+         textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
+                                        vt.width, vt.height, vt.mipmaps,
+diff -ru a/libs/video/rsx_draw_engine.h b/libs/video/rsx_draw_engine.h
+--- a/libs/video/rsx_draw_engine.h	2026-10-21 22:22:39
++++ b/libs/video/rsx_draw_engine.h	2026-10-21 22:22:39
+@@ -65,6 +65,14 @@
+ typedef struct rsx_be_sampler_desc {
+     u8  min_linear, mag_linear, mip_linear, mip_present;
+     u8  wrap_s, wrap_t, wrap_r;
++    /* What BORDER-type wraps (4, 5, 7, 8) return outside 0..1, reduced to
++     * the colours every backend can express: SET_TEXTURE_BORDER_COLOR read
++     * as the unit's format reads it (a depth format takes its 24-bit depth
++     * from the low bits). 0 transparent black (also the old behaviour),
++     * 1 opaque black, 2 opaque white, 3 any other colour: the backend clamps
++     * to the edge texel instead, which is nearer than black for the colours
++     * seen (inFAMOUS 2's video chroma planes border at 0x80 = neutral). */
++    u8  border;
+     float min_lod, max_lod;
+ } rsx_be_sampler_desc;
+ 
+diff -ru a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+--- a/libs/video/rsx_metal_backend.m	2026-10-21 22:22:39
++++ b/libs/video/rsx_metal_backend.m	2026-10-21 22:22:39
+@@ -3944,7 +3944,8 @@
+                   | ((u64)d->wrap_s << 4) | ((u64)d->wrap_t << 8)
+                   | ((u64)d->wrap_r << 12)
+                   | ((u64)(u32)(d->min_lod * 256.0f) << 16)
+-                  | ((u64)(u32)(d->max_lod * 256.0f) << 32);
++                  | ((u64)(u32)(d->max_lod * 256.0f) << 32)
++                  | ((u64)(d->border & 3u) << 56);
+     /* PS3_ANISO: only where the guest minifies linearly through mips. Part of
+      * the key, so a level set live from PS3_TOGGLE_FILE gets its own samplers
+      * (0, the default, leaves the key as it always was). */
+@@ -3966,7 +3967,16 @@
+     sd.sAddressMode = gcm_wrap_to_metal(d->wrap_s);
+     sd.tAddressMode = gcm_wrap_to_metal(d->wrap_t);
+     sd.rAddressMode = gcm_wrap_to_metal(d->wrap_r);
+-    sd.borderColor  = MTLSamplerBorderColorTransparentBlack;
++    if (d->border == 3) {   /* a border colour Metal cannot express: the edge is nearer than black */
++        if (sd.sAddressMode == MTLSamplerAddressModeClampToBorderColor) sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
++        if (sd.tAddressMode == MTLSamplerAddressModeClampToBorderColor) sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
++        if (sd.rAddressMode == MTLSamplerAddressModeClampToBorderColor) sd.rAddressMode = MTLSamplerAddressModeClampToEdge;
++    }
++    /* SET_TEXTURE_BORDER_COLOR as far as Metal can say it (see
++     * rsx_be_sampler_desc.border): a depth map's 1.0 border is opaque white. */
++    sd.borderColor  = d->border == 2 ? MTLSamplerBorderColorOpaqueWhite
++                    : d->border == 1 ? MTLSamplerBorderColorOpaqueBlack
++                                     : MTLSamplerBorderColorTransparentBlack;
+     if (aniso > 1) sd.maxAnisotropy = (NSUInteger)aniso;
+     id<MTLSamplerState> s = [s_dev newSamplerStateWithDescriptor:sd];
+     if (!s) return -1;
