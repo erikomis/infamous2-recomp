@@ -63,6 +63,13 @@ pub struct Settings {
     pub vibrance: f32,
     /// PS3_CONTRAST: 0.5 .. 1 (off) .. 1.5.
     pub contrast: f32,
+    /// PS3_VIGNETTE and PS3_GRAIN: 0 (off) .. 1.
+    pub vignette: f32,
+    pub grain: f32,
+    /// PS3_LUT: the player's colour LUT (ReShade's PNG layout), and how much
+    /// of it (PS3_LUT_STRENGTH, 0..1).
+    pub lut_path: String,
+    pub lut_strength: f32,
     /// PS3_UPSCALE: "" (off) or "metalfx" (macOS 13+).
     pub upscale: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
@@ -128,6 +135,10 @@ impl Default for Settings {
             sharpen: 0.0,
             vibrance: 0.0,
             contrast: 1.0,
+            vignette: 0.0,
+            grain: 0.0,
+            lut_path: String::new(),
+            lut_strength: 1.0,
             upscale: String::new(),
             mouse: true,
             mouse_sens: 1.0,
@@ -606,6 +617,18 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if (s.contrast - 1.0).abs() >= 0.005 && s.contrast > 0.0 {
         set("PS3_CONTRAST", format!("{:.2}", s.contrast.clamp(0.5, 1.5)));
+    }
+    if s.vignette >= 0.005 {
+        set("PS3_VIGNETTE", format!("{:.2}", s.vignette.min(1.0)));
+    }
+    if s.grain >= 0.005 {
+        set("PS3_GRAIN", format!("{:.2}", s.grain.min(1.0)));
+    }
+    if !s.lut_path.trim().is_empty() {
+        set("PS3_LUT", s.lut_path.trim().to_string());
+        if s.lut_strength < 0.995 {
+            set("PS3_LUT_STRENGTH", format!("{:.2}", s.lut_strength.clamp(0.0, 1.0)));
+        }
     }
     if s.upscale == "metalfx" {
         set("PS3_UPSCALE", "metalfx".into());
@@ -2345,6 +2368,16 @@ mod tests {
         assert_eq!(env2.get("PS3_CONTRAST").map(String::as_str), Some("1.20"));
         s.vibrance = 0.0;
         s.contrast = 1.0;
+        s.vignette = 0.5;
+        s.lut_path = "/x/lut.png".into();
+        s.lut_strength = 0.6;
+        let env3: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env3.get("PS3_VIGNETTE").map(String::as_str), Some("0.50"));
+        assert_eq!(env3.get("PS3_LUT").map(String::as_str), Some("/x/lut.png"));
+        assert_eq!(env3.get("PS3_LUT_STRENGTH").map(String::as_str), Some("0.60"));
+        assert!(!env3.contains_key("PS3_GRAIN"));
+        s.vignette = 0.0;
+        s.lut_path = String::new();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert!(!env.contains_key("PS3_ANISO"));
         assert!(!env.contains_key("PS3_SHARPEN"));
