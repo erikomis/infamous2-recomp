@@ -97,6 +97,12 @@ reference.
   address, format, size, crossbar, handle), which render target a unit's
   address aliases on each draw, every surface with its handle, and each
   write-back. Pass-log `tex=` numbers drift between runs; addresses do not.
+- **`PS3RECOMP_ENG_TEXDUMP=<dir>`.** The decoded first level of every 2D
+  texture the engine uploads (RGBA8, R8, raw BC blocks, ...) as
+  `<dir>/tNNNNN.bin`, one line per file in `<dir>/index.txt` (guest offset,
+  format, size, decoded format, row bytes); stops at 3000 files or 1.5 GB.
+  How the button-prompt atlas was found: loc 0 offset 0x0BADA600, A8R8G8B8
+  512x256, uploaded at frame 3 (`rsx_button_icons.c` has its glyph boxes).
 - **`libs/video/rsx_metal_backend.m`, diagnostics.** `PS3RECOMP_METAL_PASS_LOG=2`
   splits a pass at every pipeline/texture change; `_MIN` and `_EVERY` set the
   record threshold and period for the pass log, `PS3RECOMP_METAL_SURF_DUMP_MIN`

@@ -100,6 +100,9 @@ pub struct Settings {
     /// PS3_RUMBLE=0 when off; PS3_RUMBLE_STRENGTH in percent (0-200).
     pub rumble: bool,
     pub rumble_strength: u32,
+    /// PS3_BUTTON_ICONS: the glyphs in the game's button prompts: "auto" (the
+    /// controller in use), "playstation", "xbox" or "keyboard".
+    pub button_icons: String,
     /// PS3RECOMP_METAL_FPS=1: display and game fps in the window title.
     pub show_fps: bool,
     /// Extra KEY=VALUE lines (diagnostics), one per line; '#' starts a comment.
@@ -155,6 +158,7 @@ impl Default for Settings {
             audio_device: String::new(),
             rumble: true,
             rumble_strength: 100,
+            button_icons: "auto".into(),
             show_fps: false,
             extra_env: String::new(),
             game_paths: Vec::new(),
@@ -686,6 +690,11 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
         set("PS3_RUMBLE", "0".into());
     } else if s.rumble_strength != 100 {
         set("PS3_RUMBLE_STRENGTH", s.rumble_strength.min(200).to_string());
+    }
+    // Auto is the game's own default: left out, so a choice made in the
+    // in-game menu (overlay.ini) is not overridden.
+    if matches!(s.button_icons.as_str(), "playstation" | "xbox" | "keyboard") {
+        set("PS3_BUTTON_ICONS", s.button_icons.clone());
     }
     if s.show_fps {
         set("PS3RECOMP_METAL_FPS", "1".into()); // exactly "1" (rsx_metal_backend.m)
@@ -2348,7 +2357,8 @@ mod tests {
         let none = InputEnv::default();
         let mut s = Settings::default();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
-        for k in ["PS3_DISPLAY", "PS3_VSYNC", "PS3_AUDIO_VOLUME", "PS3_AUDIO_DEVICE", "PS3_RUMBLE", "PS3_RUMBLE_STRENGTH"] {
+        for k in ["PS3_DISPLAY", "PS3_VSYNC", "PS3_AUDIO_VOLUME", "PS3_AUDIO_DEVICE", "PS3_RUMBLE", "PS3_RUMBLE_STRENGTH",
+                  "PS3_BUTTON_ICONS"] {
             assert!(!env.contains_key(k), "{k} is a default and must stay out");
         }
         s.display = "DELL U2720Q".into();
@@ -2356,7 +2366,9 @@ mod tests {
         s.audio_volume = 40;
         s.audio_device = " Erik's AirPods ".into();
         s.rumble_strength = 150;
+        s.button_icons = "xbox".into();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_BUTTON_ICONS").map(String::as_str), Some("xbox"));
         assert_eq!(env.get("PS3_DISPLAY").map(String::as_str), Some("DELL U2720Q"));
         assert_eq!(env.get("PS3_VSYNC").map(String::as_str), Some("0"));
         assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("40"));

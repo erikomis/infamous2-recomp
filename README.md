@@ -55,6 +55,7 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Performance | ✅ ~30 fps walking in New Marais (the game's own cap) in headless runs on Apple silicon: frames of 29.7–30.4 ms, ~33–36 fps of headroom. Windowed confirmation pending |
 | Controller (DualSense tested; DualShock 4 and Xbox through SDL), rumble, reconnect without a restart | ✅ |
 | Keyboard and mouse (mouse camera, remappable, also live in the in-game menu) | 🧪 mapped, little tested in a window |
+| Button prompts that follow the controller (Xbox A/B/X/Y, keyboard keys) | 🧪 checked headless, waiting for a windowed test |
 | In-game menu (F1 / Cmd+, / L3+R3): image, audio, controls, performance HUD | ✅ since v0.2.4 (live changes) |
 | Saves and trophies (in `~/Library/Application Support`), saves manager in the app | ✅ |
 | Brazilian Portuguese dub and subtitles (default), other languages your copy ships, DLC | ✅ |
@@ -322,7 +323,7 @@ controller combo off, `PS3_OVERLAY=0` the whole menu.
 | --- | --- |
 | Image | the gamma override (or the game's own brightness), sharpening, FXAA, MetalFX upscaling, vsync, window / macOS fullscreen / borderless; anisotropic filtering applies at the next start |
 | Audio | master volume |
-| Controls | play with controller + keyboard/mouse, controller only, or keyboard/mouse only; vibration on/off and strength; mouse camera on/off, sensitivity and vertical/horizontal inversion; a table of every PS3 button with its key, mouse button and controller button: click a cell (or pick it with the pad and press ✕), press the new input and it applies at once (Esc cancels, right-click unbinds, "Restore defaults"). The press goes to the menu, never to the game. Rebindings are saved straight away to the same `input.toml` the launcher's Controls screen edits |
+| Controls | play with controller + keyboard/mouse, controller only, or keyboard/mouse only; the button icons in the game's prompts (automatic, PlayStation, Xbox, keyboard and mouse); vibration on/off and strength; mouse camera on/off, sensitivity and vertical/horizontal inversion; a table of every PS3 button with its key, mouse button and controller button: click a cell (or pick it with the pad and press ✕), press the new input and it applies at once (Esc cancels, right-click unbinds, "Restore defaults"). The press goes to the menu, never to the game. Rebindings are saved straight away to the same `input.toml` the launcher's Controls screen edits |
 | Performance | a small HUD in a corner that stays when the menu is closed: fps, frame time with a graph, CPU cores in use and threads busy (≥ 80% of a core: here mostly the SPU threads), the RSX's Metal encode time and the GPU wait per frame; corner, opacity and graph are options |
 
 What the menu changes is saved when it closes, to
@@ -377,6 +378,7 @@ class; it did not raise the frame rate in tests and coincided with hangs.
 | `PS3_RUMBLE=0` | no controller vibration. On by default: the game's rumble reaches DualSense, DualShock 4 and Xbox controllers through SDL |
 | `PS3_RUMBLE_STRENGTH=<0..200>` | vibration strength in percent (default 100); above 100 strengthens light rumble, capped at the motors' maximum. `PS3_RUMBLE_LOG=1` prints every request the game makes |
 | `PS3_INPUT_MODE=both\|controller\|keyboard` | what plays the game: everything (default), the controller only (keys and mouse do nothing in the game), or keyboard and mouse only (the controller still opens the menu with L3+R3). The in-game menu switches it live |
+| `PS3_BUTTON_ICONS=auto\|playstation\|xbox\|keyboard` | the button glyphs in the game's prompts ("Press ✕ to continue", the HUD hints). `auto` (default) follows the device you used last: an Xbox controller (360/One/Series, and pads SDL does not call PlayStation or Nintendo) shows A/B/X/Y, LB/RB/LT/RT, View/Menu and LS/RS; a DualShock/DualSense (and, for now, a Switch pad) the original glyphs; the keyboard and mouse the keys and mouse buttons bound in `input.toml`. They switch the moment you pick up the other device. The glyphs are drawn by the port (simple shapes, no artwork copied) into the game's prompt atlas as it is uploaded; the game's files are untouched. The in-game menu (Controls) and `PS3_TOGGLE_FILE` change it live |
 
 Saves and trophies live in `~/Library/Application Support/infamous2-recomp/gamedata`
 (Linux: `~/.local/share/infamous2-recomp`), whatever directory the game is launched from;
@@ -413,7 +415,7 @@ that variable, a removed line goes back to it, and each change logs
 `PS3RECOMP_ENG_TEXHASH_FULL`, `PS3RECOMP_ENG_SKIP_FP` (the whole list),
 `PS3_SPU_FASTJOB`, `PS3_SPU_STUB_MICRO`, `PS3_SPU_STACK_HINT`,
 `PS3_SPU_DRAIN_INLINE` (the drain's inline launch check), `PS3_DISPLAY_GAMMA`,
-`PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO` and `PS3RECOMP_METAL_FPS`; everything else
+`PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO`, `PS3RECOMP_METAL_FPS` and `PS3_BUTTON_ICONS`; everything else
 (the GPU light/SSAO passes among them) is still read once at start. Without the
 variable nothing changes. `tools/ab_live.sh <name> <KNOB> [B] [A]` uses it for
 an fps A/B inside one headless run: it flips the knob every 20 s from 200 s
