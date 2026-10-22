@@ -12,7 +12,7 @@
   const flags = window.__UI_MOCK__ || {};
   const settings = {
     uiLang: "pt-BR", installDir: "/Users/player/Library/Application Support/infamous2-recomp/install",
-    gameLang: "pt", gpuLight: true, gpuSsao: true, skipOcclusion: true, gammaOverride: false, gamma: 1.0,
+    gameLang: "pt", voiceLang: "english", textLang: "", gpuLight: true, gpuSsao: true, skipOcclusion: true, gammaOverride: false, gamma: 1.0,
     aniso: 8, aa: "fxaa", sharpen: 0.35, upscale: "metalfx", mouse: true, mouseSens: 1.25, mouseInvertY: false,
     mouseInvertX: false, mouseDeadzone: 30, mouseCapture: true, windowMode: "windowed", windowSize: "1920x1080",
     gameIcon: false, display: "", vsync: true, audioVolume: 85, audioDevice: "", rumble: true, rumbleStrength: 100,
@@ -46,6 +46,10 @@
   const answers = {
     get_settings: () => settings,
     save_settings: () => null,
+    game_languages: () => ({
+      voice: ["brazilian", "dutch", "english", "french", "german", "italian", "japanese", "latino", "polish", "portuguese", "russian", "spanish", "turkish"],
+      text: ["brazilian", "british", "chinese", "dutch", "english", "french", "german", "italian", "japanese", "korean", "latino", "polish", "portuguese", "russian", "spanish", "turkish"],
+    }),
     list_trophies: () => ({
       commId: "NPWR01730", title: "inFAMOUS 2",
       trophies: [

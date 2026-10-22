@@ -100,7 +100,8 @@ Advanced.
   Balanced / Quality). macOS Game Mode turns on in fullscreen.
 - **Controls:** remap keyboard, mouse and controller, mouse camera,
   vibration; **audio** volume and output; **game language** (the ones your
-  copy ships).
+  copy ships), with the voice and the subtitles/menus each in its own
+  language if you like (e.g. English voice, Portuguese subtitles).
 - **Saves:** list, back up, restore, import/export with RPCS3, `.zip`.
 - **Trophies:** the game's trophies with your unlocks (names and icons from
   your copy), and a "Trophy unlocked" notice in the game.
@@ -331,6 +332,7 @@ controller combo off, `PS3_OVERLAY=0` the whole menu.
 | Audio | master volume |
 | Controls | play with controller + keyboard/mouse, controller only, or keyboard/mouse only; the button icons in the game's prompts (automatic, PlayStation, Xbox, keyboard and mouse); vibration on/off and strength; mouse camera on/off, sensitivity and vertical/horizontal inversion; a table of every PS3 button with its key, mouse button and controller button: click a cell (or pick it with the pad and press ✕), press the new input and it applies at once (Esc cancels, right-click unbinds, "Restore defaults"). The press goes to the menu, never to the game. Rebindings are saved straight away to the same `input.toml` the launcher's Controls screen edits |
 | Performance | a small HUD in a corner that stays when the menu is closed: fps, frame time with a graph, CPU cores in use and threads busy (≥ 80% of a core: here mostly the SPU threads), the RSX's Metal encode time and the GPU wait per frame; corner, opacity and graph are options |
+| Game | the game language, the voice and the text (menus and subtitles), each among the languages your copy has, and which ones are in use now. The game loads its language when it starts, so these apply when it restarts (the menu says so) |
 
 What the menu changes is saved when it closes, to
 `~/Library/Application Support/infamous2-recomp/overlay.ini` (`run.sh` sets
@@ -365,6 +367,9 @@ class; it did not raise the frame rate in tests and coincided with hangs.
 
 | Variable | What it does |
 | --- | --- |
+| `PS3_LANG=pt\|en\|es\|fr\|ru\|ja\|...` | the console language (default `pt`: Brazilian Portuguese). This Americas release picks its own files only for `pt` (brazilian), `es` (latino), `en` and `fr`, and plays every other language in English; the port then serves that language's files itself, so `ru`, `ja`, `de`, `it`, `nl`, `pl`, `tr`, `ko`, `zh-t`, `en-gb`, `pt-pt` (European Portuguese) and `es-es` (Spanish of Spain) work too (Korean, Chinese and UK English have no dub: English voice). Read once at start |
+| `PS3_VOICE_LANG=<name>` | the dub in another language: dialogue and the voice track of the movies. `<name>` is the file name in your copy: `english`, `brazilian`, `portuguese`, `latino`, `spanish`, `french`, `german`, `italian`, `dutch`, `polish`, `russian`, `turkish`, `japanese`. Unset: the game language's. E.g. `PS3_LANG=pt PS3_VOICE_LANG=english` = English voice, Portuguese text |
+| `PS3_TEXT_LANG=<name>` | menus, HUD and subtitles in another language (they change together: the font with the letters comes with the menus); the names above plus `british`, `korean`, `chinese`. Unset: the game language's. The log shows each file served (`[lang] ...`) |
 | `PS3_WINDOW_MODE=windowed\|fullscreen\|borderless` | how the game opens: a window (default), macOS fullscreen (a Space of its own) or borderless fullscreen (covers the screen in place, menu bar and Dock hidden, instant app switching) |
 | `PS3_WINDOW_SIZE=<w>x<h>` | the window's size in points, e.g. `1920x1080` (default 1280x720, shrunk to fit the screen) |
 | `PS3_WINDOW_ICON=game\|<file>\|none` | the Dock icon: by default the launcher's original placeholder (`infamous2-lle/window_icon.png`, no Sony art); `game` uses your copy's own `PS3_GAME/ICON0.PNG` |
