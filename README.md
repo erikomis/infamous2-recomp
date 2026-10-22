@@ -119,6 +119,8 @@ Advanced.
   is older than the app's sources, and offers a rebuild.
 - **Your copy's icon** in the Dock for the app and the game (read from your
   install, never shipped).
+- **Play shortcut** (Home > Status): a "Play inFAMOUS 2" icon on the Desktop
+  that opens the app and starts the game at once with your settings.
 
 **In the game,** F1 (fn+F1), Cmd+, or L3+R3 opens the **in-game menu**:
 image (gamma, sharpening, FXAA/SMAA, vibrance, contrast, MetalFX, vsync,
@@ -155,17 +157,21 @@ builds only on macOS so far); the installers are not signed yet.
 
 What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
 
-- **Steady 30 fps or more:** finding and cutting the remaining frame-time
-  dips (26-28 fps moments) in New Marais.
-- **Dark facades:** the shadow-map border fix above, then turning the
-  occlusion volumes back on.
-- **More ReShade-style effects** in the final image pass (SMAA, vibrance and
-  contrast are in): colour LUTs, local contrast, film grain and vignette.
-- **Pull requests to [ps3recomp](https://github.com/sp00nznet/ps3recomp)**
-  with this port's toolkit fixes (#372-#375 open), and upstream fixes adopted
-  here (#358, #340, #326, #349, #360, #366, issue #364).
-- New ideas (pipeline cache, community patches, an in-game capture key,
-  trophies, app auto-update, a Steam shortcut) are listed in the roadmap.
+- **Steady 30 fps or more:** the shader cache, a 1 ms frame clock and the
+  vertex-cache prune (2026-10-22) took out the first-use hitches and part of
+  the dips; what is left in New Marais is mostly SPU time.
+- **Dark facades:** fixed on main (the sun shadow maps above); once that is
+  confirmed in a window the occlusion volumes go back on.
+- **Keyboard icons in the button prompts**, instead of the PS3 ones.
+- **More ReShade-style effects** in the final image pass (SMAA, vibrance,
+  contrast, colour LUTs, vignette and grain are in): curves and local
+  contrast.
+- **Pull requests to [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
+  all of this port's PRs up to #375 were merged on 2026-10-19; the sixth
+  round (#470 SMAA, vibrance and contrast; #472 controller hot-plug; #476
+  texture border colour) is open.
+- New ideas (an app auto-update, a Steam shortcut, a controller combo for the
+  capture, a PNG screenshot key) are listed in the roadmap.
 
 ## Building from source
 
