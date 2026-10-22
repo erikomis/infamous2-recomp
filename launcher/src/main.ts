@@ -19,7 +19,7 @@ interface Settings {
   textLang: string;
   gpuLight: boolean;
   gpuSsao: boolean;
-  skipOcclusion: boolean;
+  skipOcclusionVolumes: boolean;
   gammaOverride: boolean;
   gamma: number;
   aniso: number;
@@ -409,7 +409,7 @@ function bindSettings() {
   };
   bindCheck("gpu-light", "gpuLight");
   bindCheck("gpu-ssao", "gpuSsao");
-  bindCheck("skip-occ", "skipOcclusion");
+  bindCheck("skip-occ", "skipOcclusionVolumes");
   bindCheck("gamma-on", "gammaOverride");
   bindCheck("mouse-on", "mouse");
   bindCheck("mouse-invert", "mouseInvertY");
@@ -530,7 +530,7 @@ function bindSettings() {
       patches: [],
       gpuLight: true,
       gpuSsao: true,
-      skipOcclusion: true,
+      skipOcclusionVolumes: false,
       gammaOverride: false,
       gamma: 1.0,
       aniso: 0,
