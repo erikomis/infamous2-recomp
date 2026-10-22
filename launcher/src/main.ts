@@ -667,6 +667,7 @@ function renderHome() {
   play.classList.toggle("stop", gameRunning);
   play.disabled = rebuildRunning || !status.hostSupported;
   show($("run-state"), gameRunning);
+  show($("make-shortcut"), !!status.appBundle && status.os === "macos" && !!inst);
   renderStatusList();
   renderReport();
   show($("home-unsupported"), !status.hostSupported);
@@ -746,6 +747,22 @@ $("play").addEventListener("click", async () => {
     return;
   }
   await startGame(false);
+});
+/** Home > Status > "Play shortcut on the Desktop": a small .app that opens
+ * this launcher with --play, which starts the game at once (macOS). */
+$("make-shortcut").addEventListener("click", async () => {
+  const btn = $<HTMLButtonElement>("make-shortcut");
+  const msg = $("home-msg");
+  btn.disabled = true;
+  try {
+    const path = await invoke<string>("create_play_shortcut");
+    // (not revealed with reveal(): `open` on an .app would launch it, i.e. the game)
+    msg.textContent = t("home.shortcutDone", { path });
+  } catch (e) {
+    msg.textContent = t("home.shortcutFailed", { e: String(e) });
+  } finally {
+    btn.disabled = false;
+  }
 });
 $("go-install").addEventListener("click", () => showView("advanced", "install"));
 $("go-saves").addEventListener("click", () => {
@@ -1418,6 +1435,9 @@ async function main() {
   await refreshStatus();
   refreshReport();
   renderPrereqs();
+  // opened by the Play shortcut (--play): start the game as the Play button would
+  const playNow = await invoke<boolean>("take_play_request").catch(() => false);
+  if (playNow && status?.install && status.hostSupported && !gameRunning && !rebuildRunning) await startGame(false);
   if (!status?.install) showView("advanced", "install");
   if (status?.hostSupported) {
     // "only pick the game folder": RPCS3's copy and licence are found on their own
