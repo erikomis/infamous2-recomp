@@ -159,9 +159,8 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
   mapas de sombra do sol eram lidos de um buffer de cor vazio no mesmo
   endereço do buffer de profundidade, então tudo contava como no sol e o termo
   do sol, sem limite, ficava negativo do lado oposto. Os passes de occlusion
-  volume, descartados como causa, continuam desligados por padrão até a
-  confirmação com janela (Desempenho > desmarcar o pulo das sombras de
-  oclusão, ou `PS3RECOMP_ENG_SKIP_FP=`, desenha de novo).
+  volume (a sombra suave de contato), desligados enquanto eram suspeitos,
+  voltaram a ser desenhados na main.
 - Corrigido na v0.2.2: a falha rara do SPU no job de geometria do Edge
   (cerca de 1 execução em 8) e o travamento raro em que o job de luz não
   terminava o frame eram o mesmo bug, um cache desatualizado de código SPU
@@ -178,8 +177,6 @@ O que está sendo feito agora (detalhes no [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md))
   de 1 ms e a poda do cache de vértices (2026-10-22) tiraram os engasgos de
   primeiro uso e parte das quedas; o que sobra em New Marais é sobretudo tempo
   das SPUs.
-- **Fachadas escuras:** corrigido na main (os mapas de sombra do sol, acima);
-  confirmado isso numa janela, os occlusion volumes voltam.
 - **Ícones de teclado nos prompts de botão**, no lugar dos do PS3.
 - **Mais efeitos no estilo do ReShade** no passo final da imagem (SMAA,
   vibrance, contraste, LUTs de cor, vinheta e granulado já entraram): curvas

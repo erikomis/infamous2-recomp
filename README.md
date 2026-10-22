@@ -150,10 +150,8 @@ builds only on macOS so far); the installers are not signed yet.
   sides) went black, and sun shadows were missing everywhere. The sun shadow
   maps were read from an empty colour buffer at the same address as their
   depth buffer, so every surface counted as sunlit and the unclamped sun term
-  went negative on the far side. The occlusion-volume passes, ruled out as the
-  cause, are still skipped by default until this is confirmed in a window
-  (Performance > untick the occlusion skip, or `PS3RECOMP_ENG_SKIP_FP=`, draws
-  them).
+  went negative on the far side. The occlusion-volume passes (soft contact
+  shadows), skipped while they were the suspect, are drawn again on main.
 - Fixed in v0.2.2: the rare Edge geometry SPU fault (about 1 run in 8) and
   the rare hang where the light job never finished a frame were the same
   bug, a stale cache of translated SPU code. None since, in any test run.
@@ -168,8 +166,6 @@ What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
 - **Steady 30 fps or more:** the shader cache, a 1 ms frame clock and the
   vertex-cache prune (2026-10-22) took out the first-use hitches and part of
   the dips; what is left in New Marais is mostly SPU time.
-- **Dark facades:** fixed on main (the sun shadow maps above); once that is
-  confirmed in a window the occlusion volumes go back on.
 - **Keyboard icons in the button prompts**, instead of the PS3 ones.
 - **More ReShade-style effects** in the final image pass (SMAA, vibrance,
   contrast, colour LUTs, vignette and grain are in): curves and local

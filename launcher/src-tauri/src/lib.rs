@@ -59,8 +59,11 @@ pub struct Settings {
     pub gpu_light: bool,
     /// PS3RECOMP_ENG_GPU_SSAO: the SSAO job on the GPU (needs gpu_light).
     pub gpu_ssao: bool,
-    /// PS3RECOMP_ENG_SKIP_FP: skip the occlusion-volume passes that black out facades.
-    pub skip_occlusion: bool,
+    /// PS3RECOMP_ENG_SKIP_FP: skip the occlusion-volume passes (the soft
+    /// contact shadows). Off by default since v0.2.8; the old `skipOcclusion`
+    /// key (on by default, from when they were blamed for the dark facades)
+    /// is not read, so every install gets them back.
+    pub skip_occlusion_volumes: bool,
     /// PS3_DISPLAY_GAMMA when set; otherwise the game's own brightness setting.
     pub gamma_override: bool,
     pub gamma: f32,
@@ -146,7 +149,7 @@ impl Default for Settings {
             patches: Vec::new(),
             gpu_light: true,
             gpu_ssao: true,
-            skip_occlusion: true,
+            skip_occlusion_volumes: false,
             gamma_override: false,
             gamma: 1.0,
             aniso: 0,
@@ -607,6 +610,9 @@ fn parse_env_lines(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The occlusion-volume passes (props/buildings, characters) by fragment-program hash.
+const OCCLUSION_VOLUME_FPS: &str = "5f740845528b0e62,7875289ea6b856a6";
+
 /// The environment "Play" adds on top of run.sh's defaults. run.sh uses
 /// `${VAR-default}`, so an empty value turns a default off, exactly as on the
 /// command line.
@@ -638,8 +644,8 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     if !s.gpu_light || !s.gpu_ssao {
         set("PS3RECOMP_ENG_GPU_SSAO", String::new()); // the GPU SSAO needs the GPU light pass
     }
-    if !s.skip_occlusion {
-        set("PS3RECOMP_ENG_SKIP_FP", String::new());
+    if s.skip_occlusion_volumes {
+        set("PS3RECOMP_ENG_SKIP_FP", OCCLUSION_VOLUME_FPS.into());
     }
     if s.gamma_override {
         set("PS3_DISPLAY_GAMMA", format!("{:.2}", s.gamma.clamp(0.8, 1.2)));
@@ -2657,14 +2663,14 @@ mod tests {
         assert!(!env.contains_key("PS3RECOMP_ENG_GPU_LIGHT")); // run.sh default stays
         assert!(!env.contains_key("PS3_DISPLAY_GAMMA"));
         s.gpu_light = false;
-        s.skip_occlusion = false;
+        s.skip_occlusion_volumes = true;
         s.gamma_override = true;
         s.gamma = 1.5;
         s.mouse = false;
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3RECOMP_ENG_GPU_LIGHT").map(String::as_str), Some(""));
         assert_eq!(env.get("PS3RECOMP_ENG_GPU_SSAO").map(String::as_str), Some(""));
-        assert_eq!(env.get("PS3RECOMP_ENG_SKIP_FP").map(String::as_str), Some(""));
+        assert_eq!(env.get("PS3RECOMP_ENG_SKIP_FP").map(String::as_str), Some(OCCLUSION_VOLUME_FPS));
         assert_eq!(env.get("PS3_DISPLAY_GAMMA").map(String::as_str), Some("1.20"));
         assert_eq!(env.get("PS3_MOUSE").map(String::as_str), Some("0"));
         assert!(!env.contains_key("PS3_WINDOW_MODE")); // windowed is the default
