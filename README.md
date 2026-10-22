@@ -136,12 +136,14 @@ builds only on macOS so far); the installers are not signed yet.
 
 ## Known problems
 
-- In some close-up views at dusk whole facades (and Cole) went black;
-  `run.sh` skips the occlusion-volume passes for now (only the soft contact
-  darkening near props is lost). The port reproduces their math exactly; the
-  likely real cause, shadow maps sampled with a black instead of a white
-  border outside the sun's frustum, has a fix in testing.
-  `PS3RECOMP_ENG_SKIP_FP=` (empty) draws the volumes again.
+- Fixed in v0.2.5: facades turned away from the sun (and Cole's back and
+  sides) went black, and sun shadows were missing everywhere. The sun shadow
+  maps were read from an empty colour buffer at the same address as their
+  depth buffer, so every surface counted as sunlit and the unclamped sun term
+  went negative on the far side. The occlusion-volume passes, ruled out as the
+  cause, are still skipped by default until this is confirmed in a window
+  (Performance > untick the occlusion skip, or `PS3RECOMP_ENG_SKIP_FP=`, draws
+  them).
 - Fixed in v0.2.2: the rare Edge geometry SPU fault (about 1 run in 8) and
   the rare hang where the light job never finished a frame were the same
   bug, a stale cache of translated SPU code. None since, in any test run.
