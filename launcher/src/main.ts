@@ -46,6 +46,7 @@ interface Settings {
   audioDevice: string;
   rumble: boolean;
   rumbleStrength: number;
+  buttonIcons: string;
   showFps: boolean;
   extraEnv: string;
   gamePaths: string[];
@@ -381,6 +382,7 @@ function bindSettings() {
   bindSelect("display", "windowMode");
   bindSelect("q-display", "windowMode");
   bindSelect("window-size", "windowSize");
+  bindSelect("button-icons", "buttonIcons");
   bindRange("gamma", "gamma", (v) => v.toFixed(2));
   bindGraphics(bindRange);
   bindRange("mouse-sens", "mouseSens", (v) => `${v.toFixed(2)}×`);
@@ -478,6 +480,7 @@ function bindSettings() {
       audioDevice: "",
       rumble: true,
       rumbleStrength: 100,
+      buttonIcons: "auto",
       showFps: false,
       extraEnv: "",
     }, keep);
@@ -488,7 +491,7 @@ function bindSettings() {
 }
 
 /** A fixed list (window mode and size, anisotropic, AA, upscaling). */
-function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa" | "upscale") {
+function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa" | "upscale" | "buttonIcons") {
   const el = $<HTMLSelectElement>(id);
   const sync = () => {
     el.value = String(settings[key]);

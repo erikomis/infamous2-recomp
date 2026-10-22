@@ -114,7 +114,11 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   it, the mouse options: camera on/off, sensitivity, vertical and horizontal
   inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
   and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
-  rumbles the controller through the Gamepad API.
+  rumbles the controller through the Gamepad API; last, **Button icons /
+  Ícones dos botões**: the glyphs in the game's prompts, Automatic (the device
+  used last), PlayStation, Xbox or Keyboard and mouse (`PS3_BUTTON_ICONS`,
+  passed only when it is not Automatic, so a choice made in the in-game menu
+  is kept).
 - **Advanced / Avançado**, five tabs:
   - **Install / rebuild**, three steps: the machine's requirements (with the
     installs above; a compact grid once everything is in place), the game
