@@ -202,7 +202,10 @@ cd infamous2-lle
 ./run.sh
 ```
 
-Um controle (DualSense testado) funciona direto. Teclado e mouse somam com ele:
+Um controle (DualSense testado) funciona direto. Se ele for desligado e ligado
+de novo no meio do jogo (um DualSense no Bluetooth que dormiu), ou conectado
+depois, o jogo o reconhece sozinho, na mesma porta do PS3; não precisa
+reiniciar. Teclado e mouse somam com ele:
 
 | Tecla | PS3 |
 | ----- | --- |
@@ -224,7 +227,8 @@ ou Cmd solta, assim como trocar de app. `PS3_MOUSE_CAPTURE=0` volta para a
 câmera sem captura.
 
 Todas as associações acima podem ser trocadas num arquivo de controles: a
-tela **Controles** do launcher grava esse arquivo, ou escreva à mão em
+tela **Controles** do launcher grava esse arquivo, a aba **Controles** do menu
+do jogo (F1, abaixo) também (a mudança vale na hora), ou escreva à mão em
 `~/Library/Application Support/infamous2-recomp/input.toml` (`input.ini`
 também serve; `PS3_INPUT_MAP=<arquivo>` escolhe outro, `PS3_INPUT_MAP=`
 nenhum). O que o arquivo não cita fica como na tabela acima (os botões laterais do
@@ -306,7 +310,7 @@ apertados, nenhum chega. `PS3_OVERLAY_PAD=0` desliga a combinação no controle,
 | --- | --- |
 | Imagem | a gama própria (ou o brilho do próprio jogo), nitidez, FXAA, escala MetalFX, vsync, janela / tela cheia do macOS / sem bordas; a filtragem anisotrópica vale no próximo início |
 | Áudio | volume geral |
-| Controles | vibração liga/desliga e força, sensibilidade do mouse e inversão vertical/horizontal |
+| Controles | jogar com controle + teclado/mouse, só o controle ou só teclado/mouse; vibração liga/desliga e força; câmera no mouse liga/desliga, sensibilidade e inversão vertical/horizontal; uma tabela com cada botão do PS3 e sua tecla, botão do mouse e botão do controle: clique numa célula (ou escolha com o controle e aperte ✕), aperte a nova entrada e ela vale na hora (Esc cancela, botão direito limpa, "Restaurar padrões"). O aperto vai para o menu, nunca para o jogo. As trocas são salvas na hora no mesmo `input.toml` que a tela Controles do launcher edita |
 | Desempenho | um painel pequeno num canto que fica com o menu fechado: fps, tempo de quadro com gráfico, núcleos de CPU em uso e threads ocupadas (≥ 80% de um núcleo: aqui sobretudo as das SPUs), o tempo de codificação Metal do RSX e a espera pela GPU por quadro; canto, opacidade e gráfico são opções |
 
 O que o menu muda é salvo quando ele fecha, em
@@ -356,6 +360,7 @@ fps e coincidiu com travamentos.
 | `PS3_AUDIO_DEVICE=<nome>` | a saída de áudio, pelo nome nos ajustes de Som (sem diferenciar maiúsculas, ou só um pedaço: `AirPods`); não encontrada ou sem valor, a padrão do sistema (que o jogo acompanha quando muda) |
 | `PS3_RUMBLE=0` | sem vibração no controle. Ligada por padrão: a vibração do jogo chega a controles DualSense, DualShock 4 e Xbox pelo SDL |
 | `PS3_RUMBLE_STRENGTH=<0..200>` | intensidade da vibração em porcentagem (padrão 100); acima de 100 reforça as vibrações fracas, limitado ao máximo dos motores. `PS3_RUMBLE_LOG=1` mostra cada pedido que o jogo faz |
+| `PS3_INPUT_MODE=both\|controller\|keyboard` | com o que se joga: tudo (padrão), só o controle (teclas e mouse não fazem nada no jogo) ou só teclado e mouse (o controle ainda abre o menu com L3+R3). O menu do jogo troca na hora |
 
 Saves e troféus ficam em `~/Library/Application Support/infamous2-recomp/gamedata`
 (Linux: `~/.local/share/infamous2-recomp`), não importa de qual pasta o jogo é aberto;

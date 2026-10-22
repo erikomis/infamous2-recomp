@@ -192,8 +192,10 @@ cd infamous2-lle
 ./run.sh
 ```
 
-A controller (DualSense tested) works out of the box. Keyboard and mouse add
-on top of it:
+A controller (DualSense tested) works out of the box. One that is switched off
+and on again mid-game (a DualSense on Bluetooth that went to sleep), or
+plugged in later, is picked up again by itself, on the PS3 port it had; no
+restart needed. Keyboard and mouse add on top of it:
 
 | Key | PS3 |
 | --- | --- |
@@ -215,7 +217,8 @@ mouse); Esc or Cmd releases it, and so does switching to another app.
 `PS3_MOUSE_CAPTURE=0` goes back to the uncaptured camera.
 
 Every binding above can be changed in a controls file: the launcher's
-**Controls** screen writes it, or write it by hand at
+**Controls** screen writes it, so does the in-game menu's **Controls** tab
+(F1, below; the change applies at once), or write it by hand at
 `~/Library/Application Support/infamous2-recomp/input.toml` (`input.ini` also
 works; `PS3_INPUT_MAP=<file>` picks another one, `PS3_INPUT_MAP=` none).
 Anything the file leaves out keeps the layout above (the mouse's side
@@ -296,7 +299,7 @@ controller combo off, `PS3_OVERLAY=0` the whole menu.
 | --- | --- |
 | Image | the gamma override (or the game's own brightness), sharpening, FXAA, MetalFX upscaling, vsync, window / macOS fullscreen / borderless; anisotropic filtering applies at the next start |
 | Audio | master volume |
-| Controls | vibration on/off and strength, mouse sensitivity and vertical/horizontal inversion |
+| Controls | play with controller + keyboard/mouse, controller only, or keyboard/mouse only; vibration on/off and strength; mouse camera on/off, sensitivity and vertical/horizontal inversion; a table of every PS3 button with its key, mouse button and controller button: click a cell (or pick it with the pad and press ✕), press the new input and it applies at once (Esc cancels, right-click unbinds, "Restore defaults"). The press goes to the menu, never to the game. Rebindings are saved straight away to the same `input.toml` the launcher's Controls screen edits |
 | Performance | a small HUD in a corner that stays when the menu is closed: fps, frame time with a graph, CPU cores in use and threads busy (≥ 80% of a core: here mostly the SPU threads), the RSX's Metal encode time and the GPU wait per frame; corner, opacity and graph are options |
 
 What the menu changes is saved when it closes, to
@@ -345,6 +348,7 @@ class; it did not raise the frame rate in tests and coincided with hangs.
 | `PS3_AUDIO_DEVICE=<name>` | the audio output, by its name in Sound settings (any case, or a part: `AirPods`); not found or unset, the system default (which the game follows when it changes) |
 | `PS3_RUMBLE=0` | no controller vibration. On by default: the game's rumble reaches DualSense, DualShock 4 and Xbox controllers through SDL |
 | `PS3_RUMBLE_STRENGTH=<0..200>` | vibration strength in percent (default 100); above 100 strengthens light rumble, capped at the motors' maximum. `PS3_RUMBLE_LOG=1` prints every request the game makes |
+| `PS3_INPUT_MODE=both\|controller\|keyboard` | what plays the game: everything (default), the controller only (keys and mouse do nothing in the game), or keyboard and mouse only (the controller still opens the menu with L3+R3). The in-game menu switches it live |
 
 Saves and trophies live in `~/Library/Application Support/infamous2-recomp/gamedata`
 (Linux: `~/.local/share/infamous2-recomp`), whatever directory the game is launched from;
