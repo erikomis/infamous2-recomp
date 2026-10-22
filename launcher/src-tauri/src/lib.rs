@@ -55,6 +55,10 @@ pub struct Settings {
     pub aa: String,
     /// PS3_SHARPEN: contrast-adaptive sharpening, 0 (off) to 1.
     pub sharpen: f32,
+    /// PS3_VIBRANCE: -1 (muted) .. 0 (off) .. 1 (vivid).
+    pub vibrance: f32,
+    /// PS3_CONTRAST: 0.5 .. 1 (off) .. 1.5.
+    pub contrast: f32,
     /// PS3_UPSCALE: "" (off) or "metalfx" (macOS 13+).
     pub upscale: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
@@ -117,6 +121,8 @@ impl Default for Settings {
             aniso: 0,
             aa: String::new(),
             sharpen: 0.0,
+            vibrance: 0.0,
+            contrast: 1.0,
             upscale: String::new(),
             mouse: true,
             mouse_sens: 1.0,
@@ -585,6 +591,12 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if s.sharpen >= 0.005 {
         set("PS3_SHARPEN", format!("{:.2}", s.sharpen.min(1.0)));
+    }
+    if s.vibrance.abs() >= 0.005 {
+        set("PS3_VIBRANCE", format!("{:.2}", s.vibrance.clamp(-1.0, 1.0)));
+    }
+    if (s.contrast - 1.0).abs() >= 0.005 && s.contrast > 0.0 {
+        set("PS3_CONTRAST", format!("{:.2}", s.contrast.clamp(0.5, 1.5)));
     }
     if s.upscale == "metalfx" {
         set("PS3_UPSCALE", "metalfx".into());
@@ -2302,6 +2314,13 @@ mod tests {
         assert!(!env.contains_key("PS3_AA"), "an unknown AA mode stays out");
         s.aniso = 1;
         s.sharpen = 0.0;
+        s.vibrance = 0.4;
+        s.contrast = 1.2;
+        let env2: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env2.get("PS3_VIBRANCE").map(String::as_str), Some("0.40"));
+        assert_eq!(env2.get("PS3_CONTRAST").map(String::as_str), Some("1.20"));
+        s.vibrance = 0.0;
+        s.contrast = 1.0;
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert!(!env.contains_key("PS3_ANISO"));
         assert!(!env.contains_key("PS3_SHARPEN"));

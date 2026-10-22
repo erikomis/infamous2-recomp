@@ -341,6 +341,8 @@ class; it did not raise the frame rate in tests and coincided with hangs.
 | `PS3_DISPLAY=<n>\|<name>` | the screen the game opens on, which fullscreen and borderless then cover: `1` is the one with the menu bar, `2` the next, or a screen's name as System Settings shows it (`DELL U2720Q`; any case, or a part of it). Default: the main screen |
 | `PS3_VSYNC=0` | presents frames without waiting for the screen's refresh (less latency, may tear in fullscreen). The game's 30 fps pacing comes from its own vblank clock and does not change |
 | `PS3_ANISO=2\|4\|8\|16` | anisotropic filtering: ground and walls seen at an angle stay sharp. Only the game's mipmapped textures change. Default off |
+| `PS3_VIBRANCE=-1..1` | Vibrance: saturation raised most on dull colours (negative mutes). Default 0 (off) |
+| `PS3_CONTRAST=0.5..1.5` | Contrast around mid-grey. Default 1 (off) |
 | `PS3_AA=fxaa` / `smaa` | Anti-aliasing on the game's 1280x720 image, before any scaling: FXAA (cheapest, slightly soft) or SMAA 1x (sharper text and textures). Default off |
 | `PS3_SHARPEN=<0..1>` | contrast-adaptive sharpening (AMD CAS style) at the output resolution; 0 (default) is off |
 | `PS3_UPSCALE=metalfx` | MetalFX spatial upscaling from 1280x720 to the window's pixel size (macOS 13+), instead of the layer's plain stretch. Falls back to the plain path, with a line in the log, where MetalFX is missing. Default off |

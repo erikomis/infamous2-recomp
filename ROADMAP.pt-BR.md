@@ -207,7 +207,7 @@ Um app para **macOS, Windows e Linux**, com a mesma interface nos três, que lev
 
 Ideias levantadas olhando o port de God of War III para PC, o ReShade e o que os jogadores pedem; ainda não feitas.
 
-- [ ] **Efeitos no estilo do ReShade** no passo final da imagem (o SMAA já entrou): vibrance/contraste/curvas, LUT de cor (filtros prontos e o do próprio jogador), contraste local (Clarity), granulado e vinheta. Ligados no app (Gráficos) e no menu F1, ao vivo.
+- [ ] **Efeitos no estilo do ReShade** no passo final da imagem (o SMAA já entrou; vibrance e contraste entraram em 2026-10-21: `PS3_VIBRANCE`, `PS3_CONTRAST`, em Gráficos e no menu F1, ao vivo): curvas, LUT de cor (filtros prontos e o do próprio jogador), contraste local (Clarity), granulado e vinheta. Ligados no app (Gráficos) e no menu F1, ao vivo.
 - [ ] **Cache persistente de pipelines** (`MTLBinaryArchive` com os shaders já traduzidos) e aquecimento em segundo plano ao abrir o jogo: tira os engasgos da primeira vez que um efeito ou lugar aparece.
 - [ ] **Patches da comunidade** lidos do `patch.yml` do RPCS3 do próprio jogador (nada é distribuído aqui): "Skip Intro" (FlexBy) e "Extended FOV" (illusion) existem para o NPUA80638 01.03. Dados aplicados no carregamento; código, no EBOOT antes da tradução (`rebuild.py`). Com crédito aos autores.
 - [ ] **Atalho de captura dentro do jogo** para o modo de depuração (uma tecla e uma combinação no controle), sem trocar para o app; e **captura de tela** normal em PNG.
