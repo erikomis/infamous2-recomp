@@ -77,8 +77,9 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   same settings as the Graphics/Performance pages, kept in sync), **Last
   save** (title, progress, date; manage saves, saves folder) and **Status**
   (installed/running/debug mode, version, build, port commit, folder; links to
-  the log viewer, the log file and Updates). A strip at the bottom leads to
-  Debug mode. Play first backs up the saves (see Saves).
+  the log viewer, the log file and Updates, and on macOS **Play shortcut on
+  the Desktop**: see "The Play shortcut" below). A strip at the bottom leads
+  to Debug mode. Play first backs up the saves (see Saves).
 - **Graphics / Gráficos**: Display (window mode `PS3_WINDOW_MODE`, size
   `PS3_WINDOW_SIZE`, screen `PS3_DISPLAY` from AppKit's screen names through
   `osascript`, "Your copy's icon in the Dock": see "The icon from your copy"
@@ -477,6 +478,28 @@ by default) is one switch for both Dock icons, macOS only:
 None of this art is in the repository or a bundle: `check_bundle.py`
 rejects `ICON0*`/`PIC1*` by name and any 320x176 PNG by content.
 
+## The Play shortcut
+
+`--play` on the launcher's command line starts the game as soon as the window
+is up, exactly as the Play button would (the saves backup, the saved settings,
+the log), and the launcher stays open to follow it:
+
+```sh
+open -b io.github.erikomis.infamous2recomp --args --play
+```
+
+Home > Status > **Play shortcut on the Desktop** writes `~/Desktop/Play
+inFAMOUS 2.app`, a tiny bundle whose executable is that one line
+(`src-tauri/src/play_shortcut.rs`): it finds the launcher by its bundle id, so
+it keeps working when the app moves. Its icon is the launcher's own `.icns`;
+with "Your copy's icon in the Dock" on, the square drawn from the copy's
+`ICON0.PNG` goes on it as a Finder icon at that moment (nothing from the game
+ships). Pressing the button again replaces it; a file of the same name that
+the launcher did not make is left alone. When the launcher is already open,
+macOS only brings it to the front (the arguments of a second `open` are not
+passed on), so press Play there. Steam or any other front end can run the
+same `open` line.
+
 ## The rebuild script on its own
 
 ```sh
@@ -498,13 +521,11 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
   signed and not notarized, and the Windows installers are unsigned.
 - Building and playing on Windows and Linux: the app installs there but the
   game's renderer and window are macOS-only so far.
-- "Capture this frame" is a button in the launcher, so the player switches
-  windows (Cmd+Tab) to press it; an in-game hotkey needs the runtime (or a
-  global shortcut in the app). Old report folders are not cleaned up yet.
+- In debug mode F12 in the game captures the frame (as "Capture this frame"
+  does); a controller combo for it and a plain PNG screenshot key are not
+  done. Old report folders are not cleaned up yet.
 - Homebrew itself is not installed by the app (it needs the administrator
   password in Terminal); the app shows the command.
-- From the God of War III PC launcher, not done yet: a "Play" shortcut or
-  executable that starts the game straight away with the saved settings (needs
-  a `--play` mode in the app), button-prompt icon
+- From the God of War III PC launcher, not done yet: button-prompt icon
   styles, mods, "Add to Steam", downloading and installing app updates, a GUI
-  scale option.
+  scale option. (The "Play" shortcut is done: see above.)
