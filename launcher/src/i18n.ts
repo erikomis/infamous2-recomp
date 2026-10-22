@@ -476,6 +476,11 @@ const en = {
   "home.allGraphics": "All graphics settings",
   "home.status": "Status",
   "home.viewLog": "View the game log",
+  "home.shortcut": "Play shortcut on the Desktop",
+  "home.shortcutHint":
+    "Puts \"Play inFAMOUS 2\" on the Desktop: double-click it to open this app and start the game at once with your settings (the same as Play here, save backup included).",
+  "home.shortcutDone": "Made {path}. Double-click it to start the game straight away (if this app is already open it only comes to the front).",
+  "home.shortcutFailed": "Could not make the shortcut: {e}",
   "home.reportLead": "Something looks or sounds wrong? Play in debug mode: the problems are logged, captured and analysed, and the .zip can go to an issue.",
   "home.reportGo": "How it works",
   "home.st.state": "Game",
@@ -976,6 +981,11 @@ const ptBR: Partial<Record<Key, string>> = {
   "home.allGraphics": "Todas as opções de gráficos",
   "home.status": "Status",
   "home.viewLog": "Ver o log do jogo",
+  "home.shortcut": "Atalho Jogar na Mesa",
+  "home.shortcutHint":
+    "Põe \"Play inFAMOUS 2\" na Mesa: um duplo clique abre este app e já começa o jogo com os seus ajustes (igual ao Jogar daqui, com o backup dos saves).",
+  "home.shortcutDone": "Criado em {path}. Um duplo clique começa o jogo direto (se este app já estiver aberto, ele só vem para a frente).",
+  "home.shortcutFailed": "Não deu para criar o atalho: {e}",
   "home.reportLead": "Algo aparece ou soa errado? Jogue em modo de depuração: os problemas são anotados, capturados e analisados, e o .zip pode ir numa issue.",
   "home.reportGo": "Como funciona",
   "home.st.state": "Jogo",
@@ -1033,6 +1043,9 @@ export function translateDom(root: ParentNode = document) {
   });
   root.querySelectorAll<HTMLInputElement>("[data-i18n-placeholder]").forEach((el) => {
     el.placeholder = t(el.dataset.i18nPlaceholder as Key);
+  });
+  root.querySelectorAll<HTMLElement>("[data-i18n-title]").forEach((el) => {
+    el.title = t(el.dataset.i18nTitle as Key);
   });
 }
 

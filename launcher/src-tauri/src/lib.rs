@@ -6,6 +6,7 @@
 
 mod app_icon;
 mod input_map;
+mod play_shortcut;
 mod report;
 mod saves;
 mod trophies;
@@ -440,6 +441,9 @@ pub struct AppState {
     last_log: Mutex<Option<PathBuf>>,
     /// The launcher's Dock icon as last set (app_icon::key; "" = the bundle's).
     dock_icon: Mutex<String>,
+    /// `--play` on the command line (the Play shortcut): the window starts the
+    /// game once it is up; taken by take_play_request.
+    play_request: Mutex<bool>,
 }
 
 /// A GUI app on macOS starts with a bare PATH; Homebrew's tools (cmake,
@@ -1003,6 +1007,40 @@ async fn finder_icon(app: AppHandle, set: bool) -> Result<bool, String> {
     .map_err(|e| e.to_string())?;
     rx.recv().map_err(|e| e.to_string())??;
     Ok(app_icon::has_finder_icon(&bundle))
+}
+
+/// Whether the launcher was opened with `--play` (the Play shortcut). Asked
+/// once by the window when it starts: true only the first time.
+#[tauri::command]
+fn take_play_request(state: State<'_, AppState>) -> bool {
+    std::mem::take(&mut *state.play_request.lock().unwrap())
+}
+
+/// Home > Status > "Play shortcut on the Desktop": a small .app that opens
+/// the launcher with `--play` (play_shortcut.rs). Its icon is the launcher's
+/// own; with "Your copy's icon in the Dock" on, the square drawn from the
+/// copy's ICON0 goes on it as a Finder icon (at runtime, as for the app).
+#[tauri::command]
+async fn create_play_shortcut(app: AppHandle) -> Result<String, String> {
+    if !cfg!(target_os = "macos") {
+        return Err("the Play shortcut is macOS only for now".into());
+    }
+    let bundle = app_icon::app_bundle().ok_or("the launcher is not running from an .app (development build)")?;
+    let icns = play_shortcut::bundle_icns(&bundle);
+    let path = play_shortcut::write(&home().join("Desktop"), &app.config().identifier, icns.as_deref())?;
+    if let Some(icon) = composed_icon(&load_settings_file()) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = path.clone();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(app_icon::set_finder_icon(&p, Some(&icon)));
+        })
+        .map_err(|e| e.to_string())?;
+        // the player's icon is a nicety: the shortcut works without it
+        if let Ok(Err(e)) = rx.recv() {
+            eprintln!("[launcher] Play shortcut icon: {e}");
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -2189,6 +2227,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             sync_app_icon(app.handle()); // the player's icon in the Dock from the start
+            *app.state::<AppState>().play_request.lock().unwrap() = play_shortcut::requested(std::env::args());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2231,7 +2270,9 @@ pub fn run() {
             report_triage,
             report_capture,
             report_zip,
-            finder_icon
+            finder_icon,
+            take_play_request,
+            create_play_shortcut
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");
