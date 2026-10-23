@@ -8,12 +8,16 @@
 # the cone LUTs and each draw's constants) together with a screenshot
 # out/<name>/shotNN.png. Press Enter again for another frame; quit the game to
 # finish. tools/occ_analyse.py out/<name>/dNN then recomputes every draw.
+# OCC_FP=<hex>,<hex>.. dumps those fragment programs' draws instead (up to 4),
+# e.g. the sun shadows: OCC_FP=55295a0f6cc1985b,20e579e1b50ec50d,0a1fd0e8c0ad368c
+# with PS3RECOMP_ENG_OCCDUMP_SPAN=1 (draws spread over the frame: the mask
+# after each shadow cascade; every draw's target and inputs are kept).
 here=$(cd "$(dirname "$0")/.." && pwd)
 name=${1:?run name}
 dir="$here/out/$name"; rm -rf "$dir"; mkdir -p "$dir"
 trig="$dir/.dump-now"; rm -f "$trig"
 
-PS3RECOMP_ENG_SKIP_FP= PS3RECOMP_ENG_OCCDUMP="0:$dir" PS3RECOMP_ENG_OCCDUMP_TRIGGER="$trig" \
+PS3RECOMP_ENG_SKIP_FP= PS3RECOMP_ENG_OCCDUMP="0:$dir${OCC_FP:+:$OCC_FP}" PS3RECOMP_ENG_OCCDUMP_TRIGGER="$trig" \
 PS3RECOMP_METAL_FRAME_DUMP="$dir/frame.ppm" \
     "$here/run.sh" > "$here/out/$name.log" 2>&1 &
 gp=$!
