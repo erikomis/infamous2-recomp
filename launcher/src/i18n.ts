@@ -322,6 +322,9 @@ const en = {
   "settings.displayHint": "The window resizes freely and the image stays 16:9 with black bars. In game, Cmd+F or Option+Return toggles fullscreen and Cmd+Ctrl+F toggles macOS fullscreen. Borderless covers the screen in place and switches apps instantly.",
   "settings.windowSize": "Window size",
   "settings.windowSizeDefault": "1280 × 720 (default)",
+  "settings.resScale": "Internal resolution",
+  "settings.resScaleHint": "Renders the game's 3D, effects and HUD at a higher resolution than the PS3's 1280×720 (PS3_RES_SCALE), for a sharper picture on large screens. Costs GPU time: 1440p is a good fit for most Macs; 4K needs a fast GPU. Choose a window size or fullscreen to see the detail.",
+  "settings.resScaleNative": "720p (native)",
   "settings.showFps": "Show the frame rate (fps)",
   "settings.showFpsHint":
     "The game window's title shows the fps on screen and the game's own frame rate, with frame times, once per second (also in the game log).",
@@ -906,6 +909,9 @@ const ptBR: Partial<Record<Key, string>> = {
   "settings.displayHint": "A janela muda de tamanho livremente e a imagem fica em 16:9 com faixas pretas. No jogo, Cmd+F ou Option+Return liga/desliga a tela cheia e Cmd+Ctrl+F a tela cheia do macOS. Sem bordas cobre a tela no lugar e troca de app na hora.",
   "settings.windowSize": "Tamanho da janela",
   "settings.windowSizeDefault": "1280 × 720 (padrão)",
+  "settings.resScale": "Resolução interna",
+  "settings.resScaleHint": "Desenha o 3D, os efeitos e o HUD do jogo numa resolução maior que os 1280×720 do PS3 (PS3_RES_SCALE), para uma imagem mais nítida em telas grandes. Custa tempo de GPU: 1440p cabe bem na maioria dos Macs; 4K pede uma GPU rápida. Escolha um tamanho de janela ou tela cheia para ver o detalhe.",
+  "settings.resScaleNative": "720p (nativa)",
   "settings.showFps": "Mostrar a taxa de quadros (fps)",
   "settings.showFpsHint":
     "O título da janela do jogo mostra o fps na tela e a taxa de quadros do próprio jogo, com os tempos de quadro, uma vez por segundo (também no log do jogo).",
