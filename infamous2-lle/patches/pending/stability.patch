@@ -1,0 +1,168 @@
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index fdecb32..4fae098 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -32,6 +32,7 @@ static u32 s_gcm_context_ea = 0;
+ #include <windows.h>
+ #else
+ #include <time.h>
++#include <unistd.h>   /* getpid: PS3_HANG_SAMPLE */
+ #endif
+ 
+ /* ---------------------------------------------------------------------------
+@@ -873,6 +874,11 @@ void rsx_snap_event(int which, u32 offset)
+ static int s_park_pass = 0;           /* this drain stopped on a self-JUMP park */
+ static u32 s_park_off;                 /* the park the walker is waiting on, and since when */
+ static unsigned long long s_park_since;
++/* Drain timing for the "ref stuck" report: when the drain now running began
++ * (0 = none running), when the last one ended and why it stopped. */
++static volatile unsigned long long s_drain_in_ms, s_drain_end_ms;
++static const char* volatile s_drain_why = "";
++static volatile unsigned s_drain_count;
+ /* Backlog past which the drain stops honouring one-flip-per-tick and
+  * catches up instead. Sized well above a frame's command list so a
+  * title that keeps up never sees this path. */
+@@ -890,6 +896,42 @@ static unsigned long long gcm_park_grace_ms(void)
+     return ms;
+ }
+ #define GCM_PARK_GRACE_MS gcm_park_grace_ms()
++/* GCM_PARK_STATS=1: every 30 s, how the parks went since the last line:
++ * stops at a new park, parks left through their patch (and the longest wait
++ * for one), parks left another way, jump-park resyncs. */
++static unsigned s_ps_parks, s_ps_patched, s_ps_other, s_ps_resync;
++static unsigned long long s_ps_max_ms, s_ps_t0;
++static void gcm_park_stats(void)
++{
++    static int on = -1;
++    if (on < 0) on = getenv("GCM_PARK_STATS") != NULL;
++    if (!on) return;
++    const unsigned long long now = ps3_ms_now();
++    if (!s_ps_t0) s_ps_t0 = now;
++    if (now - s_ps_t0 < 30000) return;
++    fprintf(stderr, "[cellGcmSys] park stats: %u parks, %u patched (longest %llu ms), %u left otherwise, %u jump-park resyncs\n",
++            s_ps_parks, s_ps_patched, s_ps_max_ms, s_ps_other, s_ps_resync);
++    s_ps_parks = s_ps_patched = s_ps_other = s_ps_resync = 0; s_ps_max_ms = 0; s_ps_t0 = now;
++}
++/* The walker has left the park it was waiting on (s_park_off). `patched`: it
++ * left from the park's own address, i.e. the word there is no longer the
++ * self-JUMP (a JUMP elsewhere, or commands written over it). Say so when
++ * the patch came later than the old fixed 50 ms grace, i.e. when that grace
++ * would have resynced past it. */
++static void gcm_park_left(int patched)
++{
++    extern unsigned long long ps3_ms_now(void);
++    if (patched && s_park_since) {
++        const unsigned long long waited = ps3_ms_now() - s_park_since;
++        static unsigned n;
++        if (waited >= 50 && n++ < 64)
++            fprintf(stderr, "[cellGcmSys] park at 0x%08X patched after %llu ms\n", s_park_off, waited);
++        if (waited > s_ps_max_ms) s_ps_max_ms = waited;
++    }
++    if (patched) s_ps_patched++; else s_ps_other++;
++    gcm_park_stats();
++    s_park_off = 0; s_park_since = 0;
++}
+ /* How close `current` must get to `end` before the runtime will recycle a ring
+  * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
+  * title that is merely near the end from being touched. */
+@@ -1665,6 +1707,14 @@ void cellGcm_ref_on_poll(void)
+                     ref, s_fifo_getoff, put, gea ? vm_read32(gea) : 0u, s_park_off, s_sema_offset,
+                     vm_read32(GCM_LABEL_GUEST_BASE + 0x860), vm_read32(GCM_LABEL_GUEST_BASE + 0x870),
+                     vm_read32(GCM_LABEL_GUEST_BASE + 0x880), vm_read32(GCM_LABEL_GUEST_BASE + 0x890));
++            /* Is the walker stopped (and why), or still inside one drain? */
++            { const unsigned long long ms = ps3_ms_now(), in = s_drain_in_ms, end = s_drain_end_ms;
++              static unsigned last_count;
++              const unsigned cnt = s_drain_count;
++              fprintf(stderr, "[cellGcmSys]   drain: %s %llu ms; last stop \"%s\" %llu ms ago; %u drains since the last report\n",
++                      in ? "running for" : "idle,", in ? ms - in : 0ull, s_drain_why,
++                      end ? ms - end : 0ull, cnt - last_count);
++              last_count = cnt; }
+             gcm_fifo_dump_around(s_fifo_getoff);
+             /* PS3_HANG_DUMP=1 (the launcher's debug mode): where every guest
+              * thread is at that moment, not up to a minute later. */
+@@ -1672,6 +1722,15 @@ void cellGcm_ref_on_poll(void)
+               if (hd < 0) { const char* e = getenv("PS3_HANG_DUMP"); hd = e && *e == '1'; }
+               if (hd) { extern void ps3_thread_dump_now(const char* why);
+                         ps3_thread_dump_now("the GPU has had nothing to do for 2 s"); } }
++#if !defined(_WIN32)
++            /* PS3_HANG_SAMPLE=<prefix>: also a 2 s `sample` of the host
++             * threads (RSX, SPU, PPU) to <prefix>.<ref>.txt. macOS only. */
++            { const char* hs = getenv("PS3_HANG_SAMPLE");
++              if (hs && *hs) { char cmd[1200];
++                  snprintf(cmd, sizeof cmd, "/usr/bin/sample %d 2 -file '%s.%X.txt' >/dev/null 2>&1 &",
++                           (int)getpid(), hs, ref);
++                  if (system(cmd) != 0) { /* best effort */ } } }
++#endif
+         }
+     }
+ }
+@@ -1679,9 +1738,11 @@ void cellGcm_ref_on_poll(void)
+ void cellGcm_rsx_process_fifo(void)
+ {
+     const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++    s_drain_in_ms = ps3_ms_now();
+     AcquireSRWLockExclusive(&s_gcm_fifo_lock);
+     gcm_rsx_process_fifo_unlocked();
+     ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
++    s_drain_end_ms = ps3_ms_now(); s_drain_in_ms = 0; s_drain_count++;
+     if (ft_t0) {
+         const uint64_t t1 = ps3_ft_now();
+         if (t1 - ft_t0 >= ps3_ft_min_ns())
+@@ -1844,6 +1905,18 @@ static void gcm_rsx_process_fifo_unlocked(void)
+         s_tr_w[s_tr_i % GCM_TRACE_N] = w;
+         s_tr_i++;
+         u32 type = w >> 29;
++        /* The walker is reading something other than the park it waited on:
++         * it has left it, whether by the patched word (a JUMP elsewhere, or
++         * commands written over the park) or by any resync. Forget it here,
++         * not only when a patched JUMP is followed: a park left another way
++         * kept its start time, so the next stop at the same address (the
++         * game reuses its blocks) reported the whole interval as one wait
++         * ("patched after 120946 ms" in a run with no stall), and with the
++         * same `put` it inherited a grace that had already run out, so the
++         * jump-park resync could fire on a park that was seconds old. */
++        if (s_park_off && (s_fifo_getoff != s_park_off || type != 1u ||
++                           (w & 0x1FFFFFFCu) != s_park_off))
++            gcm_park_left(s_fifo_getoff == s_park_off);
+ 
+         if ((w & 0xFFFF0000u) == 0xFEAD0000u) {
+             /* lv1 driver flip: statically-linked libgcm cellGcmSetFlip writes
+@@ -1897,17 +1970,6 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                                s_fifo_getoff, w & 0x1FFFFFFCu, put); }
+             { u32 tgt = w & 0x1FFFFFFCu;
+               if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("JUMP", tgt, w); gcm_fifo_dump_around(s_fifo_getoff); gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put); break; }
+-              /* A park this walker sat on has been patched: say so when the
+-               * patch came later than the old fixed 50 ms grace, i.e. when
+-               * that grace would have resynced past it. */
+-              if (tgt != s_fifo_getoff && s_park_off == s_fifo_getoff && s_park_since) {
+-                  extern unsigned long long ps3_ms_now(void);
+-                  const unsigned long long waited = ps3_ms_now() - s_park_since;
+-                  static unsigned n;
+-                  if (waited >= 50 && n++ < 64)
+-                      fprintf(stderr, "[cellGcmSys] park at 0x%08X patched after %llu ms\n", s_fifo_getoff, waited);
+-                  s_park_since = 0;
+-              }
+               /* A JUMP to its own address is the "park the RSX here" idiom:
+                * the title leaves it at the write head so the GPU stops if it
+                * catches up, and overwrites it when the next segment is
+@@ -1939,10 +2001,10 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       static unsigned long long grace_since;   /* restarts when put moves */
+                       const unsigned long long now = ps3_ms_now();
+                       if (s_park_off != s_fifo_getoff || park_put != put) {
+-                          if (s_park_off != s_fifo_getoff) s_park_since = now;
++                          if (s_park_off != s_fifo_getoff) { s_park_since = now; s_ps_parks++; }
+                           s_park_off = s_fifo_getoff; park_put = put; grace_since = now;
+                       } else if (now - grace_since >= GCM_PARK_GRACE_MS) {
+-                          s_park_off = 0; s_park_since = 0;
++                          s_park_off = 0; s_park_since = 0; s_ps_resync++;
+                           gcm_fifo_dump_around(s_fifo_getoff);
+                           gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
+                       }
+@@ -2282,6 +2344,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * per tick (gcm_ref_push/gcm_ref_publish_one above) so every SET_REFERENCE
+      * value stays observable to equality-waiters. The wrap recycle path polls
+      * the drained EA. */
++    s_drain_why = s_sema_live ? "sema-acquire" : why;
+     if (getenv("GCM_DRAINDBG")) {
+         static int n2 = 0;
+         if (n2++ % 60 == 0)
