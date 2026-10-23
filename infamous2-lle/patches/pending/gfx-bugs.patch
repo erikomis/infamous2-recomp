@@ -1,0 +1,399 @@
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+index 1b47d40..9607d01 100644
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -1580,6 +1580,32 @@ static const char* const kEngFixedPS =
+ "};\n"
+ "float4 main(PSInput input) : SV_TARGET { return input.col0; }\n";
+ 
++/* User clip planes. NV4097_SET_USER_CLIP_PLANE_CONTROL (0x1478) holds one
++ * 4-bit op per plane (bits 0..23, planes 0..5): 0 disabled, 1 ENABLE_LT, 2
++ * ENABLE_GE. The vertex program writes the six distances into o[5].yzw and
++ * o[6].yzw (o[5].x is fog, o[6].x the point size). As RPCS3 does
++ * (fill_user_clip_data + the VP reg_table): GE keeps d >= 0 (factor +1), LT
++ * keeps d <= 0 (factor -1), a disabled plane gets 0.5 so it never clips.
++ * inFAMOUS 2's planar water reflection (256x256 at 0x0F6F0000) clips the
++ * mirrored scene at the water plane this way; without it the riverbed and
++ * everything under the surface was drawn into the reflection.
++ * Returns the op per plane, two bits each (0 = no plane enabled), the form
++ * rsx_vp_apply_user_clip takes. PS3RECOMP_ENG_USER_CLIP=0 ignores the
++ * register (the old behaviour). */
++static u32 eng_user_clip_key(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_USER_CLIP"); on = e ? atoi(e) : 1; }
++    if (!on) return 0;
++    const u32 ctl = rsx_dsp_reg(&g.rsx, 0x1478u);
++    u32 key = 0;
++    for (u32 p = 0; p < 6; p++) {
++        const u32 op = (ctl >> (p * 4u)) & 0xFu;
++        if (op == 1u || op == 2u) key |= op << (p * 2u);
++    }
++    return key;
++}
++
+ /* Drawstats split of eng_pipeline_get (defined with the rest of drawstats
+  * below): programs + FP constants, key hashing, table scan. */
+ static u64 ds_pk_ns[3], ds_pk_scanned;
+@@ -1686,7 +1712,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         int valid, fixed;
+         u64 vp_hash, fp_struct;
+         u32 fp_ctrl_key, cube_mask, vol_mask, vtex_mask, layout_mask, layout_stride, rt_count;
+-        u32 shadow_mask, srgb_output, gamma_units, expand_units;
++        u32 shadow_mask, srgb_output, gamma_units, expand_units, ucp;
+         u8 gamma_masks[RSX_DSP_NUM_TEXTURES];
+         u8 expand_masks[RSX_DSP_NUM_TEXTURES];
+         rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES];
+@@ -1694,9 +1720,21 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         rsx_be_render_state rs;
+         u64 key;
+     } kmemo;
+-    const u32 fp_ctrl_key = fp_ctrl & 0x40u;
++    /* SHADER_CONTROL bits 1..3: the program replaces the fragment depth with
++     * r1.z (CELL_GCM_SHADER_CONTROL_DEPTH_EXPORT). inFAMOUS 2 downsamples its
++     * depth buffer that way (a full-screen pass with the colour mask off,
++     * title screen p104, SHADER_CONTROL 0x2500844E, into the 512x288 zeta
++     * at 0x0F770000) for the soft particles to test and fade against
++     * (FP 169a61d2fe6f3f76 reads it back as A8R8G8B8); without the export
++     * that buffer held the full-screen triangle's own z instead of the
++     * scene's depth.
++     * PS3RECOMP_ENG_DEPTH_EXPORT=0 ignores the bits (the old behaviour). */
++    static int depth_export_on = -1;
++    if (depth_export_on < 0) { const char* e = getenv("PS3RECOMP_ENG_DEPTH_EXPORT"); depth_export_on = e ? atoi(e) : 1; }
++    const u32 fp_ctrl_key = fp_ctrl & (depth_export_on ? (0x40u | RSX_FP_CTRL_DEPTH_EXPORT) : 0x40u);
+     const u64 in_vp = fixed ? 0 : vp->hash, in_fp = fixed ? 0 : fp->structural;
+     if (!fixed && !in_fp) return 0;
++    const u32 ucp = fixed ? 0 : eng_user_clip_key();
+     u64 key;
+     if (kmemo.valid && kmemo.fixed == fixed && kmemo.vp_hash == in_vp && kmemo.fp_struct == in_fp &&
+         kmemo.fp_ctrl_key == fp_ctrl_key && kmemo.cube_mask == cube_mask && kmemo.vol_mask == vol_mask &&
+@@ -1704,7 +1742,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+         kmemo.layout_stride == layout->stride && kmemo.rt_count == rt_count &&
+         kmemo.rt_fmt == rt_fmt && !memcmp(&kmemo.rs, rs, sizeof *rs) &&
+         kmemo.shadow_mask == shadow_mask && kmemo.srgb_output == srgb_output &&
+-        kmemo.gamma_units == gamma_units &&
++        kmemo.gamma_units == gamma_units && kmemo.ucp == ucp &&
+         (!gamma_units || !memcmp(kmemo.gamma_masks, gamma_masks, sizeof gamma_masks)) &&
+         kmemo.expand_units == expand_units &&
+         (!expand_units || !memcmp(kmemo.expand_masks, expand_masks, sizeof expand_masks)) &&
+@@ -1730,6 +1768,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+             key = eng_fnv1a(shadow, sizeof shadow, key);
+         }
+         key = eng_fnv1a(&vtex_mask, sizeof vtex_mask, key);
++        if (ucp) key = eng_fnv1a(&ucp, sizeof ucp, key);
+     }
+     key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
+     key = eng_fnv1a(&layout->stride, sizeof layout->stride, key);
+@@ -1744,7 +1783,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+     kmemo.rt_count = rt_count; kmemo.rt_fmt = rt_fmt; memcpy(&kmemo.rs, rs, sizeof *rs);
+     kmemo.shadow_mask = shadow_mask; memcpy(kmemo.shadow, shadow, sizeof shadow);
+     kmemo.srgb_output = srgb_output;
+-    kmemo.gamma_units = gamma_units; kmemo.expand_units = expand_units;
++    kmemo.gamma_units = gamma_units; kmemo.expand_units = expand_units; kmemo.ucp = ucp;
+     memcpy(kmemo.expand_masks, expand_masks, sizeof expand_masks); memcpy(kmemo.gamma_masks, gamma_masks, sizeof gamma_masks);
+     kmemo.key = key;
+ key_done:;
+@@ -1779,6 +1818,13 @@ key_done:;
+         vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
+                                          layout->mask, s_vs_hlsl,
+                                          sizeof s_vs_hlsl);
++        if (vi > 0 && ucp) {
++            if (rsx_vp_apply_user_clip(s_vs_hlsl, sizeof s_vs_hlsl, ucp) < 0) vi = -1;
++            static u32 said;
++            if (said++ < 8)
++                fprintf(stderr, "[rsx engine] user clip planes 0x%06X (ops 0x%03X) in a vertex program%s\n",
++                        rsx_dsp_reg(&g.rsx, 0x1478u), ucp, vi > 0 ? "" : ": NOT applied (unexpected text)");
++        }
+         fi = rsx_fp_decompile_buffered_shadow_color_expand_vol_ex(fp_uc, fp_size, fp_ctrl, cube_mask, vol_mask,
+                 shadow_mask ? shadow : NULL, gamma_units ? gamma_masks : NULL,
+                 expand_units ? expand_masks : NULL,
+@@ -1791,6 +1837,13 @@ key_done:;
+             rsx_fp_apply_alpha_test_buffered(s_ps_hlsl, sizeof s_ps_hlsl,
+                                              rs->alpha_func) < 0)
+             fi = -1;
++        if (fi > 0 && (fp_ctrl_key & RSX_FP_CTRL_DEPTH_EXPORT)) {
++            if (rsx_fp_apply_depth_export(s_ps_hlsl, sizeof s_ps_hlsl) < 0) fi = -1;
++            static u32 said;
++            if (said++ < 8)
++                fprintf(stderr, "[rsx engine] depth export (shader control 0x%08X) in a fragment program%s\n",
++                        fp_ctrl, fi > 0 ? "" : ": NOT applied (unexpected text)");
++        }
+     }
+     /* PS3RECOMP_ENG_FP_PATCH=<fp hash>:<from>:<to>[;<fp hash>:<from>:<to>...]:
+      * DIAGNOSTIC. Replace every <from> with <to> in that fragment program's
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 7de5cac..6b96ada 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -1835,3 +1835,68 @@ int rsx_fp_apply_srgb_output(char* hlsl, u32 capacity)
+     memcpy(hlsl, helper, helper_len);
+     return 1;
+ }
++
++/* See rsx_fp_decompiler.h. Applied last, after the sRGB and alpha-test
++ * wrappers, so it only has to recognise their final `return X;`. */
++int rsx_fp_apply_depth_export(char* hlsl, u32 capacity)
++{
++    if (!hlsl || capacity == 0) return -1;
++    const size_t len = strlen(hlsl);
++    if (len >= capacity || strstr(hlsl, "SV_Depth")) return -1;
++    char* marker = NULL;
++    for (char* p = strstr(hlsl, "    return "); p; p = strstr(p + 1, "    return ")) marker = p;
++    if (!marker) return -1;
++    const char* expression = marker + strlen("    return ");
++    const char* end = strstr(expression, ";\n}\n");
++    if (!end || end == expression || (size_t)(end - expression) >= 96 || end[4]) return -1;
++    char output[96];
++    memcpy(output, expression, (size_t)(end - expression));
++    output[end - expression] = 0;
++
++    static const char single_sig[] = "float4 main(PSInput input) : SV_TARGET {\n";
++    static const char single_new[] =
++        "struct _RsxDepthOut { float4 c : SV_TARGET0; float d : SV_Depth; };\n"
++        "_RsxDepthOut main(PSInput input) {\n";
++    static const char mrt_struct[] = "struct PSOutput {\n";
++    static const char mrt_member[] = "    float _rsx_depth : SV_Depth;\n";
++    const int mrt = fp_returns_struct(hlsl);
++    char* at = strstr(hlsl, mrt ? mrt_struct : single_sig);
++    if (!at || at > marker) return -1;
++    char tail[384];
++    /* Depth replace always comes from the fp32 r1.z (NV_fragment_program;
++     * RPCS3's gl_FragDepth = r1.z), whatever the colour exports' width. */
++    const int tn = mrt
++        ? snprintf(tail, sizeof tail,
++                   "    PSOutput _rsx_dout = %s;\n"
++                   "    _rsx_dout._rsx_depth = saturate(r[1].z);\n"
++                   "    return _rsx_dout;\n}\n", output)
++        : snprintf(tail, sizeof tail,
++                   "    _RsxDepthOut _rsx_dout;\n"
++                   "    _rsx_dout.c = %s;\n"
++                   "    _rsx_dout.d = saturate(r[1].z);\n"
++                   "    return _rsx_dout;\n}\n", output);
++    if (tn < 0 || (size_t)tn >= sizeof tail) return -1;
++    const size_t head = (size_t)(at - hlsl);
++    const size_t old_sig = mrt ? sizeof mrt_struct - 1 : sizeof single_sig - 1;
++    const char* new_sig = mrt ? NULL : single_new;
++    const size_t new_sig_len = mrt ? sizeof mrt_struct - 1 + sizeof mrt_member - 1 : sizeof single_new - 1;
++    const size_t mid = (size_t)(marker - (at + old_sig));
++    const size_t total = head + new_sig_len + mid + (size_t)tn;
++    if (total + 1 > capacity) return -1;
++    char* tmp = (char*)malloc(total + 1);
++    if (!tmp) return -1;
++    size_t o = 0;
++    memcpy(tmp + o, hlsl, head); o += head;
++    if (mrt) {
++        memcpy(tmp + o, mrt_struct, sizeof mrt_struct - 1); o += sizeof mrt_struct - 1;
++        memcpy(tmp + o, mrt_member, sizeof mrt_member - 1); o += sizeof mrt_member - 1;
++    } else {
++        memcpy(tmp + o, new_sig, sizeof single_new - 1); o += sizeof single_new - 1;
++    }
++    memcpy(tmp + o, at + old_sig, mid); o += mid;
++    memcpy(tmp + o, tail, (size_t)tn); o += (size_t)tn;
++    tmp[o] = 0;
++    memcpy(hlsl, tmp, o + 1);
++    free(tmp);
++    return 1;
++}
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+index 830f0a7..b019df4 100644
+--- a/libs/video/rsx_fp_decompiler.h
++++ b/libs/video/rsx_fp_decompiler.h
+@@ -220,6 +220,14 @@ int rsx_fp_srgb_output_enabled(u32 packer, u32 ctrl, u32 color_format);
+  * Apply before alpha-test wrapping; disabled draws should skip this helper. */
+ int rsx_fp_apply_srgb_output(char* hlsl, u32 capacity);
+ 
++/* Depth replace: SHADER_CONTROL bits 1..3 (CELL_GCM_SHADER_CONTROL_DEPTH_EXPORT,
++ * 0xE) make the program's r1.z the fragment's depth. Adds an SV_Depth output
++ * carrying saturate(r[1].z) to HLSL from the buffered decompilers, after the
++ * sRGB and alpha-test wrappers. Returns 1, or -1 without mutation for an
++ * unexpected form or insufficient capacity. */
++#define RSX_FP_CTRL_DEPTH_EXPORT 0xEu
++int rsx_fp_apply_depth_export(char* hlsl, u32 capacity);
++
+ /* Return the mnemonic for an NV40 fragment opcode (or "?" if unknown).
+  * Useful for disassembly/logging. */
+ const char* rsx_fp_opcode_name(u32 opcode);
+diff --git a/libs/video/rsx_vp_decompiler.c b/libs/video/rsx_vp_decompiler.c
+index f60f79e..53dea8e 100644
+--- a/libs/video/rsx_vp_decompiler.c
++++ b/libs/video/rsx_vp_decompiler.c
+@@ -709,3 +709,41 @@ static int rsx_vp_decompile_impl(
+     if (o.overflow) return -1;
+     return instrs;
+ }
++
++/* See rsx_vp_decompiler.h. The distances go after the last declared output,
++ * so the user varyings keep their locations. */
++int rsx_vp_apply_user_clip(char* hlsl, size_t cap, u32 ops)
++{
++    if (!ops) return 0;
++    if (!hlsl) return -1;
++    static const char decl_at[] = "    float4 t8:TEXCOORD8; float4 t9:TEXCOORD9;\n";
++    static const char ret_at[] = "    return Out;\n";
++    char* d = strstr(hlsl, decl_at);
++    char* r = NULL;
++    for (char* q = strstr(hlsl, ret_at); q; q = strstr(q + 1, ret_at)) r = q;
++    if (!d || !r || r < d) return -1;
++    const int hi = (ops >> 8) != 0;   /* planes 4/5 */
++    char decl[128], body[512];
++    snprintf(decl, sizeof decl, "    float4 clipd0:SV_ClipDistance0;%s\n",
++             hi ? " float2 clipd1:SV_ClipDistance1;" : "");
++    static const char* comp[6] = { "o[5].y", "o[5].z", "o[5].w", "o[6].y", "o[6].z", "o[6].w" };
++    char lane[6][48];
++    for (u32 p = 0; p < 6; p++) {
++        const u32 op = (ops >> (p * 2u)) & 3u;
++        if (op == 2u)      snprintf(lane[p], sizeof lane[p], "%s", comp[p]);
++        else if (op == 1u) snprintf(lane[p], sizeof lane[p], "-(%s)", comp[p]);
++        else               snprintf(lane[p], sizeof lane[p], "0.5");
++    }
++    int n = snprintf(body, sizeof body, "    Out.clipd0 = float4(%s, %s, %s, %s);\n",
++                     lane[0], lane[1], lane[2], lane[3]);
++    if (hi) snprintf(body + n, sizeof body - (size_t)n, "    Out.clipd1 = float2(%s, %s);\n", lane[4], lane[5]);
++    const size_t len = strlen(hlsl), dl = strlen(decl), bl = strlen(body);
++    if (len + dl + bl + 1 > cap) return -1;
++    const size_t doff = (size_t)(d - hlsl) + sizeof decl_at - 1, roff = (size_t)(r - hlsl);
++    /* The body first (it is further on), then the declaration. */
++    memmove(hlsl + roff + bl, hlsl + roff, len - roff + 1);
++    memcpy(hlsl + roff, body, bl);
++    memmove(hlsl + doff + dl, hlsl + doff, len + bl - doff + 1);
++    memcpy(hlsl + doff, decl, dl);
++    return 0;
++}
+diff --git a/libs/video/rsx_vp_decompiler.h b/libs/video/rsx_vp_decompiler.h
+index 5752611..05380ce 100644
+--- a/libs/video/rsx_vp_decompiler.h
++++ b/libs/video/rsx_vp_decompiler.h
+@@ -85,6 +85,17 @@ int rsx_vp_decompile_compact_ex(
+     const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
+     char* out, u32 out_size);
+ 
++/* User clip planes. RSX vertex programs write the six clip distances into
++ * o5.yzw and o6.yzw (o5.x is fog, o6.x the point size); which planes count,
++ * and which side of each is kept, is NV4097_SET_USER_CLIP_PLANE_CONTROL
++ * (0x1478) state, not program state. `ops` holds two bits per plane, plane N
++ * at bits 2N..2N+1: 0 disabled, 1 ENABLE_LT (keeps d <= 0), 2 ENABLE_GE
++ * (keeps d >= 0) -- RPCS3's factors -1/+1. Adds SV_ClipDistance outputs for
++ * them to HLSL from rsx_vp_decompile*; a disabled plane in the same vector
++ * gets 0.5 and never clips. Returns 0 (nothing to do when ops is 0), or -1
++ * when the text is not in the decompiler's form or does not fit in cap. */
++int rsx_vp_apply_user_clip(char* hlsl, size_t cap, u32 ops);
++
+ /* Mnemonics for the vector / scalar opcode fields ("?" if unknown). */
+ const char* rsx_vp_vec_name(u32 op);
+ const char* rsx_vp_sca_name(u32 op);
+diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
+index e2687b7..08aab57 100644
+--- a/libs/video/rsx_vulkan_backend.c
++++ b/libs/video/rsx_vulkan_backend.c
+@@ -3016,6 +3016,8 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+     memset(&want, 0, sizeof want);
+     pvkGetPhysicalDeviceFeatures(s_vk.phys, &have);
+     want.textureCompressionBC = have.textureCompressionBC;
++    /* User clip planes (rsx_vp_apply_user_clip) write ClipDistance. */
++    want.shaderClipDistance = have.shaderClipDistance;
+     s_vk.bc_ok = have.textureCompressionBC ? 1 : 0;
+     VkDeviceCreateInfo dci = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+                                .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
+diff --git a/libs/video/tests/test_shader_msl.c b/libs/video/tests/test_shader_msl.c
+index 9926391..ba1980f 100644
+--- a/libs/video/tests/test_shader_msl.c
++++ b/libs/video/tests/test_shader_msl.c
+@@ -11,6 +11,7 @@
+  *
+  * Programs:
+  *   VP  MOV o0, v0 ; MOV o1, v3 (END)      position through, colour through
++ *   VP  MOV o0, v0 ; MOV o5, v3 (END)      + user clip planes (o5.yzw, o6.yzw)
+  *   FP  MOV r0, COL0 (END)                 colour out
+  *   FP  MOV r0, COL0.zyxw (END)            colour out, red and blue swapped:
+  *                                          what the host's --shader mode runs
+@@ -19,6 +20,7 @@
+  *   FP  TEX r0, TC0 unit 0, CUBE (END)     ... with unit 0 a cube map
+  *   VP  MOV o0, v0 ; TXL o1, v8 (END)      a vertex texture sampled at t16
+  *   FP  MOV r0, COL0 ; MOV r2, COL0.zyxw   two colour targets: what --mrt runs
++ *   FP  (both FPs above) + depth export    SHADER_CONTROL & 0xE: depth = r1.z
+  *
+  * Each program's HLSL is checked for what was meant before the MSL is looked
+  * at, so a wrong bit in an encoder shows up as a decompiler-level failure
+@@ -128,6 +130,39 @@ int main(int argc, char** argv)
+         }
+     }
+ 
++    /* ---- user clip planes: MOV o0, v0 ; MOV o5, v3 ------------------------
++     * The distances live in o5.yzw / o6.yzw and the planes are register
++     * state (NV4097 0x1478), so they are added to the decompiled text:
++     * plane 0 ENABLE_GE keeps d >= 0, plane 1 ENABLE_LT keeps d <= 0, the
++     * rest of the vector never clips, and the varyings keep their slots. */
++    {
++        u8 vp[32];
++        rsx_test_vp_mov_out(vp +  0, 0, RSX_TEST_VP_SWZ_IDENT, 0, 0);   /* MOV o0, v0 */
++        rsx_test_vp_mov_out(vp + 16, 3, RSX_TEST_VP_SWZ_IDENT, 5, 1);   /* MOV o5, v3, END */
++        check_count("clip VP", rsx_vp_decompile(vp, sizeof vp, g_hlsl, sizeof g_hlsl), 2);
++        const int none = rsx_vp_apply_user_clip(g_hlsl, sizeof g_hlsl, 0);
++        const int small = rsx_vp_apply_user_clip(g_hlsl, strlen(g_hlsl) + 8, 2u);
++        const int two = rsx_vp_apply_user_clip(g_hlsl, sizeof g_hlsl, 2u | (1u << 2));
++        if (none == 0 && small == -1 && two == 0) { printf("[PASS] clip VP patch results\n"); g_pass++; }
++        else { printf("[FAIL] clip VP patch results %d %d %d (want 0 -1 0)\n", none, small, two); g_fail++; }
++        check("clip VP HLSL", g_hlsl, "float4 clipd0:SV_ClipDistance0;");
++        check("clip VP HLSL", g_hlsl, "Out.clipd0 = float4(o[5].y, -(o[5].z), 0.5, 0.5);");
++        check_absent("clip VP HLSL", g_hlsl, "SV_ClipDistance1");
++        if (translate("clip VP", RSX_SHADER_STAGE_VERTEX) == 0) {
++            check("clip VP MSL", g_msl, "[[clip_distance]]");
++            check("clip VP MSL", g_msl, "[[user(locn0)]]");    /* COLOR0 */
++            check("clip VP MSL", g_msl, "[[user(locn10)]]");   /* TEXCOORD7 */
++        }
++        /* Plane 5 (o6.w) adds the second vector. */
++        check_count("clip VP 6", rsx_vp_decompile(vp, sizeof vp, g_hlsl, sizeof g_hlsl), 2);
++        if (rsx_vp_apply_user_clip(g_hlsl, sizeof g_hlsl, 2u << 10) == 0) { printf("[PASS] clip VP 6 patch\n"); g_pass++; }
++        else { printf("[FAIL] clip VP 6 patch\n"); g_fail++; }
++        check("clip VP 6 HLSL", g_hlsl, "float2 clipd1:SV_ClipDistance1;");
++        check("clip VP 6 HLSL", g_hlsl, "Out.clipd1 = float2(0.5, o[6].w);");
++        if (translate("clip VP 6", RSX_SHADER_STAGE_VERTEX) == 0)
++            check("clip VP 6 MSL", g_msl, "[[clip_distance]]");
++    }
++
+     /* ---- fragment program: MOV r0, COL0 ---------------------------------- */
+     {
+         u8 fp[16];
+@@ -396,6 +431,42 @@ int main(int argc, char** argv)
+         }
+     }
+ 
++    /* ---- depth export: SHADER_CONTROL & 0xE replaces depth with r1.z -----
++     * Single target behind the alpha-test wrapper, then the MRT form. */
++    {
++        u8 fp[16];
++        rsx_test_fp_mov_r0_col0(fp, RSX_TEST_FP_SWZ_IDENT);
++        check_count("depth FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u | RSX_FP_CTRL_DEPTH_EXPORT, 0,
++                                                             g_hlsl, sizeof g_hlsl, NULL), 1);
++        const int at = rsx_fp_apply_alpha_test_buffered(g_hlsl, sizeof g_hlsl, 0x204u /* GREATER */);
++        const int de = rsx_fp_apply_depth_export(g_hlsl, sizeof g_hlsl);
++        const int again = rsx_fp_apply_depth_export(g_hlsl, sizeof g_hlsl);   /* refuses twice */
++        if (at == 1 && de == 1 && again == -1) { printf("[PASS] depth FP patches\n"); g_pass++; }
++        else { printf("[FAIL] depth FP patches %d %d %d (want 1 1 -1)\n", at, de, again); g_fail++; }
++        check("depth FP HLSL", g_hlsl, "float d : SV_Depth;");
++        check("depth FP HLSL", g_hlsl, "_rsx_dout.c = _rsx_out;");
++        check("depth FP HLSL", g_hlsl, "_rsx_dout.d = saturate(r[1].z);");
++        check("depth FP HLSL", g_hlsl, "discard");
++        if (translate("depth FP", RSX_SHADER_STAGE_FRAGMENT) == 0) {
++            check("depth FP MSL", g_msl, "[[depth(any)]]");
++            check("depth FP MSL", g_msl, "[[color(0)]]");
++        }
++    }
++    {
++        u8 fp[32];
++        rsx_test_fp_mrt_col0(fp, RSX_TEST_FP_SWZ_IDENT, RSX_TEST_FP_SWZ(2, 1, 0, 3));
++        check_count("depth MRT FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u | RSX_FP_CTRL_DEPTH_EXPORT, 0,
++                                                                 g_hlsl, sizeof g_hlsl, NULL), 2);
++        if (rsx_fp_apply_depth_export(g_hlsl, sizeof g_hlsl) == 1) { printf("[PASS] depth MRT FP patch\n"); g_pass++; }
++        else { printf("[FAIL] depth MRT FP patch\n"); g_fail++; }
++        check("depth MRT FP HLSL", g_hlsl, "float _rsx_depth : SV_Depth;");
++        check("depth MRT FP HLSL", g_hlsl, "_rsx_dout._rsx_depth = saturate(r[1].z);");
++        if (translate("depth MRT FP", RSX_SHADER_STAGE_FRAGMENT) == 0) {
++            check("depth MRT FP MSL", g_msl, "[[depth(any)]]");
++            check("depth MRT FP MSL", g_msl, "[[color(1)]]");
++        }
++    }
++
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return g_fail ? 1 : 0;
+ }
