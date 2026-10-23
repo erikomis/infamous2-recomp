@@ -156,3 +156,57 @@ extern "C" void infamous2_apply_patches(const char* elf_path)
         if (!done) fprintf(stderr, "[patch] \"%s\" not found for this EBOOT (PPU-%s) in %s\n", w.c_str(), hash, yml.c_str());
     }
 }
+
+/*
+ * PS3_ASPECT=21:9|32:9|<w>:<h>|<ratio>: the game's cameras built for a wider
+ * picture, hor+ (the vertical field of view kept, the horizontal one wider).
+ * The toolkit's Metal backend renders every target that much wider
+ * (anamorphic) and presents the wide image; this is the game's half.
+ *
+ * Found 2026-10-23: the camera constructor (func_0047F5xx, the store at
+ * 0x0047F85C) sets cam+0x2A4 = (float)width / (float)height from two ints it
+ * reaches through its module's pointer table (r30 = 0x009B72F0, entries
+ * 0x009AF3EC -> 0x009D7218 = 1280 and 0x009AF3F0 -> 0x009D7214 = 720), and
+ * SetFov (func_0047D820) keeps tany = tan(fov/2) at cam+0x2AC and
+ * tanx = tany * cam+0x2A4 at cam+0x2A8; the projection, the frustum the
+ * culling uses and the copies the renderer takes (func_00355290) all come
+ * from those. No other code reads the two pointer entries (a scan of every
+ * load through that module's table), and the 1280 itself is read by many
+ * others (render targets), so the patch repoints the width ENTRY at an int
+ * of its own: round(720 * aspect), in the unused gap between the EBOOT's
+ * two segments (0x00928168..0x0092FFFF: no segment, below the stacks and
+ * the 0x40000000 allocation window). Data only, like the community patches;
+ * checked against this EBOOT's bytes first, so another build is left alone.
+ */
+extern "C" void infamous2_apply_aspect(const char* elf_path)
+{
+    const char* e = getenv("PS3_ASPECT");
+    if (!e || !*e || !vm_base) return;
+    double a = 0.0;
+    unsigned w = 0, h = 0;
+    if (sscanf(e, "%u:%u", &w, &h) == 2 && w && h) a = (double)w / (double)h;
+    else if (sscanf(e, "%ux%u", &w, &h) == 2 && w && h) a = (double)w / (double)h;
+    else { char* end = nullptr; a = strtod(e, &end); if (!end || *end) a = 0.0; }
+    const double k = a / (16.0 / 9.0);
+    if (!(k > 1.001 && k <= 4.0)) return;   /* 16:9 (or nonsense: the backend says so) */
+
+    auto rd = [](uint32_t ea) { const uint8_t* p = vm_base + ea;
+                                return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; };
+    auto wr = [](uint32_t ea, uint32_t v) { uint8_t* p = vm_base + ea;
+                                            p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v; };
+    const uint32_t kWidthEntry = 0x009AF3ECu, kHeightEntry = 0x009AF3F0u;
+    const uint32_t kWidth = 0x009D7218u, kHeight = 0x009D7214u, kSpare = 0x0092FFF0u;
+    char hash[41] = {0};
+    if (!ppu_hash(elf_path, hash) || strcmp(hash, "41a7d047c573c78c0307506c9d1b52d15a66e4f5") ||
+        rd(kWidthEntry) != kWidth || rd(kHeightEntry) != kHeight || rd(kSpare) != 0) {
+        fprintf(stderr, "[patch] PS3_ASPECT=%s: not the EBOOT this was made for (PPU-%s); the game keeps 16:9 "
+                        "(the picture will be stretched)\n", e, hash);
+        return;
+    }
+    const uint32_t height = rd(kHeight) ? rd(kHeight) : 720u;
+    const uint32_t width = (uint32_t)(height * a + 0.5);
+    wr(kSpare, width);
+    wr(kWidthEntry, kSpare);
+    fprintf(stderr, "[patch] PS3_ASPECT=%s: cameras at %u:%u (aspect %.4f, hor+)\n", e, width, height,
+            (double)width / (double)height);
+}

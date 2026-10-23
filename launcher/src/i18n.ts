@@ -325,6 +325,9 @@ const en = {
   "settings.resScale": "Internal resolution",
   "settings.resScaleHint": "Renders the game's 3D, effects and HUD at a higher resolution than the PS3's 1280×720 (PS3_RES_SCALE), for a sharper picture on large screens. Costs GPU time: 1440p is a good fit for most Macs; 4K needs a fast GPU. Choose a window size or fullscreen to see the detail.",
   "settings.resScaleNative": "720p (native)",
+  "settings.aspect": "Aspect ratio",
+  "settings.aspectHint": "Widens the picture for ultrawide screens (PS3_ASPECT): the game sees more to the sides at the same vertical view (hor+), and the HUD stays 16:9 in the middle. Use fullscreen or a window of the same shape; the game renders a wider image, which costs GPU time.",
+  "settings.aspectNative": "16:9 (original)",
   "settings.showFps": "Show the frame rate (fps)",
   "settings.showFpsHint":
     "The game window's title shows the fps on screen and the game's own frame rate, with frame times, once per second (also in the game log).",
@@ -912,6 +915,9 @@ const ptBR: Partial<Record<Key, string>> = {
   "settings.resScale": "Resolução interna",
   "settings.resScaleHint": "Desenha o 3D, os efeitos e o HUD do jogo numa resolução maior que os 1280×720 do PS3 (PS3_RES_SCALE), para uma imagem mais nítida em telas grandes. Custa tempo de GPU: 1440p cabe bem na maioria dos Macs; 4K pede uma GPU rápida. Escolha um tamanho de janela ou tela cheia para ver o detalhe.",
   "settings.resScaleNative": "720p (nativa)",
+  "settings.aspect": "Proporção da tela",
+  "settings.aspectHint": "Alarga a imagem para telas ultrawide (PS3_ASPECT): o jogo mostra mais dos lados com a mesma visão vertical (hor+), e o HUD fica em 16:9 no meio. Use tela cheia ou uma janela no mesmo formato; o jogo desenha uma imagem mais larga, o que custa tempo de GPU.",
+  "settings.aspectNative": "16:9 (original)",
   "settings.showFps": "Mostrar a taxa de quadros (fps)",
   "settings.showFpsHint":
     "O título da janela do jogo mostra o fps na tela e a taxa de quadros do próprio jogo, com os tempos de quadro, uma vez por segundo (também no log do jogo).",

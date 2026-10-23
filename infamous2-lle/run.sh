@@ -119,6 +119,13 @@ export GCM_PARK_GRACE_MS="${GCM_PARK_GRACE_MS:-1000}"
 # the job itself reduced to its completion bookkeeping (gpu_light.c). New Marais
 # walk ~12 -> ~15 fps. PS3RECOMP_ENG_GPU_LIGHT= (empty) turns it off.
 export PS3RECOMP_ENG_GPU_LIGHT="${PS3RECOMP_ENG_GPU_LIGHT-07000B80:07384B80}"
+# PS3_ASPECT=21:9 (or 32:9) widens the picture hor+ (game_patches.cpp: the
+# cameras' aspect; the toolkit's Metal backend: wide targets, no pillarbox).
+# The HUD keeps 16:9 in the middle: it is every draw after this game's final
+# composite pass (fragment program 136d0d1989147bd8) in a frame, and every
+# draw of a frame without one (menus, comics, movies, which get black bars).
+# Read only while PS3_ASPECT asks for a wide picture; empty stretches the HUD.
+export PS3_ASPECT_HUD_AFTER="${PS3_ASPECT_HUD_AFTER-136d0d1989147bd8}"
 # The SSAO job runs on the GPU too (gpu_ssao.c, the job's five passes as Metal
 # passes; needs the light pass on): walk ~21 -> 26-28 fps. Its opt-in period
 # ended once the flip-status races were fixed (6/6 runs clean, 2026-10-17).
@@ -152,6 +159,8 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #   PS3_LUT_PRESET=warm|cool|film|vivid  a built-in colour grade
 #   PS3_RES_SCALE=1.5|2|3       internal resolution: the game renders at 1080p,
 #                               1440p or 4K instead of 720p (restart to change)
+#   PS3_ASPECT=21:9|32:9        ultrawide: a wider view (hor+), the HUD kept 16:9
+#                               in the middle (restart to change)
 # Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
 # PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200.
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or
