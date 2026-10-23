@@ -134,6 +134,8 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #   PS3_AA=fxaa                 FXAA on the 1280x720 image
 #   PS3_SHARPEN=0..1            contrast-adaptive sharpening (AMD CAS)
 #   PS3_UPSCALE=metalfx         MetalFX spatial upscaling to the window (macOS 13+)
+#   PS3_RES_SCALE=1.5|2|3       internal resolution: the game renders at 1080p,
+#                               1440p or 4K instead of 720p (restart to change)
 # Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
 # PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200.
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or

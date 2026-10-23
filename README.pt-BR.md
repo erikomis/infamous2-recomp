@@ -400,6 +400,7 @@ fps e coincidiu com travamentos.
 | `PS3_CONTRAST=0.5..1.5` | Contraste em torno do cinza médio. Padrão 1 (desligado) |
 | `PS3_AA=fxaa` / `smaa` | Antisserrilhamento na imagem de 1280x720 do jogo, antes de qualquer ampliação: FXAA (o mais leve, um pouco suave) ou SMAA 1x (textos e texturas mais nítidos). Padrão desligado |
 | `PS3_SHARPEN=<0..1>` | nitidez adaptativa ao contraste (estilo AMD CAS) na resolução de saída; 0 (padrão) desliga |
+| `PS3_RES_SCALE=1.5\|2\|3` | Resolução interna: os render targets do jogo em 1,5x (1080p), 2x (1440p) ou 3x (4K) de 1280x720; 3D, efeitos, HUD e textos ficam mais nítidos. Aceita de 1 a 4 (ou `1080p`, `1440p`, `4k`); sem valor ou 1 é o caminho antigo. O que o código do PS3 lê de volta continua em 720p. Vale ao reiniciar (menu do jogo: Imagem > Resolução interna; launcher: Gráficos > Tela). Custo, New Marais headless: 43 fps em 1x, 36 em 1,5x, 32 em 2x, 16 em 3x |
 | `PS3_UPSCALE=metalfx` | ampliação espacial MetalFX de 1280x720 para o tamanho em pixels da janela (macOS 13+), em vez de só esticar a imagem. Onde não houver MetalFX, volta ao caminho normal com uma linha no log. Padrão desligada |
 | `PS3_AUDIO_VOLUME=<0..100>` | volume geral (padrão 100). Aplicado ao que o Mac toca, numa curva que soa uniforme: 50 é cerca de −12 dB |
 | `PS3_AUDIO_DEVICE=<nome>` | a saída de áudio, pelo nome nos ajustes de Som (sem diferenciar maiúsculas, ou só um pedaço: `AirPods`); não encontrada ou sem valor, a padrão do sistema (que o jogo acompanha quando muda) |

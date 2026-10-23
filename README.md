@@ -386,6 +386,7 @@ class; it did not raise the frame rate in tests and coincided with hangs.
 | `PS3_CONTRAST=0.5..1.5` | Contrast around mid-grey. Default 1 (off) |
 | `PS3_AA=fxaa` / `smaa` | Anti-aliasing on the game's 1280x720 image, before any scaling: FXAA (cheapest, slightly soft) or SMAA 1x (sharper text and textures). Default off |
 | `PS3_SHARPEN=<0..1>` | contrast-adaptive sharpening (AMD CAS style) at the output resolution; 0 (default) is off |
+| `PS3_RES_SCALE=1.5\|2\|3` | Internal resolution: the game's render targets at 1.5x (1080p), 2x (1440p) or 3x (4K) of 1280x720; 3D, effects, HUD and text all get sharper. Any value 1..4 (or `1080p`, `1440p`, `4k`); unset or 1 is the old path. What the PS3 code reads back stays at 720p. Restart to change (in-game menu: Image > Internal resolution; launcher: Graphics > Display). Cost, headless New Marais: 43 fps at 1x, 36 at 1.5x, 32 at 2x, 16 at 3x |
 | `PS3_UPSCALE=metalfx` | MetalFX spatial upscaling from 1280x720 to the window's pixel size (macOS 13+), instead of the layer's plain stretch. Falls back to the plain path, with a line in the log, where MetalFX is missing. Default off |
 | `PS3_AUDIO_VOLUME=<0..100>` | master volume (default 100). Applied to what the Mac plays, on a curve that sounds even: 50 is about −12 dB |
 | `PS3_AUDIO_DEVICE=<name>` | the audio output, by its name in Sound settings (any case, or a part: `AirPods`); not found or unset, the system default (which the game follows when it changes) |
