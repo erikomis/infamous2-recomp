@@ -72,6 +72,7 @@ static inline void infamous2_host_qos_self(void) {}
 extern "C" {
 uint32_t ppu_load_elf(const char* path);      /* ELF -> guest RAM, returns entry OPD */
 void infamous2_apply_patches(const char* elf_path);   /* game_patches.cpp: PS3_PATCHES */
+void infamous2_apply_aspect(const char* elf_path);    /* game_patches.cpp: PS3_ASPECT (hor+) */
 void     ppu_recomp_register(void);           /* generated: lifted table -> address map */
 void     ppu_hle_init(void);                  /* firmware import NID -> HLE handler */
 void     ppu_sysprx_register(void);           /* boot-critical CRT (sys_initialize_tls, ...) */
@@ -207,6 +208,9 @@ static void present_guest_frame(void)
     InterlockedIncrement(&g_frames_presented);
 }
 
+/* cellSysutil.c: the in-game menu's Quit game (REQUEST_EXITGAME, then exit 0). */
+extern "C" void ps3_host_quit(const char* why);
+
 static DWORD WINAPI frame_clock(LPVOID)
 {
     /* PS3_QOS=1: this thread walks the FIFO, encodes the draws and presents --
@@ -297,6 +301,9 @@ static DWORD WINAPI frame_clock(LPVOID)
                 last_pump = now;
                 if (rsx_backend_pump() != 0) {
                     rsx_ok = 0;              /* window closed */
+                    /* The red button quits like F1 > Quit game / Cmd+Q, instead
+                     * of leaving the process running with no window. */
+                    ps3_host_quit("window closed");
                     continue;
                 }
             }
@@ -436,6 +443,7 @@ int main(int argc, char** argv)
         return 1;
     }
     infamous2_apply_patches(argv[1]);   /* community patches from the player's RPCS3 patch.yml */
+    infamous2_apply_aspect(argv[1]);    /* PS3_ASPECT: the cameras' aspect ratio, hor+ */
 
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);

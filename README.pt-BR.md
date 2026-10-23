@@ -329,6 +329,7 @@ faixas pretas quando a janela tem outro formato.
 | Cmd+Ctrl+F | liga/desliga a tela cheia do macOS |
 | Esc / Cmd | solta o mouse |
 | F1 (fn+F1 no teclado do Mac), Insert ou Cmd+, ; L3+R3 no controle | o menu dentro do jogo (abaixo) |
+| Cmd+Q | sai do jogo na hora (como o **Sair do jogo** do menu, sem a pergunta) |
 
 ### Menu dentro do jogo
 
@@ -341,6 +342,14 @@ cursor é solto), mas continua rodando: pause antes com START se precisar. Um
 clique de analógico sozinho continua chegando ao jogo como antes; com os dois
 apertados, nenhum chega. `PS3_OVERLAY_PAD=0` desliga a combinação no controle,
 `PS3_OVERLAY=0` o menu inteiro.
+
+**Sair do jogo**, embaixo ao lado de Fechar, pergunta antes ("O progresso não
+salvo desde o último salvamento automático será perdido"; o foco fica em
+Cancelar, Esc ou ○ desistem). Sair faz o que o Sair do Jogo do console faz:
+pede ao jogo que feche (`CELL_SYSUTIL_REQUEST_EXITGAME`) e, se ele não fechar
+em 3 s, encerra por ele, nunca no meio da gravação de um save, com status de
+saída 0, então o launcher (e o `--exit-with-game`, o atalho da Steam) vê um fim
+normal. O progresso vale até o último salvamento automático, como no console.
 
 | Aba | O que muda, na hora |
 | --- | --- |
@@ -406,6 +415,7 @@ fps e coincidiu com travamentos.
 | `PS3_AA=fxaa` / `smaa` | Antisserrilhamento na imagem de 1280x720 do jogo, antes de qualquer ampliação: FXAA (o mais leve, um pouco suave) ou SMAA 1x (textos e texturas mais nítidos). Padrão desligado |
 | `PS3_SHARPEN=<0..1>` | nitidez adaptativa ao contraste (estilo AMD CAS) na resolução de saída; 0 (padrão) desliga |
 | `PS3_RES_SCALE=1.5\|2\|3` | Resolução interna: os render targets do jogo em 1,5x (1080p), 2x (1440p) ou 3x (4K) de 1280x720; 3D, efeitos, HUD e textos ficam mais nítidos. Aceita de 1 a 4 (ou `1080p`, `1440p`, `4k`); sem valor ou 1 é o caminho antigo. O que o código do PS3 lê de volta continua em 720p. Vale ao reiniciar (menu do jogo: Imagem > Resolução interna; launcher: Gráficos > Tela). Custo, New Marais headless: 43 fps em 1x, 36 em 1,5x, 32 em 2x, 16 em 3x |
+| `PS3_ASPECT=21:9\|32:9` | Ultrawide: as câmeras veem mais dos lados com a mesma visão vertical (hor+), a imagem é desenhada mais larga e preenche uma tela 21:9 (ou 32:9) sem faixas; o HUD fica em 16:9 no meio, e menus, quadrinhos e vídeos ganham faixas pretas ao lado. Sem valor (ou `16:9`) é o caminho antigo. Vale ao reiniciar (menu do jogo: Imagem > Proporção da tela; launcher: Gráficos > Tela). Combina com `PS3_RES_SCALE`. Custo, New Marais headless: 21:9 dentro do ruído do 16:9 (~37 fps nos dois), 32:9 ~33 fps |
 | `PS3_UPSCALE=metalfx` | ampliação espacial MetalFX de 1280x720 para o tamanho em pixels da janela (macOS 13+), em vez de só esticar a imagem. Onde não houver MetalFX, volta ao caminho normal com uma linha no log. Padrão desligada |
 | `PS3_AUDIO_VOLUME=<0..100>` | volume geral (padrão 100). Aplicado ao que o Mac toca (o som dos filmes também: é tudo uma mixagem só), numa curva que soa uniforme: 50 é cerca de −12 dB. Ao vivo pelo menu do jogo e pelo `PS3_TOGGLE_FILE` |
 | `PS3_AUDIO_DEVICE=<nome>` | a saída de áudio, pelo nome nos ajustes de Som (sem diferenciar maiúsculas, ou só um pedaço: `AirPods`); não encontrada ou sem valor, a padrão do sistema (que o jogo acompanha quando muda) |
@@ -452,7 +462,8 @@ mudança aparece no log como `[toggle] NOME antigo -> novo`. Ao vivo:
 (a lista inteira), `PS3_SPU_FASTJOB`, `PS3_SPU_STUB_MICRO`,
 `PS3_SPU_STACK_HINT`, `PS3_SPU_DRAIN_INLINE` (a checagem de lançamento inline
 do dreno), `PS3_DISPLAY_GAMMA`, `PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO`,
-`PS3RECOMP_METAL_FPS` e `PS3_BUTTON_ICONS`; o resto (entre elas as passadas de luz/SSAO na GPU)
+`PS3RECOMP_METAL_FPS`, `PS3_BUTTON_ICONS` e `PS3_QUIT=1` (sai do jogo como o Sair do
+jogo do menu: uma execução por script termina com status 0); o resto (entre elas as passadas de luz/SSAO na GPU)
 continua lido uma vez na partida. Sem a variável nada muda.
 `tools/ab_live.sh <nome> <OPÇÃO> [B] [A]` usa isso para um A/B de fps dentro
 de uma só execução sem janela: alterna a opção a cada 20 s a partir dos 200 s
