@@ -1,0 +1,414 @@
+spu-neon-fixups.patch: on top of pending/perf-spu-runtime.patch (2026-10-23).
+
+NEON csflt/cuflt/fi (PS3_SPU_NEON_CVT) and a vector form of the fa/fm/fma
+fix-ups (PS3_SPU_NEON_FIX: every lane exact in double -- exponent-0 words,
+extended range, exponent gaps over 29, out-of-range results, fma sums rounded
+onto a 24-bit boundary), both live toggles, both bit-exact against the scalar
+lanes (tests/test_spu_fi_neon.c, test_spu_cflt_fast.c, test_spu_float_neon.c:
+24M adversarial lanes through the fix-ups). SPU_FLOATFIX_STATS on the walk:
+fa gap 1.68G lanes a run, fma zero-a/zero-b/ext 1.5G, fm 0.3G. Live A/B
+(headless walk): NEON_FIX +0.2% fps (10 pairs), NEON_CVT +0.2% (3 pairs):
+inside the noise, so it is left out of the toolkit patch, as
+spu-neon-helpers.patch was.
+
+--- a/include/ps3emu/ps3_toggles.h
++++ b/include/ps3emu/ps3_toggles.h
+@@ -69,6 +69,8 @@
+     PS3T_SPU_DIRECT,         /* spu_context.h: lifted direct branches tail-call   */
+     PS3T_SPU_IBCACHE,        /* spu_channels.c: indirect-branch inline cache      */
+     PS3T_SPU_DMA_LEAN,       /* spu_dma.h: no per-PUT poison scan, MFC slot hint  */
++    PS3T_SPU_NEON_CVT,       /* spu_helpers.h: csflt/cuflt/fi in NEON             */
++    PS3T_SPU_NEON_FIX,       /* spu_helpers.h: fa/fm/fma fix-ups in vector form   */
+     PS3T_COUNT
+ };
+ 
+@@ -108,6 +110,8 @@
+         { "PS3_SPU_DIRECT",             PS3_TK_NOT0, 1 },
+         { "PS3_SPU_IBCACHE",            PS3_TK_NOT0, 1 },
+         { "PS3_SPU_DMA_LEAN",           PS3_TK_NOT0, 1 },
++        { "PS3_SPU_NEON_CVT",           PS3_TK_NOT0, 1 },
++        { "PS3_SPU_NEON_FIX",           PS3_TK_NOT0, 1 },
+     };
+     return &d[id];
+ }
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -93,6 +93,29 @@
+     if (__atomic_exchange_n(&once, 1, __ATOMIC_ACQ_REL)) return;
+     ps3_toggle_watch(PS3T_SPU_DIRECT, spu_direct_set);
+ }
++
++/* spu_helpers.h: csflt/cuflt/fi in NEON (PS3_SPU_NEON_CVT). Both knobs are
++ * registered at the first drain. */
++extern volatile int g_spu_neon_cvt;
++static void spu_neon_cvt_set(int id, int on)
++{
++    (void)id;
++    __atomic_store_n(&g_spu_neon_cvt, on ? 1 : 0, __ATOMIC_RELAXED);
++}
++/* spu_helpers.h: the fa/fm/fma fix-ups in vector form (PS3_SPU_NEON_FIX). */
++extern volatile int g_spu_neon_fix;
++static void spu_neon_fix_set(int id, int on)
++{
++    (void)id;
++    __atomic_store_n(&g_spu_neon_fix, on ? 1 : 0, __ATOMIC_RELAXED);
++}
++static void spu_neon_cvt_init(void)
++{
++    static int once;
++    if (__atomic_exchange_n(&once, 1, __ATOMIC_ACQ_REL)) return;
++    ps3_toggle_watch(PS3T_SPU_NEON_CVT, spu_neon_cvt_set);
++    ps3_toggle_watch(PS3T_SPU_NEON_FIX, spu_neon_fix_set);
++}
+ static __attribute__((noinline)) void spu_task_launch_check_job_end(spu_context* ctx)
+ {
+     static int _n = 0;
+@@ -555,7 +578,7 @@
+ 
+ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+ {
+-    if (__builtin_expect(g_spu_direct < 0, 0)) spu_direct_init();
++    if (__builtin_expect(g_spu_direct < 0, 0)) { spu_direct_init(); spu_neon_cvt_init(); }
+     spu_depth_guard(ctx);
+     /* The frame an interrupt taken in THIS loop returns to. It stays armed
+      * after the handler's first host function returns -- the handler keeps
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -751,15 +751,107 @@
+     uint64_t u; memcpy(&u, &s, 8);
+     const int e = (int)((u >> 52) & 0x7FFu) - 1023;
+     return (e < -126 || e > 127) ? SPU_FF_RANGE : SPU_FF_BOUNDARY;
++}
++/* The fix-ups' vector form (PS3_SPU_NEON_FIX, default on): all four lanes
++ * exact in double, for every input the fast path turns down -- exponent-0
++ * words (SPU zeros), extended range (exponent 255), exponent gaps over 29,
++ * results outside the normal range, fma sums rounded onto a 24-bit boundary.
++ * A New Marais walk sent ~1.7G fa lanes a run to the scalar fix-up for the
++ * gap alone and ~1.5G fma lanes for zero/extended operands; the scalar path
++ * (spu__sf_sum, 128-bit integers per lane) was ~3% of SPU time.
++ *  - widening: an SPU single with biased exponent 1..255 is exactly
++ *    (-1)^s 1.m 2^(be-127) in double, built from its bits; exponent 0 is 0;
++ *  - fm: the 48-bit product is exact in double; fa: the sum is exact when
++ *    the exponents differ by at most 29, and otherwise the smaller term lies
++ *    below half the larger one's last bit, so the truncated sum is the larger
++ *    term (same sign) or its bit pattern minus one (opposite sign: it cannot
++ *    underflow, the larger term's exponent is at least 31);
++ *  - fma: the product is exact, the sum is rounded once (TwoSum gives the
++ *    error); truncating the rounded sum is exact unless it landed on a 24-bit
++ *    boundary with a nonzero error; there the truncation is the boundary itself
++ *    when the error has the sum's sign, else the pattern just below it (minus
++ *    one; +0 when that falls under 2^-126);
++ *  - narrowing truncates (the low 29 bits go), saturates above Smax and gives
++ *    +0 below Smin and for zero, as spu__sf_pack.
++ * tests/test_spu_float_neon.c checks it against the exact lanes. */
++/* p + z in double with its exact rounding error (Knuth's TwoSum: round to nearest, no overflow
++ * -- the operands here are at most 2^257). *err == 0 means the sum was exact. */
++SPU__NV_INLINE float64x2_t spu__nv_twosum(float64x2_t p, float64x2_t z, float64x2_t* err) {
++    const float64x2_t s = vaddq_f64(p, z), bb = vsubq_f64(s, p);
++    *err = vaddq_f64(vsubq_f64(p, vsubq_f64(s, bb)), vsubq_f64(z, bb));
++    return s;
++}
++__attribute__((weak)) volatile int g_spu_neon_fix = 1;
++SPU__NV_INLINE float64x2_t spu__nv_wide(uint32x2_t w) {
++    const uint64x2_t u = vmovl_u32(w);
++    const uint64x2_t be = vandq_u64(vshrq_n_u64(u, 23), vdupq_n_u64(0xFF));
++    const uint64x2_t d = vorrq_u64(vorrq_u64(vshlq_n_u64(vandq_u64(u, vdupq_n_u64(0x80000000u)), 32),
++                                             vshlq_n_u64(vaddq_u64(be, vdupq_n_u64(1023 - 127)), 52)),
++                                   vshlq_n_u64(vandq_u64(u, vdupq_n_u64(0x7FFFFFu)), 29));
++    return vreinterpretq_f64_u64(vbicq_u64(d, vceqzq_u64(be)));
++}
++/* *special: the lanes that saturated or went to +0 (the fma adjust leaves them). */
++SPU__NV_INLINE uint32x2_t spu__nv_narrow(float64x2_t d, uint32x2_t* special) {
++    const uint64x2_t u = vreinterpretq_u64_f64(d);
++    const int64x2_t be = vsubq_s64(vreinterpretq_s64_u64(vandq_u64(vshrq_n_u64(u, 52), vdupq_n_u64(0x7FF))),
++                                   vdupq_n_s64(1023 - 127));
++    const uint64x2_t sign = vandq_u64(vshrq_n_u64(u, 32), vdupq_n_u64(0x80000000u));
++    uint64x2_t r = vorrq_u64(vorrq_u64(sign, vshlq_n_u64(vreinterpretq_u64_s64(be), 23)),
++                             vandq_u64(vshrq_n_u64(u, 29), vdupq_n_u64(0x7FFFFFu)));
++    const uint64x2_t over = vcgtq_s64(be, vdupq_n_s64(255)), under = vcltq_s64(be, vdupq_n_s64(1));
++    r = vbslq_u64(over, vorrq_u64(sign, vdupq_n_u64(0x7FFFFFFFu)), r);
++    r = vbicq_u64(r, under);
++    if (special) *special = vmovn_u64(vorrq_u64(over, under));
++    return vmovn_u64(r);
++}
++SPU__NV_INLINE uint32x4_t spu__nv_fm_med(uint32x4_t x, uint32x4_t y) {
++    const float64x2_t lo = vmulq_f64(spu__nv_wide(vget_low_u32(x)), spu__nv_wide(vget_low_u32(y)));
++    const float64x2_t hi = vmulq_f64(spu__nv_wide(vget_high_u32(x)), spu__nv_wide(vget_high_u32(y)));
++    return vcombine_u32(spu__nv_narrow(lo, NULL), spu__nv_narrow(hi, NULL));
++}
++SPU__NV_INLINE uint32x4_t spu__nv_fa_med(uint32x4_t x, uint32x4_t y) {   /* y already sign-adjusted */
++    const float64x2_t lo = vaddq_f64(spu__nv_wide(vget_low_u32(x)), spu__nv_wide(vget_low_u32(y)));
++    const float64x2_t hi = vaddq_f64(spu__nv_wide(vget_high_u32(x)), spu__nv_wide(vget_high_u32(y)));
++    const uint32x4_t r = vcombine_u32(spu__nv_narrow(lo, NULL), spu__nv_narrow(hi, NULL));
++    const uint32x4_t bx = spu__nv_bexp(x), by = spu__nv_bexp(y);
++    const uint32x4_t gap = vandq_u32(vandq_u32(vtstq_u32(bx, bx), vtstq_u32(by, by)),
++                                     vcgtq_u32(vabdq_u32(bx, by), vdupq_n_u32(29)));
++    const uint32x4_t dom = vbslq_u32(vcgtq_u32(bx, by), x, y);
++    const uint32x4_t opp = vshrq_n_u32(veorq_u32(x, y), 31);           /* 1 where the signs differ */
++    return vbslq_u32(gap, vsubq_u32(dom, opp), r);
++}
++SPU__NV_INLINE uint32x2_t spu__nv_fma_med_half(float64x2_t p, float64x2_t z) {
++    float64x2_t err;
++    const float64x2_t sm = spu__nv_twosum(p, z, &err);
++    uint32x2_t special;
++    const uint32x2_t r = spu__nv_narrow(sm, &special);
++    const uint64x2_t su = vreinterpretq_u64_f64(sm), eu = vreinterpretq_u64_f64(err);
++    /* on a 24-bit boundary, rounded, and the exact value is below it in magnitude */
++    const uint64x2_t adj = vbicq_u64(vandq_u64(vceqzq_u64(vandq_u64(su, vdupq_n_u64(0x1FFFFFFFull))),
++                                               vtstq_u64(veorq_u64(su, eu), vdupq_n_u64(0x8000000000000000ull))),
++                                     vceqzq_f64(err));
++    const uint32x2_t a = vbic_u32(vmovn_u64(adj), special);
++    const uint32x2_t r1 = vadd_u32(r, a);                                /* a = -1 where adjusted */
++    /* below 2^-126 after the step: the SPU's +0 */
++    const uint32x2_t uf = vand_u32(a, vceq_u32(vand_u32(r, vdup_n_u32(0x7FFFFFFFu)), vdup_n_u32(0x00800000u)));
++    return vbic_u32(r1, uf);
++}
++SPU__NV_INLINE uint32x4_t spu__nv_fma_med(uint32x4_t x, uint32x4_t y, uint32x4_t z) {   /* signs adjusted */
++    const float64x2_t plo = vmulq_f64(spu__nv_wide(vget_low_u32(x)), spu__nv_wide(vget_low_u32(y)));
++    const float64x2_t phi = vmulq_f64(spu__nv_wide(vget_high_u32(x)), spu__nv_wide(vget_high_u32(y)));
++    return vcombine_u32(spu__nv_fma_med_half(plo, spu__nv_wide(vget_low_u32(z))),
++                        spu__nv_fma_med_half(phi, spu__nv_wide(vget_high_u32(z))));
+ }
+ SPU__NV_SLOW uint32x4_t spu__fa_fix(uint32x4_t r, uint32x4_t ok, uint32x4_t a, uint32x4_t b, uint32_t negb) {
+     if (spu__ff_enabled()) spu__ff_tally(0, ok, a, veorq_u32(b, vdupq_n_u32(negb)), b, 0, 0);
++    if (g_spu_neon_fix) return spu__nv_fa_med(a, veorq_u32(b, vdupq_n_u32(negb)));
+     SPU__NV_LANES(r, o); SPU__NV_LANES(ok, m); SPU__NV_LANES(a, x); SPU__NV_LANES(b, y);
+     for (int i = 0; i < 4; i++) if (!m[i]) o[i] = spu__fa_any(x[i], y[i] ^ negb);
+     return vld1q_u32(o);
+ }
+ SPU__NV_SLOW uint32x4_t spu__fm_fix(uint32x4_t r, uint32x4_t ok, uint32x4_t a, uint32x4_t b) {
+     if (spu__ff_enabled()) spu__ff_tally(1, ok, a, b, b, 0, 0);
++    if (g_spu_neon_fix) return spu__nv_fm_med(a, b);
+     SPU__NV_LANES(r, o); SPU__NV_LANES(ok, m); SPU__NV_LANES(a, x); SPU__NV_LANES(b, y);
+     for (int i = 0; i < 4; i++) if (!m[i]) o[i] = spu__fm_any(x[i], y[i]);
+     return vld1q_u32(o);
+@@ -767,6 +859,7 @@
+ SPU__NV_SLOW uint32x4_t spu__fma_fix(uint32x4_t r, uint32x4_t ok, uint32x4_t a, uint32x4_t b, uint32x4_t c,
+                                      uint32_t negp, uint32_t negc) {
+     if (spu__ff_enabled()) spu__ff_tally(2, ok, a, b, c, negp, negc);
++    if (g_spu_neon_fix) return spu__nv_fma_med(veorq_u32(a, vdupq_n_u32(negp)), b, veorq_u32(c, vdupq_n_u32(negc)));
+     SPU__NV_LANES(r, o); SPU__NV_LANES(ok, m); SPU__NV_LANES(a, x); SPU__NV_LANES(b, y); SPU__NV_LANES(c, z);
+     for (int i = 0; i < 4; i++) if (!m[i]) o[i] = spu__fma_any(x[i], y[i], z[i], negp, negc);
+     return vld1q_u32(o);
+@@ -800,13 +893,6 @@
+     if (!spu__nv_all4(ok)) r = spu__fm_fix(r, ok, x, y);
+     return spu__nv_u128(r);
+ }
+-/* p + z in double with its exact rounding error (Knuth's TwoSum: round to nearest, no overflow
+- * -- the operands here are at most 2^257). *err == 0 means the sum was exact. */
+-SPU__NV_INLINE float64x2_t spu__nv_twosum(float64x2_t p, float64x2_t z, float64x2_t* err) {
+-    const float64x2_t s = vaddq_f64(p, z), bb = vsubq_f64(s, p);
+-    *err = vaddq_f64(vsubq_f64(p, vsubq_f64(s, bb)), vsubq_f64(z, bb));
+-    return s;
+-}
+ /* (+-a*b) + (+-c): the product is exact in double; one rounding in the add, and TwoSum says
+  * whether it rounded. (The old test sent every result with 29 zero low bits to the exact path --
+  * every exactly representable result, 1.5*1 + 0.5 -- so fma's common case was slow.) */
+@@ -910,10 +996,48 @@
+ static inline u128 spu_cflts(u128 a, int i8) { return spu_cflts_exact(a, i8); }
+ static inline u128 spu_cfltu(u128 a, int i8) { return spu_cfltu_exact(a, i8); }
+ #endif
+-static inline u128 spu_csflt(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const int32_t v = a._s32[i];
++static inline u128 spu_csflt_exact(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const int32_t v = a._s32[i];
+     r._u32[i] = v ? spu__sf_pack(v < 0 ? 0x80000000u : 0, v < 0 ? 0u - (uint32_t)v : (uint32_t)v, -(155 - (i8 & 0xFF))) : 0; } return r; }
+-static inline u128 spu_cuflt(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const uint32_t v = a._u32[i];
++static inline u128 spu_cuflt_exact(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const uint32_t v = a._u32[i];
+     r._u32[i] = v ? spu__sf_pack(0, v, -(155 - (i8 & 0xFF))) : 0; } return r; }
++/* NEON csflt/cuflt, bit-identical to the exact lanes (tests/test_spu_cflt_fast.c):
++ * a 32-bit integer and its product with 2^-scale are exact in double for a
++ * scale of 0..155 (i8 <= 155: the result never reaches 2^32, so no
++ * saturation); clearing the 29 low significand bits truncates to 24, and a
++ * result below 2^-126 is the SPU's +0. Other scales take the exact path.
++ * csflt was ~1.5% of SPU time in New Marais as the scalar loop. */
++/* PS3_SPU_NEON_CVT=0 (environment or PS3_TOGGLE_FILE; spu_drain.c watches it)
++ * sends csflt/cuflt/fi back to the exact scalar lanes. One weak global for
++ * every TU, as spu_floatfix_on; the self-contained tests see 1. */
++__attribute__((weak)) volatile int g_spu_neon_cvt = 1;
++#if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++static inline uint32x2_t spu__cvf_trunc(float64x2_t d) {
++    const uint64x2_t u = vreinterpretq_u64_f64(d);
++    const uint64x2_t be = vandq_u64(vshrq_n_u64(u, 52), vdupq_n_u64(0x7FF));
++    const uint32x2_t keep = vmovn_u64(vcgeq_u64(be, vdupq_n_u64(1023 - 126)));   /* zero (be 0) drops too */
++    const float32x2_t f = vcvt_f32_f64(vreinterpretq_f64_u64(vandq_u64(u, vdupq_n_u64(~0x1FFFFFFFull))));
++    return vand_u32(vreinterpret_u32_f32(f), keep);
++}
++static inline u128 spu__cvf_neon(float64x2_t lo, float64x2_t hi, int scale) {
++    const float64x2_t f = vreinterpretq_f64_u64(vdupq_n_u64((uint64_t)(1023 - scale) << 52));
++    u128 r; vst1q_u32(r._u32, vcombine_u32(spu__cvf_trunc(vmulq_f64(lo, f)), spu__cvf_trunc(vmulq_f64(hi, f)))); return r;
++}
++static inline u128 spu_csflt(u128 a, int i8) {
++    const int scale = 155 - (i8 & 0xFF);
++    if (scale < 0 || !g_spu_neon_cvt) return spu_csflt_exact(a, i8);
++    const int32x4_t v = vreinterpretq_s32_u32(vld1q_u32(a._u32));
++    return spu__cvf_neon(vcvtq_f64_s64(vmovl_s32(vget_low_s32(v))), vcvtq_f64_s64(vmovl_high_s32(v)), scale);
++}
++static inline u128 spu_cuflt(u128 a, int i8) {
++    const int scale = 155 - (i8 & 0xFF);
++    if (scale < 0 || !g_spu_neon_cvt) return spu_cuflt_exact(a, i8);
++    const uint32x4_t v = vld1q_u32(a._u32);
++    return spu__cvf_neon(vcvtq_f64_u64(vmovl_u32(vget_low_u32(v))), vcvtq_f64_u64(vmovl_high_u32(v)), scale);
++}
++#else
++static inline u128 spu_csflt(u128 a, int i8) { return spu_csflt_exact(a, i8); }
++static inline u128 spu_cuflt(u128 a, int i8) { return spu_cuflt_exact(a, i8); }
++#endif
+ 
+ /* fi -- Floating Interpolate (SPU ISA v1.2, p. 219; frest/frsqest output
+  * format p. 215; single-precision rules section 9.1).
+@@ -932,7 +1056,7 @@
+  * exponent-0 estimate is a zero operand, and a result whose exponent would
+  * drop below 1 underflows -- both give +0, the only zero the SPU produces.
+  * Exponent 255 is ordinary extended range, so 1/0 stays at the top of it. */
+-static inline u128 spu_fi(u128 a, u128 b) {
++static inline u128 spu_fi_exact(u128 a, u128 b) {
+     u128 r;
+     for (int i = 0; i < 4; i++) {
+         const uint32_t est = b._u32[i];
+@@ -952,7 +1076,31 @@
+         r._u32[i] = sign | ((uint32_t)exp << 23) | frac;
+     }
+     return r;
++}
++/* The same, four lanes at a time (tests/test_spu_fi_neon.c compares the two).
++ * (2^13 + base) << 19 is 2^32 + (base << 19), so with t = (base << 19) - step*y
++ * in 32 bits the magnitude * 2^32 is 2^32 + t when base << 19 >= step*y (in
++ * [1, 2): fraction t >> 9) and 2^32 - (2^32 - t) otherwise (below 1: shifted
++ * left once, fraction (t << 1) >> 9, exponent - 1). step*y < 2^29 fits.
++ * spu_fi was ~1% of SPU time in New Marais as the scalar loop. */
++#if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++static inline u128 spu_fi(u128 a, u128 b) {
++    if (!g_spu_neon_cvt) return spu_fi_exact(a, b);
++    const uint32x4_t est = vld1q_u32(b._u32), ra = vld1q_u32(a._u32);
++    const uint32x4_t exp = vandq_u32(vshrq_n_u32(est, 23), vdupq_n_u32(0xFF));
++    const uint32x4_t hi = vshlq_n_u32(vandq_u32(vshrq_n_u32(est, 10), vdupq_n_u32(0x1FFF)), 19);
++    const uint32x4_t prod = vmulq_u32(vandq_u32(est, vdupq_n_u32(0x3FF)), vandq_u32(ra, vdupq_n_u32(0x7FFFF)));
++    const uint32x4_t ge = vcgeq_u32(hi, prod);                       /* magnitude >= 1 */
++    const uint32x4_t t = vsubq_u32(hi, prod);
++    const uint32x4_t frac = vshrq_n_u32(vbslq_u32(ge, t, vshlq_n_u32(t, 1)), 9);
++    const uint32x4_t e2 = vaddq_u32(exp, vmvnq_u32(ge));             /* exp - 1 where below 1 (~ge = -1) */
++    const uint32x4_t live = vmvnq_u32(vorrq_u32(vceqzq_u32(exp), vceqzq_u32(e2)));
++    const uint32x4_t r = vorrq_u32(vorrq_u32(vandq_u32(est, vdupq_n_u32(0x80000000u)), vshlq_n_u32(e2, 23)), frac);
++    u128 o; vst1q_u32(o._u32, vandq_u32(r, live)); return o;
+ }
++#else
++static inline u128 spu_fi(u128 a, u128 b) { return spu_fi_exact(a, b); }
++#endif
+ 
+ /* ---- double precision: IEEE, round to nearest (see the header of this section) ---- */
+ static inline uint64_t spu__dw_get(u128 r, int i) { return ((uint64_t)r._u32[2*i] << 32) | r._u32[2*i+1]; }
+--- a/runtime/spu/tests/test_spu_cflt_fast.c
++++ b/runtime/spu/tests/test_spu_cflt_fast.c
+@@ -1,4 +1,4 @@
+-/* test_spu_cflt_fast.c: the NEON cflts/cfltu fast path against the exact lanes.
++/* test_spu_cflt_fast.c: the NEON cflts/cfltu and csflt/cuflt fast paths against the exact lanes.
+  * Build: cc -O2 -I.. -I../.. -I../../../include test_spu_cflt_fast.c -o /tmp/t && /tmp/t */
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -26,7 +26,14 @@
+             }
+             u128 f = spu_cflts(a, i8), e = spu_cflts_exact(a, i8);
+             u128 fu = spu_cfltu(a, i8), eu = spu_cfltu_exact(a, i8);
+-            n += 2;
++            u128 c = spu_csflt(a, i8), ce = spu_csflt_exact(a, i8);
++            u128 cu = spu_cuflt(a, i8), cue = spu_cuflt_exact(a, i8);
++            n += 4;
++            if (memcmp(&c, &ce, 16) || memcmp(&cu, &cue, 16)) {
++                if (bad++ < 10)
++                    printf("MISMATCH csflt/cuflt i8=%d in %08X %08X %08X %08X: s %08X/%08X u %08X/%08X\n", i8,
++                           a._u32[0], a._u32[1], a._u32[2], a._u32[3], c._u32[0], ce._u32[0], cu._u32[0], cue._u32[0]);
++            }
+             if (memcmp(&f, &e, 16) || memcmp(&fu, &eu, 16)) {
+                 if (bad++ < 10)
+                     printf("MISMATCH i8=%d in %08X %08X %08X %08X: s %08X/%08X u %08X/%08X\n", i8,
+--- a/runtime/spu/tests/test_spu_fi_neon.c
++++ b/runtime/spu/tests/test_spu_fi_neon.c
+@@ -0,0 +1,36 @@
++/* test_spu_fi_neon.c: the NEON spu_fi against the scalar spu_fi_exact.
++ * Build: cc -O2 -I.. -I../.. -I../../../include test_spu_fi_neon.c -o /tmp/t && /tmp/t
++ * Every estimate exponent/sign with random fractions and ra, plus the edges
++ * (exponent 0, 1 and 255; base/step/y at 0 and all ones). */
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include "spu_context.h"
++#include "spu_helpers.h"
++
++static uint64_t rng = 0x9E3779B97F4A7C15ull;
++static uint32_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return (uint32_t)rng; }
++
++int main(void)
++{
++    unsigned long long n = 0, bad = 0;
++    static const uint32_t frac[] = { 0, 0x7FFFFFu, 0x7FFC00u, 0x3FFu, 0x400u, 0x1u, 0x400000u };
++    static const uint32_t ys[] = { 0, 0x7FFFFu, 0x40000u, 1u, 0xFFFFFFFFu, 0x80000000u };
++    for (uint32_t se = 0; se < 512; se++) {
++        for (int k = 0; k < 4000; k++) {
++            u128 a, b;
++            for (int l = 0; l < 4; l++) {
++                const uint32_t f = (k < 7 * 6) ? frac[k % 7] : rnd() & 0x7FFFFFu;
++                b._u32[l] = (se << 23) | f;
++                a._u32[l] = (k < 7 * 6) ? ys[(k / 7) % 6] : rnd();
++                if (l) { b._u32[l] = (rnd() & 0xFF800000u) | (rnd() & 0x7FFFFFu); if (l == 3) b._u32[l] &= 0x807FFFFFu; }
++            }
++            const u128 r = spu_fi(a, b), x = spu_fi_exact(a, b);
++            for (int l = 0; l < 4; l++, n++)
++                if (r._u32[l] != x._u32[l] && bad++ < 10)
++                    printf("fi(%08X, %08X): neon %08X exact %08X\n", a._u32[l], b._u32[l], r._u32[l], x._u32[l]);
++        }
++    }
++    printf("spu_fi NEON vs exact: %llu lanes, %llu mismatches\n", n, bad);
++    return bad != 0;
++}
+--- a/runtime/spu/tests/test_spu_float_neon.c
++++ b/runtime/spu/tests/test_spu_float_neon.c
+@@ -64,6 +64,50 @@
+     if (bad) { printf("test_spu_float_neon: %ld mismatches in %ld cases\n", bad, N); return 1; }
+     printf("test_spu_float_neon: ok (%ld random cases)\n", N);
+ 
++    /* The vector fix-ups (spu__nv_fa_med / fm_med / fma_med) on their own, every lane checked:
++     * they must be exact for ANY input, not just the lanes the fast path turns down. Words with
++     * every exponent (0 with a fraction, 255), exponent gaps on both sides of 29, near-cancelling
++     * pairs, and fma addends a lone power of two below the product (rounded onto a boundary). */
++    {
++        const long M = 6000000;
++        for (long it = 0; it < M; it++) {
++            uint32_t x[4], y[4], z[4];
++            for (int i = 0; i < 4; i++) {
++                x[i] = (it & 3) == 0 ? rnd32() : rnd_float();
++                y[i] = (it & 3) == 1 ? rnd32() : rnd_float();
++                z[i] = rnd_float();
++                switch (rnd32() % 7) {
++                case 0: { const uint32_t e = (x[i] >> 23) & 0xFF;   /* a gap of 25..40 */
++                          const int g = 25 + (int)(rnd32() % 16), ey = (int)e - g;
++                          if (ey >= 1) y[i] = (rnd32() & 0x807FFFFFu) | ((uint32_t)ey << 23); } break;
++                case 1: y[i] = (x[i] ^ 0x80000000u) + (rnd32() & 0xF) - 8; break;
++                case 5: { x[i] &= 0xFFF00000u; y[i] &= 0xFFF00000u;   /* short significands */
++                          const int ez = (int)((x[i] >> 23) & 0xFF) + (int)((y[i] >> 23) & 0xFF) - 127 - 30 - (int)(rnd32() % 40);
++                          if (ez >= 1 && ez <= 255) z[i] = (rnd32() & 0x80000000u) | ((uint32_t)ez << 23);
++                          else z[i] = rnd32() & 0x80000000u; } break;
++                case 2: { const int ez = (int)((x[i] >> 23) & 0xFF) + (int)((y[i] >> 23) & 0xFF) - 127 - 40 - (int)(rnd32() % 30);
++                          if (ez >= 1 && ez <= 255) z[i] = (rnd32() & 0x80000000u) | ((uint32_t)ez << 23); } break;
++                default: break;
++                }
++            }
++            const uint32x4_t vx = vld1q_u32(x), vy = vld1q_u32(y), vz = vld1q_u32(z);
++            const uint32_t np = (it & 4) ? 0x80000000u : 0, nc = (it & 8) ? 0x80000000u : 0;
++            uint32_t ra[4], rm[4], rf[4];
++            vst1q_u32(ra, spu__nv_fa_med(vx, vy));
++            vst1q_u32(rm, spu__nv_fm_med(vx, vy));
++            vst1q_u32(rf, spu__nv_fma_med(veorq_u32(vx, vdupq_n_u32(np)), vy, veorq_u32(vz, vdupq_n_u32(nc))));
++            for (int i = 0; i < 4; i++) {
++                const uint32_t ea = spu__fa_lane(x[i], y[i]), em = spu__fm_lane(x[i], y[i]);
++                const uint32_t ef = spu__fma_lane(x[i], y[i], z[i], np, nc);
++                if ((ra[i] != ea || rm[i] != em || rf[i] != ef) && bad++ < 10)
++                    printf("MED MISMATCH x=%08X y=%08X z=%08X np=%X nc=%X: fa %08X/%08X fm %08X/%08X fma %08X/%08X\n",
++                           x[i], y[i], z[i], np, nc, ra[i], ea, rm[i], em, rf[i], ef);
++            }
++        }
++        if (bad) { printf("test_spu_float_neon: vector fix-ups, %ld mismatches\n", bad); return 1; }
++        printf("test_spu_float_neon: ok (%ld x 4 lanes through the vector fix-ups)\n", M);
++    }
++
+     /* fma's fast path trusts a double sum unless it was rounded (TwoSum error != 0) AND landed
+      * on a 24-bit boundary. Random operands almost never reach either side of that test, so aim
+      * at it: products of short (dyadic) significands, plus an addend that is either dyadic too
