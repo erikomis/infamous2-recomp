@@ -72,6 +72,7 @@ static inline void infamous2_host_qos_self(void) {}
 extern "C" {
 uint32_t ppu_load_elf(const char* path);      /* ELF -> guest RAM, returns entry OPD */
 void infamous2_apply_patches(const char* elf_path);   /* game_patches.cpp: PS3_PATCHES */
+void infamous2_apply_aspect(const char* elf_path);    /* game_patches.cpp: PS3_ASPECT (hor+) */
 void     ppu_recomp_register(void);           /* generated: lifted table -> address map */
 void     ppu_hle_init(void);                  /* firmware import NID -> HLE handler */
 void     ppu_sysprx_register(void);           /* boot-critical CRT (sys_initialize_tls, ...) */
@@ -436,6 +437,7 @@ int main(int argc, char** argv)
         return 1;
     }
     infamous2_apply_patches(argv[1]);   /* community patches from the player's RPCS3 patch.yml */
+    infamous2_apply_aspect(argv[1]);    /* PS3_ASPECT: the cameras' aspect ratio, hor+ */
 
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);

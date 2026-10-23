@@ -103,6 +103,9 @@ pub struct Settings {
     /// PS3_RES_SCALE: the internal resolution as a multiple of 1280x720,
     /// "" (native), "1.5" (1080p), "2" (1440p) or "3" (4K).
     pub res_scale: String,
+    /// PS3_ASPECT: "" (16:9, the game's own), "21:9" or "32:9": a wider
+    /// picture with the view widened to the sides (hor+), the HUD kept 16:9.
+    pub aspect: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
     /// PS3_MOUSE_DEADZONE.
     pub mouse: bool,
@@ -186,6 +189,7 @@ impl Default for Settings {
             mods: Vec::new(),
             upscale: String::new(),
             res_scale: String::new(),
+            aspect: String::new(),
             mouse: true,
             mouse_sens: 1.0,
             mouse_invert_y: false,
@@ -651,6 +655,15 @@ fn res_scale_value(v: &str) -> Option<String> {
     }
 }
 
+/// PS3_ASPECT for the `aspect` setting: the wide shapes the game supports,
+/// or None for its own 16:9 (also for anything else).
+fn aspect_value(v: &str) -> Option<String> {
+    match v.trim() {
+        "21:9" | "32:9" => Some(v.trim().to_string()),
+        _ => None,
+    }
+}
+
 fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     let mut set = |k: &str, v: String| env.push((k.to_string(), v));
@@ -732,6 +745,9 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if let Some(k) = res_scale_value(&s.res_scale) {
         set("PS3_RES_SCALE", k);
+    }
+    if let Some(a) = aspect_value(&s.aspect) {
+        set("PS3_ASPECT", a);
     }
     if let Some(p) = &input.path {
         set("PS3_INPUT_MAP", p.clone());
@@ -2881,6 +2897,13 @@ mod tests {
             assert_eq!(env.get("PS3_RES_SCALE").map(String::as_str), want, "res_scale {v:?}");
         }
         s.res_scale = String::new();
+        assert!(!env.contains_key("PS3_ASPECT"), "16:9 passes nothing");
+        for (v, want) in [("21:9", Some("21:9")), ("32:9", Some("32:9")), ("16:9", None), ("", None), ("4:3", None)] {
+            s.aspect = v.into();
+            let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+            assert_eq!(env.get("PS3_ASPECT").map(String::as_str), want, "aspect {v:?}");
+        }
+        s.aspect = String::new();
         s.aa = "bogus".into();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert!(!env.contains_key("PS3_AA"), "an unknown AA mode stays out");

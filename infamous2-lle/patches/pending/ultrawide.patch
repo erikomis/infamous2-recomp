@@ -1,0 +1,687 @@
+diff --git a/libs/video/ps3_overlay.mm b/libs/video/ps3_overlay.mm
+--- a/libs/video/ps3_overlay.mm	2026-10-22 23:25:22
++++ b/libs/video/ps3_overlay.mm	2026-10-23 08:28:23
+@@ -61,6 +61,7 @@
+ int   rsx_metal_gfx_upscale(void);
+ void  rsx_metal_gfx_set_upscale(int on);
+ float rsx_metal_res_scale(void);        /* PS3_RES_SCALE in effect; -1 not possible here */
++float rsx_metal_aspect(void);           /* PS3_ASPECT in effect (1 = 16:9); -1 not possible here */
+ int   rsx_metal_vsync(void);
+ void  rsx_metal_set_vsync(int on);
+ int   rsx_metal_window_mode(void);
+@@ -112,7 +113,7 @@
+     V_VOLUME, V_RUMBLE, V_RUMBLE_STRENGTH, V_MOUSE_SENS, V_MOUSE_INVERT_X, V_MOUSE_INVERT_Y,
+     V_HUD, V_HUD_CORNER, V_HUD_OPACITY, V_HUD_GRAPH, V_MOUSE, V_INPUT_MODE, V_VIBRANCE, V_CONTRAST, V_VIGNETTE, V_GRAIN, V_LUT_STRENGTH, V_BUTTON_ICONS,
+     V_LANG, V_VOICE_LANG, V_TEXT_LANG,
+-    V_SHADOWS, V_MIDTONES, V_HIGHLIGHTS, V_CLARITY, V_LUT_PRESET, V_RES_SCALE, V_N
++    V_SHADOWS, V_MIDTONES, V_HIGHLIGHTS, V_CLARITY, V_LUT_PRESET, V_RES_SCALE, V_ASPECT, V_N
+ };
+ static const char* const kVar[V_N] = {
+     "PS3_DISPLAY_GAMMA", "PS3_SHARPEN", "PS3_AA", "PS3_ANISO", "PS3_UPSCALE", "PS3_VSYNC",
+@@ -122,7 +123,7 @@
+     "PS3_VIBRANCE", "PS3_CONTRAST", "PS3_VIGNETTE", "PS3_GRAIN", "PS3_LUT_STRENGTH",
+     "PS3_BUTTON_ICONS", "PS3_LANG", "PS3_VOICE_LANG", "PS3_TEXT_LANG",
+     "PS3_SHADOWS", "PS3_MIDTONES", "PS3_HIGHLIGHTS", "PS3_CLARITY", "PS3_LUT_PRESET",
+-    "PS3_RES_SCALE",
++    "PS3_RES_SCALE", "PS3_ASPECT",
+ };
+ /* Plain arrays: these are filled by a constructor, before C++ globals of
+  * this file would be guaranteed to exist. */
+@@ -673,6 +674,7 @@
+     int   button_icons;     /* 0 auto, 1 PlayStation, 2 Xbox, 3 keyboard */
+     int   aniso_start;
+     int   res, res_start;   /* PS3_RES_SCALE: index in kResScale; -1 n/a */
++    int   asp, asp_start;   /* PS3_ASPECT: index in kAspect; -1 n/a */
+ };
+ /* PS3_RES_SCALE choices of the menu (the variable takes any 1..4). */
+ static const char* const kResScale[] = { "1", "1.5", "2", "3" };
+@@ -682,6 +684,20 @@
+     for (int i = 1; i < 4; i++) if (fabs(atof(kResScale[i]) - v) < fabs(atof(kResScale[best]) - v)) best = i;
+     return best;
+ }
++/* PS3_ASPECT choices of the menu ("" = the game's 16:9). */
++static const char* const kAspect[] = { "16:9", "21:9", "32:9" };
++static int aspect_index(double k)   /* k = aspect / (16/9) */
++{
++    const double a = k * 16.0 / 9.0, v[3] = { 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0 };
++    int best = 0;
++    for (int i = 1; i < 3; i++) if (fabs(v[i] - a) < fabs(v[best] - a)) best = i;
++    return best;
++}
++static int aspect_index_str(const char* e)
++{
++    for (int i = 0; i < 3; i++) if (!strcmp(e, kAspect[i])) return i;
++    return 0;
++}
+ static Ui s_ui;
+ 
+ static void ui_load(void)
+@@ -707,6 +723,9 @@
+     { const float rs = rsx_metal_res_scale();
+       s_ui.res_start = rs < 0.0f ? -1 : res_scale_index(rs);
+       s_ui.res = s_value[V_RES_SCALE][0] ? res_scale_index(atof(s_value[V_RES_SCALE])) : s_ui.res_start; }
++    { const float ak = rsx_metal_aspect();
++      s_ui.asp_start = ak < 0.0f ? -1 : aspect_index(ak);
++      s_ui.asp = s_value[V_ASPECT][0] ? aspect_index_str(s_value[V_ASPECT]) : s_ui.asp_start; }
+     s_ui.vsync = rsx_metal_vsync();
+     s_ui.wmode = rsx_metal_window_mode();
+     s_ui.volume = cellAudio_host_volume();
+@@ -883,6 +902,25 @@
+     else
+         hint(L("Applies when the game restarts. Higher costs GPU time (see the HUD).",
+                "Vale quando o jogo reiniciar. Mais alta custa tempo de GPU (veja o HUD)."));
++
++    /* PS3_ASPECT: a wider picture (hor+), the HUD kept 16:9. */
++    ImGui::BeginDisabled(s_ui.asp_start < 0);
++    { const char* an_en[3] = { "16:9 (original)", "21:9 (ultrawide)", "32:9 (super ultrawide)" };
++      const char* an_pt[3] = { "16:9 (original)", "21:9 (ultrawide)", "32:9 (super ultrawide)" };
++      int ai = s_ui.asp < 0 ? 0 : s_ui.asp;
++      if (ImGui::Combo(L("Aspect ratio", "Proporção da tela"), &ai, s_pt ? an_pt : an_en, 3)) {
++          s_ui.asp = ai;
++          set_value(V_ASPECT, "%s", kAspect[ai]);
++      } }
++    ImGui::EndDisabled();
++    env_mark(V_ASPECT);
++    if (s_ui.asp_start < 0)
++        hint(L("Not available here (the old vtable path).", "Indisponível aqui (caminho vtable antigo)."));
++    else if (s_ui.asp != s_ui.asp_start)
++        ImGui::TextColored(ImVec4(1.0f, 0.60f, 0.20f, 1.0f), "%s", L("Applies when the game restarts.", "Vale quando o jogo reiniciar."));
++    else
++        hint(L("Applies when the game restarts. Wider shows more to the sides; the HUD stays 16:9.",
++               "Vale quando o jogo reiniciar. Mais larga mostra mais dos lados; o HUD fica em 16:9."));
+ 
+     section(L("Display", "Tela"));
+     ImGui::BeginDisabled(s_ui.vsync < 0);
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+--- a/libs/video/rsx_draw_engine.c	2026-10-22 23:54:28
++++ b/libs/video/rsx_draw_engine.c	2026-10-23 09:22:42
+@@ -3404,6 +3404,15 @@
+             dc.n_idx, dc.n_verts, dc.fetch_ok, sf.color_offset[0], sf.clip_w, sf.clip_h, g.frames);
+ }
+ 
++static u32 uploaded_hud_n(u32 n_verts, u32 n_draw, int indexed) { return indexed ? n_verts : n_draw; }
++
++/* PS3_ASPECT_HUD_AFTER (see sink_end): the composite programs, the frame the
++ * last draw was in, a count of frames that drew ("slices"), the slice that
++ * last drew a composite (0 none yet) and whether this one has. */
++static u64 s_hud_fp[8];
++static int s_hud_n = -1, s_hud_after;
++static u32 s_hud_frame = ~0u, s_hud_slice, s_hud_seen;
++
+ static void sink_end(void* user, const rsx_dispatch* r)
+ {
+     (void)user; (void)r;
+@@ -3952,6 +3961,72 @@
+     g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
+     g.be->bind_textures(g.be->user, textures, samplers, tex_mask);
+     g.be->bind_vertex_textures(g.be->user, vtextures, vsamplers, vtex_mask);
++    /* PS3RECOMP_ENG_HUDLOG=<sec>: DIAGNOSTIC (PS3_ASPECT). Every draw without
++     * a depth test into a single target, for the first world frame <sec>
++     * seconds after the first draw and the two after it (a game frame spans
++     * two present slices): programs, vertex count, the
++     * position attribute's range and the guest viewport -- what tells the
++     * title's 2D overlay from its full-screen passes. */
++    { static long hsec = -2; static u32 hframe = ~0u, hdone, hafter_frame = ~0u; static unsigned long long ht0;
++      static u64 hafter;   /* PS3RECOMP_ENG_HUDLOG_AFTER=<fp hex>: also every draw after it in its frame */
++      if (hsec == -2) { const char* e = getenv("PS3RECOMP_ENG_HUDLOG"); hsec = e ? strtol(e, 0, 10) : -1;
++                        const char* f = getenv("PS3RECOMP_ENG_HUDLOG_AFTER"); hafter = f ? strtoull(f, 0, 16) : 0; }
++      if (hsec >= 0 && !hdone) {
++          extern unsigned long long ps3_ms_now(void);
++          if (!ht0) ht0 = ps3_ms_now();
++          if (hframe == ~0u && g.guest_draws > 1000 && ps3_ms_now() - ht0 >= (unsigned long long)hsec * 1000ull) hframe = g.frames;
++          if (hframe != ~0u && g.frames > hframe + 2u) hdone = 1;
++          const eng_vp_memo* vpm = NULL; const eng_fp_memo* fpm = NULL;
++          if (hframe != ~0u && g.frames - hframe <= 2u) eng_guest_programs(&vpm, &fpm);
++          const int after = hafter_frame == g.frames;
++          if (hafter && fpm && fpm->structural == hafter) hafter_frame = g.frames;
++          if (hframe != ~0u && g.frames - hframe <= 2u && (after || (n_targets == 1 && !rs.depth_test))) {
++              float mn[4] = { 1e30f, 1e30f, 1e30f, 1e30f }, mx[4] = { -1e30f, -1e30f, -1e30f, -1e30f };
++              const s8 ps = layout.slot_by_attr[0];
++              if (ps >= 0 && dc.verts && !(dc.vbuf_hit && indexed))
++                  for (u32 v = 0; v < uploaded_hud_n(dc.n_verts, n_draw, indexed); v++) {
++                      const float* q = (const float*)((const u8*)dc.verts + (size_t)v * layout.stride + (size_t)ps * 16u);
++                      for (int c = 0; c < 4; c++) { if (q[c] < mn[c]) mn[c] = q[c]; if (q[c] > mx[c]) mx[c] = q[c]; } }
++              fprintf(stderr, "[hudlog] f=%u d=%u nt=%u z=%u/0x%X rt=0x%08X %ux%u fp=%016llx vp=%016llx vpc=%u+%u n=%u blend=%u cmask=0x%08X vps=(%g %g) vpt=(%g %g) pos x[%g,%g] y[%g,%g] z[%g,%g] w[%g,%g]\n",
++                      g.frames, g.guest_draws, n_targets, rs.depth_test, rs.depth_func, g.surfaces[target].offset, g.surfaces[target].w, g.surfaces[target].h,
++                      (unsigned long long)(fpm ? fpm->structural : 0), (unsigned long long)(vpm ? vpm->hash : 0),
++                      g.vpc_lo, g.vpc_n, dc.n_verts, rs.blend_enable, rsx_dsp_reg(&g.rsx, 0x0324),
++                      vp.scale[0], vp.scale[1], vp.translate[0], vp.translate[1],
++                      mn[0], mx[0], mn[1], mx[1], mn[2], mx[2], mn[3], mx[3]);
++              for (u32 c = g.vpc_lo; c < g.vpc_lo + g.vpc_n && c < g.vpc_lo + 6u && c < RSX_DSP_NUM_CONSTANTS; c++) {
++                  float v4[4]; memcpy(v4, g.rsx.constants[c], sizeof v4);
++                  fprintf(stderr, "[hudlog]   c[%u] = (%g %g %g %g)\n", c, v4[0], v4[1], v4[2], v4[3]); }
++          } } }
++    /* PS3_ASPECT_HUD_AFTER=<fp hex>[,<fp hex>..]: the title's 2D overlay for
++     * a backend rendering wide (PS3_ASPECT, set_hud). The listed fragment
++     * programs are the title's last full-screen pass of a 3D frame (its
++     * composite); the draws after it in that frame into a display-sized
++     * target are the HUD, and so is every display-sized draw of a frame that
++     * has no composite at all (menus, motion comics, movies, loading screens;
++     * judged by the frame before, since draws are recorded in order). Those
++     * keep 16:9 in the middle of the wide picture; the 3D frame up to and
++     * including the composite fills it. Frames are counted when they draw
++     * (the host clock's repeat presents do not). Unset: nothing is flagged
++     * and everything stretches with the 3D picture. */
++    if (g.be->set_hud) {
++        if (s_hud_n < 0) { s_hud_n = 0;
++            /* Only while a wide picture is asked for: unset (or 16:9) costs nothing. */
++            const char* asp = getenv("PS3_ASPECT");
++            const char* e = (asp && *asp && strcmp(asp, "16:9")) ? getenv("PS3_ASPECT_HUD_AFTER") : NULL;
++            while (e && *e && s_hud_n < 8) { s_hud_fp[s_hud_n++] = strtoull(e, (char**)&e, 16); if (*e == ',') e++; else break; } }
++        int hud = 0, display = 0;
++        if (s_hud_n) {
++            if (g.frames != s_hud_frame) { s_hud_frame = g.frames; s_hud_slice++; s_hud_after = 0; }
++            const eng_fp_memo* hfm = NULL;
++            const u64 fk = eng_guest_programs(NULL, &hfm) && hfm ? hfm->structural : 0;
++            int composite = 0;
++            for (int k = 0; k < s_hud_n; k++) if (fk && fk == s_hud_fp[k]) composite = 1;
++            display = g.surfaces[target].w == g.width && g.surfaces[target].h == g.height;
++            if (composite) { s_hud_after = 1; s_hud_seen = s_hud_slice; }
++            else if (display) hud = s_hud_after || !s_hud_seen || s_hud_slice - s_hud_seen > 1u;
++        }
++        g.be->set_hud(g.be->user, hud ? 1 : (s_hud_n && display ? 2 : 0), g.surfaces[target].w);
++    }
+     g.be->set_viewport(g.be->user, 0.0f, 0.0f, W, H);
+ 
+     /* The guest scissor intersected with the surface. The nv40 reset is a
+@@ -4221,6 +4296,10 @@
+                     on = e ? 1 : 0; if (e) off = (u32)strtoul(e, NULL, 16); }
+       if (on) for (u32 i = 0; i < g.n_surfaces; ++i)
+           if (g.surfaces[i].offset == off) { g.be->present(g.be->user, g.surfaces[i].handle); goto presented; } }
++    /* PS3_ASPECT_HUD_AFTER: a frame of overlay alone (no composite in it or
++     * the one before) is presented with black bars beside its 16:9. */
++    if (g.be->set_hud && s_hud_n > 0 && g.guest_draws && s_hud_frame == g.frames)
++        g.be->set_hud(g.be->user, (!s_hud_after && (!s_hud_seen || s_hud_slice - s_hud_seen > 1u)) ? 3 : 4, 0);
+     { const u64 t = eng_ds_now();
+       g.be->present(g.be->user, g.surfaces[target].handle);
+       const int src = s_present_src;
+diff --git a/libs/video/rsx_draw_engine.h b/libs/video/rsx_draw_engine.h
+--- a/libs/video/rsx_draw_engine.h	2026-10-22 19:04:04
++++ b/libs/video/rsx_draw_engine.h	2026-10-23 09:22:27
+@@ -280,6 +280,16 @@
+     int  (*image_load)(void* user, const char* path, u8** rgba, u32* w, u32* h);
+     int  (*image_save)(void* user, const char* path, const u8* rgba,
+                        u32 w, u32 h, u32 row_bytes);
++    /* Optional. PS3_ASPECT (anamorphic wide targets): what the draw whose
++     * viewport and scissor follow is. `hud` 1: the title's 2D overlay drawn
++     * into a display-sized target `target_w` guest pixels wide, which the
++     * backend keeps at 16:9, centred, instead of stretching it with the 3D
++     * picture; 2: a 3D-frame draw into a display-sized target (it fills the
++     * wide picture); 0: anything else. Called before set_viewport on every
++     * draw (PS3_ASPECT_HUD_AFTER, rsx_draw_engine.c). Before a present that
++     * drew: 3 when the frame was overlay alone (a menu, a comic, a movie:
++     * black bars beside its 16:9 picture), 4 otherwise. */
++    void (*set_hud)(void* user, int hud, u32 target_w);
+ } rsx_draw_backend;
+ 
+ /* The light pass's constants, as the backend's shader reads them. */
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+--- a/libs/video/rsx_fp_decompiler.c	2026-10-22 23:54:28
++++ b/libs/video/rsx_fp_decompiler.c	2026-10-23 08:20:09
+@@ -382,9 +382,17 @@
+     }
+ }
+ 
+-/* PS3_RES_SCALE: see rsx_fp_set_wpos_scale. */
+-static float s_fp_wpos_scale = 1.0f;
+-void  rsx_fp_set_wpos_scale(float scale) { s_fp_wpos_scale = (scale > 0.0f) ? scale : 1.0f; }
++/* PS3_RES_SCALE: see rsx_fp_set_wpos_scale. s_fp_wpos_scale is 1 only when
++ * both axes are (PS3_ASPECT scales x alone: rsx_fp_set_wpos_scale_xy). */
++static float s_fp_wpos_scale = 1.0f, s_fp_wpos_sx = 1.0f, s_fp_wpos_sy = 1.0f;
++void  rsx_fp_set_wpos_scale_xy(float sx, float sy)
++{
++    s_fp_wpos_sx = (sx > 0.0f) ? sx : 1.0f;
++    s_fp_wpos_sy = (sy > 0.0f) ? sy : 1.0f;
++    s_fp_wpos_scale = (s_fp_wpos_sx == 1.0f && s_fp_wpos_sy == 1.0f) ? 1.0f
++                    : (s_fp_wpos_sx != 1.0f ? s_fp_wpos_sx : s_fp_wpos_sy);
++}
++void  rsx_fp_set_wpos_scale(float scale) { rsx_fp_set_wpos_scale_xy(scale, scale); }
+ float rsx_fp_wpos_scale(void) { return s_fp_wpos_scale; }
+ 
+ /* Build the swizzled/negated/abs'd HLSL for one source into `buf`. */
+@@ -1366,10 +1374,10 @@
+          * is the guest's window coordinate, so it is divided back first. */
+         if (strstr(o.p, "_rsx_wpos(")) {
+             char wpos[256];
+-            const double k = 1.0 / (double)s_fp_wpos_scale;
++            const double kx = 1.0 / (double)s_fp_wpos_sx, ky = 1.0 / (double)s_fp_wpos_sy;
+             snprintf(wpos, sizeof wpos,
+                      "#define _rsx_wpos(p) float4((p).x * %.9g, ((p).y * %.9g) * fp_alpha.y + fp_alpha.z, (p).zw)\n",
+-                     k, k);
++                     kx, ky);
+             out_puts(&p, wpos);
+         }
+     }
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+--- a/libs/video/rsx_fp_decompiler.h	2026-10-22 23:54:28
++++ b/libs/video/rsx_fp_decompiler.h	2026-10-23 08:20:09
+@@ -84,6 +84,9 @@
+  * default) leaves every program byte-identical. Set once, before the first
+  * decompile. */
+ void  rsx_fp_set_wpos_scale(float scale);
++/* PS3_ASPECT: the targets are also wider than the guest's (anamorphic), so x
++ * and y divide back by their own factors. (1, 1) is the default. */
++void  rsx_fp_set_wpos_scale_xy(float sx, float sy);
+ float rsx_fp_wpos_scale(void);
+ float rsx_fp_alpha_ref(u32 raw, u32 surface_color_format);
+ 
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+--- a/libs/video/rsx_metal_backend.m	2026-10-22 23:25:10
++++ b/libs/video/rsx_metal_backend.m	2026-10-23 09:22:27
+@@ -175,14 +175,60 @@
+  * runs at the guest's size from the scaled depth and normals, as the job
+  * did. Guest textures are untouched. 1 (unset) is the old path exactly. */
+ static float s_res_scale = 1.0f;
+-static u32 res_px(u32 v)
++/* PS3_ASPECT=21:9|32:9|<w>:<h>|<ratio>: anamorphic targets for a wider
++ * picture. Every engine target is also s_aspect_k = aspect / (16/9) times
++ * wider than the guest's (1680x720 at 21:9), and everything that maps the
++ * guest's pixels to the target's (viewports, scissors, WPOS, the seed and
++ * readback samplers, the GPU light and SSAO passes) scales x by
++ * s_res_sx = s_res_scale * s_aspect_k and y by s_res_sy = s_res_scale. The
++ * game itself has to draw a wider view into the same clip space (the port's
++ * hor+ projection patch) and the present shows the wide image without a
++ * pillarbox. The game's 2D overlay (its HUD) keeps 16:9 when the draw engine
++ * flags its draws (set_hud: centred in the wide target). Unset, 16:9 or
++ * anything narrower is the old path exactly. */
++static float s_aspect_k = 1.0f;
++static float s_res_sx = 1.0f, s_res_sy = 1.0f;
++static int   s_res_scaled;            /* s_res_sx or s_res_sy is not 1 */
++static int   s_eng_hud_pin;           /* the draws being recorded are the game's HUD */
++static u32   s_eng_hud_w = 1280;      /* ...into a target this wide (the guest's pixels) */
++static int   s_eng_bars_next;         /* the next present gets black bars beside 16:9 (overlay-only frame) */
++static u32 res_px(u32 v)              /* a height (and, without PS3_ASPECT, a width) */
+ {
+-    return s_res_scale == 1.0f ? v : (u32)floorf((float)v * s_res_scale + 0.5f);
++    return s_res_sy == 1.0f ? v : (u32)floorf((float)v * s_res_sy + 0.5f);
+ }
++static u32 res_px_x(u32 v)            /* a width or an x */
++{
++    return s_res_sx == 1.0f ? v : (u32)floorf((float)v * s_res_sx + 0.5f);
++}
++static void res_axes_update(void)
++{
++    s_res_sx = s_res_scale * s_aspect_k;
++    s_res_sy = s_res_scale;
++    s_res_scaled = (s_res_sx != 1.0f || s_res_sy != 1.0f);
++}
++static void aspect_load(void)
++{
++    const char* e = getenv("PS3_ASPECT");
++    s_aspect_k = 1.0f;
++    if (e && *e) {
++        double a = 0.0;
++        unsigned w = 0, h = 0;
++        if (sscanf(e, "%u:%u", &w, &h) == 2 && w && h) a = (double)w / (double)h;
++        else if (sscanf(e, "%ux%u", &w, &h) == 2 && w && h) a = (double)w / (double)h;
++        else { char* end = NULL; a = strtod(e, &end); if (!end || *end) a = 0.0; }
++        const double k = a / (16.0 / 9.0);
++        if (!(k >= 0.999 && k <= 4.0))
++            fprintf(stderr, "[RSX metal] PS3_ASPECT=%s: expected 16:9 up to 64:9 (21:9, 32:9, 2.39); 16:9\n", e);
++        else if (k > 1.001)
++            s_aspect_k = (float)k;
++    }
++    res_axes_update();
++}
+ static void res_scale_load(void)
+ {
+     const char* e = getenv("PS3_RES_SCALE");
+     s_res_scale = 1.0f;
++    aspect_load();
+     if (!e || !*e) return;
+     double v = 0.0;
+     if (!strcasecmp(e, "720p") || !strcasecmp(e, "native")) v = 1.0;
+@@ -196,6 +242,7 @@
+         return;
+     }
+     s_res_scale = (float)(floor(v * 4.0 + 0.5) / 4.0);   /* quarter steps */
++    res_axes_update();
+ }
+ 
+ /* PS3_ANISO, PS3_AA and PS3_SHARPEN (and PS3RECOMP_METAL_FPS) can also change
+@@ -904,7 +951,7 @@
+ {
+     MTLTextureDescriptor* td =
+         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+-                                                           width:res_px(s_width)
++                                                           width:res_px_x(s_width)
+                                                           height:res_px(s_height)
+                                                        mipmapped:NO];
+     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+@@ -988,14 +1035,14 @@
+ {
+     if (!s_layer) return;
+     /* PS3_RES_SCALE: the game's image is that much larger, and so is this. */
+-    const u32 bw = res_px(s_width), bh = res_px(s_height);
++    const u32 bw = res_px_x(s_width), bh = res_px(s_height);
+     CGSize want = CGSizeMake((CGFloat)bw, (CGFloat)bh);
+     if (__atomic_load_n(&s_gfx_upscale_on, __ATOMIC_ACQUIRE) && s_window) {
+         NSView* v = [s_window contentView];
+         const NSSize px = v ? [v convertSizeToBacking:[v bounds].size] : NSZeroSize;
+         double fw = floor(px.width), fh = floor(px.height);
+-        if (fw * s_height > fh * s_width) fw = floor(fh * s_width / s_height + 0.5);
+-        else                              fh = floor(fw * s_height / s_width + 0.5);
++        if (fw * bh > fh * bw) fw = floor(fh * bw / bh + 0.5);   /* PS3_ASPECT: the wide image's shape */
++        else                   fh = floor(fw * bh / bw + 0.5);
+         if (fw > bw && fh > bh) want = CGSizeMake(fw, fh);
+     }
+     if (!CGSizeEqualToSize(s_layer.drawableSize, want)) s_layer.drawableSize = want;
+@@ -1178,7 +1225,7 @@
+ 
+     /* Content size: PS3_WINDOW_SIZE, else the guest's; shrunk, keeping its
+      * shape, to what the screen has room for. */
+-    CGFloat cw = (CGFloat)s_width, ch = (CGFloat)s_height;
++    CGFloat cw = floor((CGFloat)s_width * s_aspect_k + 0.5), ch = (CGFloat)s_height;   /* PS3_ASPECT */
+     { const char* e = getenv("PS3_WINDOW_SIZE");
+       unsigned w = 0, h = 0;
+       if (e && *e) {
+@@ -1227,7 +1274,7 @@
+     s_layer.device          = s_dev;
+     s_layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+     s_layer.framebufferOnly = YES;
+-    s_layer.drawableSize    = CGSizeMake((CGFloat)res_px(s_width), (CGFloat)res_px(s_height));
++    s_layer.drawableSize    = CGSizeMake((CGFloat)res_px_x(s_width), (CGFloat)res_px(s_height));
+     s_layer.contentsGravity = kCAGravityResizeAspect;
+     s_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+     /* PS3_VSYNC=0: present as soon as a frame is ready instead of at the
+@@ -3322,11 +3369,11 @@
+ "static inline float ssao_byte(texture2d<float> t, int2 p) { return rint(t.read(uint2(p)).r * 255.0f); }\n"
+ /* PS3_RES_SCALE: depth and normals are rs times the job's size; the passes
+  * stay at the job's size and read the scaled pixel under each of theirs. */
+-"static inline uint2 ssao_sc(int2 p, float rs) { return uint2((float2(p) + 0.5f) * rs); }\n"
++"static inline uint2 ssao_sc(int2 p, float2 rs) { return uint2((float2(p) + 0.5f) * rs); }\n"
+ "\n"
+ "fragment float ssao_hd_fs(BOut i [[stage_in]],\n"
+ "                          texture2d<float> depth [[texture(0)]],\n"
+-"                          constant SsaoC& c [[buffer(0)]], constant float& rs [[buffer(1)]]) {\n"
++"                          constant SsaoC& c [[buffer(0)]], constant float2& rs [[buffer(1)]]) {\n"
+ "    uint2 p = ssao_sc(int2(i.pos.xy) * 2, rs);\n"
+ "    return ssao_lin(ssao_z24(depth.read(p).r), c.depth_ab.x, c.depth_ab.y);\n"
+ "}\n"
+@@ -3334,7 +3381,7 @@
+ "fragment float ssao_ao_fs(BOut i [[stage_in]],\n"
+ "                          texture2d<float> hd  [[texture(0)]],\n"
+ "                          texture2d<float> nrm [[texture(1)]],\n"
+-"                          constant SsaoC& c [[buffer(0)]], constant float& rs [[buffer(1)]]) {\n"
++"                          constant SsaoC& c [[buffer(0)]], constant float2& rs [[buffer(1)]]) {\n"
+ "    int2 p = int2(i.pos.xy);\n"
+ "    int2 hm = int2(c.dims.zw) - 1;\n"
+ "    float d   = hd.read(uint2(p)).r;\n"
+@@ -3390,7 +3437,7 @@
+ "                          texture2d<float> ao    [[texture(0)]],\n"
+ "                          texture2d<float> hd    [[texture(1)]],\n"
+ "                          texture2d<float> depth [[texture(2)]],\n"
+-"                          constant SsaoC& c [[buffer(0)]], constant float& rs [[buffer(1)]]) {\n"
++"                          constant SsaoC& c [[buffer(0)]], constant float2& rs [[buffer(1)]]) {\n"
+ "    int2 P  = int2(i.pos.xy);\n"
+ "    int2 hm = int2(c.dims.zw) - 1;\n"
+ "    float Z  = ssao_lin(ssao_z24(depth.read(ssao_sc(P, rs)).r), c.up.x, c.up.y);\n"
+@@ -3414,7 +3461,7 @@
+ "                          texture2d<float> ao    [[texture(0)]],\n"
+ "                          texture2d<float> hd    [[texture(1)]],\n"
+ "                          texture2d<float> depth [[texture(2)]],\n"
+-"                          constant SsaoC& c [[buffer(0)]], constant float& rs [[buffer(1)]]) {\n"
++"                          constant SsaoC& c [[buffer(0)]], constant float2& rs [[buffer(1)]]) {\n"
+ "    int2 P  = int2(i.pos.xy);\n"
+ "    int2 hm = int2(c.dims.zw) - 1;\n"
+ "    float Z  = ssao_lin(ssao_z24(depth.read(ssao_sc(P, rs)).r), c.up.x, c.up.y);\n"
+@@ -3468,7 +3515,7 @@
+ static u32 eng_obj_add_scaled(id<MTLTexture> t, int scaled)
+ {
+     const u32 h = eng_obj_add(t);
+-    if (h) s_eng_obj_scaled[h - 1] = (u8)(scaled && s_res_scale != 1.0f);
++    if (h) s_eng_obj_scaled[h - 1] = (u8)(scaled && s_res_scaled);
+     return h;
+ }
+ 
+@@ -3725,7 +3772,7 @@
+ {
+     (void)user;
+     if (!s_dev || !w || !h) return 0;
+-    const u32 sw = res_px(w), sh = res_px(h);   /* PS3_RES_SCALE */
++    const u32 sw = res_px_x(w), sh = res_px(h);   /* PS3_RES_SCALE, PS3_ASPECT */
+     MTLTextureDescriptor* td =
+         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:eng_pixel_format(fmt)
+                                                            width:sw height:sh
+@@ -3745,11 +3792,11 @@
+         u8* up = (bpp && bpp <= 16) ? (u8*)malloc((size_t)sw * sh * bpp) : NULL;
+         if (up) {
+             for (u32 y = 0; y < sh; y++) {
+-                u32 gy = (u32)((float)y / s_res_scale); if (gy >= h) gy = h - 1;
++                u32 gy = (u32)((float)y / s_res_sy); if (gy >= h) gy = h - 1;
+                 const u8* srow = (const u8*)seed + (size_t)gy * seed_row_bytes;
+                 u8* drow = up + (size_t)y * sw * bpp;
+                 for (u32 x = 0; x < sw; x++) {
+-                    u32 gx = (u32)((float)x / s_res_scale); if (gx >= w) gx = w - 1;
++                    u32 gx = (u32)((float)x / s_res_sx); if (gx >= w) gx = w - 1;
+                     memcpy(drow + (size_t)x * bpp, srow + (size_t)gx * bpp, bpp);
+                 }
+             }
+@@ -3797,7 +3844,7 @@
+     if (!s_dev || !w || !h) return 0;
+     MTLTextureDescriptor* td =
+         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTL_DEPTH_FORMAT
+-                                                           width:res_px(w) height:res_px(h)
++                                                           width:res_px_x(w) height:res_px(h)
+                                                        mipmapped:NO];
+     /* ShaderRead as well as RenderTarget: depth-as-texture resolves through a
+      * pass that samples this as a depth2d, so it cannot be write-only.
+@@ -3831,7 +3878,7 @@
+     }
+     MTLTextureDescriptor* td =
+         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float
+-                                                           width:res_px(w) height:res_px(h)
++                                                           width:res_px_x(w) height:res_px(h)
+                                                        mipmapped:NO];
+     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+     const u32 dst = eng_obj_add_scaled([s_dev newTextureWithDescriptor:td], 1);
+@@ -3926,7 +3973,7 @@
+             if (s_eng_light_out[k]) eng_obj_release(NULL, s_eng_light_out[k]);
+             MTLTextureDescriptor* td =
+                 [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+-                                                                   width:res_px(w) height:res_px(h) mipmapped:NO];
++                                                                   width:res_px_x(w) height:res_px(h) mipmapped:NO];
+             td.usage       = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+             td.storageMode = MTLStorageModePrivate;
+             s_eng_light_out[k] = eng_obj_add_scaled([s_dev newTextureWithDescriptor:td], 1);
+@@ -3939,9 +3986,9 @@
+         s_eng_light_param[slot] = [s_dev newBufferWithLength:param_bytes options:MTLResourceStorageModeShared];
+     memcpy([s_eng_light_param[slot] contents], params, param_bytes);
+     /* PS3_RES_SCALE: the pass runs per scaled pixel; u, v = px / size. */
+-    if (s_res_scale != 1.0f && param_bytes >= sizeof(rsx_gpu_light_params)) {
++    if (s_res_scaled && param_bytes >= sizeof(rsx_gpu_light_params)) {
+         rsx_gpu_light_params* gp = (rsx_gpu_light_params*)[s_eng_light_param[slot] contents];
+-        gp->width  = (float)res_px(w);
++        gp->width  = (float)res_px_x(w);
+         gp->height = (float)res_px(h);
+     }
+ 
+@@ -4047,7 +4094,7 @@
+     if (!dst) {
+         MTLTextureDescriptor* td =
+             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+-                                                               width:res_px(w) height:res_px(h)
++                                                               width:res_px_x(w) height:res_px(h)
+                                                            mipmapped:NO];
+         td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+         dst = eng_obj_add_scaled([s_dev newTextureWithDescriptor:td], 1);
+@@ -4662,9 +4709,15 @@
+ static void eng_set_viewport(void* user, float x, float y, float w, float h)
+ {
+     (void)user;
+-    const float k = s_res_scale;   /* PS3_RES_SCALE */
+-    s_eng_pending.vp[0] = x * k; s_eng_pending.vp[1] = y * k;
+-    s_eng_pending.vp[2] = w * k; s_eng_pending.vp[3] = h * k;
++    const float kx = s_res_sx, ky = s_res_sy;   /* PS3_RES_SCALE, PS3_ASPECT */
++    if (s_eng_hud_pin && s_aspect_k != 1.0f) {
++        /* The HUD keeps the guest's 16:9: centred in the wide target, its
++         * width only s_res_scale times the guest's. */
++        const float full = (float)s_eng_hud_w * kx, k = s_res_scale;
++        s_eng_pending.vp[0] = (full - (float)s_eng_hud_w * k) * 0.5f + x * k;
++        s_eng_pending.vp[2] = w * k;
++    } else { s_eng_pending.vp[0] = x * kx; s_eng_pending.vp[2] = w * kx; }
++    s_eng_pending.vp[1] = y * ky; s_eng_pending.vp[3] = h * ky;
+ }
+ 
+ static void eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
+@@ -4672,11 +4725,24 @@
+     (void)user;
+     /* PS3_RES_SCALE: both edges rounded the way res_px sizes the target, so
+      * a scissor that reaches the surface's edge still ends on it. */
+-    const u32 x0 = res_px(x), y0 = res_px(y);
++    u32 x0 = res_px_x(x), x1 = res_px_x(x + w);
++    if (s_eng_hud_pin && s_aspect_k != 1.0f) {   /* PS3_ASPECT: the HUD's 16:9 rectangle */
++        const u32 off = (res_px_x(s_eng_hud_w) - res_px(s_eng_hud_w)) / 2u;
++        x0 = off + res_px(x); x1 = off + res_px(x + w);
++    }
++    const u32 y0 = res_px(y);
+     s_eng_pending.sc[0] = x0; s_eng_pending.sc[1] = y0;
+-    s_eng_pending.sc[2] = w ? res_px(x + w) - x0 : 0; s_eng_pending.sc[3] = h ? res_px(y + h) - y0 : 0;
++    s_eng_pending.sc[2] = w ? x1 - x0 : 0; s_eng_pending.sc[3] = h ? res_px(y + h) - y0 : 0;
+ }
+ 
++static void eng_set_hud(void* user, int hud, u32 target_w)
++{
++    (void)user;
++    if (hud >= 3) { s_eng_bars_next = hud == 3 && s_aspect_k != 1.0f; return; }
++    s_eng_hud_pin = hud == 1 && s_aspect_k != 1.0f;
++    if (target_w) s_eng_hud_w = target_w;
++}
++
+ static void eng_set_stencil_ref(void* user, u32 ref)
+ { (void)user; s_eng_pending.stencil_ref = ref; }
+ 
+@@ -5183,7 +5249,7 @@
+                 if (steps[k].t1) [e setFragmentTexture:steps[k].t1 atIndex:1];
+                 if (steps[k].t2) [e setFragmentTexture:steps[k].t2 atIndex:2];
+                 [e setFragmentBuffer:pb offset:0 atIndex:0];
+-                { const float rs = s_res_scale; [e setFragmentBytes:&rs length:sizeof rs atIndex:1]; }
++                { const float rs[2] = { s_res_sx, s_res_sy }; [e setFragmentBytes:rs length:sizeof rs atIndex:1]; }
+                 [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                 [e endEncoding];
+             }
+@@ -5801,6 +5867,29 @@
+         const u32 ft_nrec = s_eng_rec_count;
+         id<MTLCommandBuffer> cb = [s_queue commandBuffer];
+         eng_encode_records(cb, stage);
++        /* PS3_ASPECT: a frame of 16:9 overlay only (a menu, a motion comic, a
++         * movie) gets black bars beside it; what a clear left there would
++         * show otherwise. Written into the surface, so later presents of it
++         * keep them. */
++        if (present_dst && s_eng_bars_next && s_eng_hud_w && [present_dst width] > res_px(s_eng_hud_w)) {
++            const NSUInteger W = [present_dst width], H = [present_dst height];
++            const NSUInteger side = (W - res_px(s_eng_hud_w)) / 2u;
++            const MTLPixelFormat pf = [present_dst pixelFormat];
++            if (side && (pf == MTLPixelFormatRGBA8Unorm || pf == MTLPixelFormatBGRA8Unorm ||
++                         pf == MTLPixelFormatRGBA8Unorm_sRGB || pf == MTLPixelFormatBGRA8Unorm_sRGB)) {
++                static id<MTLBuffer> zeros; static NSUInteger zbytes;
++                const NSUInteger need = side * 4u * H;
++                if (!zeros || zbytes < need) { zeros = [s_dev newBufferWithLength:need options:MTLResourceStorageModePrivate]; zbytes = need;
++                    id<MTLBlitCommandEncoder> z = [cb blitCommandEncoder]; [z fillBuffer:zeros range:NSMakeRange(0, need) value:0]; [z endEncoding]; }
++                id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
++                for (int k = 0; k < 2; k++)
++                    [b copyFromBuffer:zeros sourceOffset:0 sourceBytesPerRow:side * 4u sourceBytesPerImage:need
++                           sourceSize:MTLSizeMake(side, H, 1) toTexture:present_dst destinationSlice:0
++                     destinationLevel:0 destinationOrigin:MTLOriginMake(k ? W - side : 0, 0, 0)];
++                [b endEncoding];
++            }
++        }
++        if (present_dst) s_eng_bars_next = 0;
+         if (present_dst && dst) eng_blit_to_display(cb, present_dst, dst);
+         if (drawable) { fps_track_drawable(drawable); [cb presentDrawable:drawable]; }
+         if (PS3_FT_ON()) ps3_ft_span(PS3_FT_GPU_ENCODE, 0, present_dst ? 1u : 0u, ft_nrec, pt, eng_pt_now());
+@@ -6054,18 +6143,18 @@
+         /* PS3_RES_SCALE: the guest asks for its own pixels. Read the scaled
+          * rectangle and point-sample it down -- the same pixel the guest's
+          * would be (no filtering: depth and packed normals must stay exact). */
+-        const u32 sx0 = res_px(x), sy0 = res_px(y), sx1 = res_px(x + w), sy1 = res_px(y + h);
++        const u32 sx0 = res_px_x(x), sy0 = res_px(y), sx1 = res_px_x(x + w), sy1 = res_px(y + h);
+         if (sx1 > [t width] || sy1 > [t height] || sx1 <= sx0 || sy1 <= sy0) return;
+         const u32 bpp = out_pitch / w, sw = sx1 - sx0, shh = sy1 - sy0;
+         u8* big = bpp ? (u8*)malloc((size_t)sw * shh * bpp) : NULL;
+         if (!big) return;
+         eng_readback_body(t, sx0, sy0, sw, shh, big, sw * bpp);
+         for (u32 row = 0; row < h; row++) {
+-            u32 r = (u32)(((float)row + 0.5f) * s_res_scale); if (r >= shh) r = shh - 1;
++            u32 r = (u32)(((float)row + 0.5f) * s_res_sy); if (r >= shh) r = shh - 1;
+             const u8* srow = big + (size_t)r * sw * bpp;
+             u8* drow = (u8*)out + (size_t)row * out_pitch;
+             for (u32 col = 0; col < w; col++) {
+-                u32 c = (u32)(((float)col + 0.5f) * s_res_scale); if (c >= sw) c = sw - 1;
++                u32 c = (u32)(((float)col + 0.5f) * s_res_sx); if (c >= sw) c = sw - 1;
+                 memcpy(drow + (size_t)col * bpp, srow + (size_t)c * bpp, bpp);
+             }
+         }
+@@ -6221,6 +6310,7 @@
+     .set_viewport         = eng_set_viewport,
+     .set_scissor          = eng_set_scissor,
+     .set_stencil_ref      = eng_set_stencil_ref,
++    .set_hud              = eng_set_hud,
+     .draw                 = eng_draw,
+     .vbuf_create          = eng_vbuf_create,
+     .vbuf_release         = eng_vbuf_release,
+@@ -6318,14 +6408,14 @@
+         if (rsx_draw_engine_enabled() &&
+             rsx_draw_engine_init(s_width, s_height) == 0) {
+             s_eng_active = 1;
+-            rsx_fp_set_wpos_scale(s_res_scale);   /* PS3_RES_SCALE */
+-            if (s_res_scale != 1.0f)
+-                fprintf(stderr, "[RSX metal] internal resolution x%.2f: %ux%u targets render at %ux%u\n",
+-                        (double)s_res_scale, s_width, s_height, res_px(s_width), res_px(s_height));
++            rsx_fp_set_wpos_scale_xy(s_res_sx, s_res_sy);   /* PS3_RES_SCALE, PS3_ASPECT */
++            if (s_res_scaled)
++                fprintf(stderr, "[RSX metal] internal resolution x%.2f, aspect x%.4f: %ux%u targets render at %ux%u\n",
++                        (double)s_res_scale, (double)s_aspect_k, s_width, s_height, res_px_x(s_width), res_px(s_height));
+         } else {
+-            if (s_res_scale != 1.0f) {
+-                fprintf(stderr, "[RSX metal] PS3_RES_SCALE needs the draw engine; native resolution\n");
+-                s_res_scale = 1.0f;
++            if (s_res_scaled) {
++                fprintf(stderr, "[RSX metal] PS3_RES_SCALE and PS3_ASPECT need the draw engine; native 16:9\n");
++                s_res_scale = 1.0f; s_aspect_k = 1.0f; res_axes_update();
+                 if (s_headless) create_offscreen();
+             }
+             rsx_set_backend(&s_backend_vtable);
+@@ -6763,6 +6853,7 @@
+ int   rsx_metal_gfx_aniso(void)            { return s_gfx_aniso; }
+ /* PS3_RES_SCALE in effect (fixed for the session); -1 on the vtable path. */
+ float rsx_metal_res_scale(void)            { return s_eng_active ? s_res_scale : -1.0f; }
++float rsx_metal_aspect(void)               { return s_eng_active ? s_aspect_k : -1.0f; }
+ /* MetalFX: 0 off, 1 on, -1 not possible here (headless, vtable path, no
+  * MetalFX in this build); asked for but given up shows as off. */
+ int rsx_metal_gfx_upscale(void)
+diff --git a/libs/video/tests/test_shader_msl.c b/libs/video/tests/test_shader_msl.c
+--- a/libs/video/tests/test_shader_msl.c	2026-10-22 23:54:28
++++ b/libs/video/tests/test_shader_msl.c	2026-10-23 09:34:12
+@@ -467,6 +467,31 @@
+         }
+     }
+ 
++    /* ---- WPOS with wide targets (PS3_RES_SCALE x PS3_ASPECT) -----------
++     * MOV r0, WPOS: at 1x the position goes through untouched; with x and y
++     * scaled apart (21:9 targets at 2x: x 2.625, y 2) each axis divides back
++     * by its own factor, and back at 1x the program is byte-identical. */
++    {
++        u8 fp[16];
++        rsx_test_fp_instr(fp, RSX_TEST_FP_OPC(RSX_TEST_FP_OP_MOV) | RSX_TEST_FP_MASK_XYZW |
++                              RSX_TEST_FP_INSRC(0) | RSX_TEST_FP_END,
++                              RSX_TEST_FP_SRC_INPUT | RSX_TEST_FP_SWZ_IDENT);
++        static char base[sizeof g_hlsl];
++        check_count("WPOS FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0, g_hlsl, sizeof g_hlsl, NULL), 1);
++        check_absent("WPOS FP HLSL", g_hlsl, "_rsx_wpos");
++        memcpy(base, g_hlsl, sizeof base);
++        rsx_fp_set_wpos_scale_xy(2.625f, 2.0f);
++        check_count("WPOS wide FP", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0, g_hlsl, sizeof g_hlsl, NULL), 1);
++        check("WPOS wide FP HLSL", g_hlsl, "float4((p).x * 0.380952381, ((p).y * 0.5) * fp_alpha.y + fp_alpha.z, (p).zw)");
++        check("WPOS wide FP HLSL", g_hlsl, "_rsx_wpos(input.position)");
++        if (translate("WPOS wide FP", RSX_SHADER_STAGE_FRAGMENT) == 0)
++            check("WPOS wide FP MSL", g_msl, "fragment ");
++        rsx_fp_set_wpos_scale(1.0f);
++        check_count("WPOS FP again", rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0, g_hlsl, sizeof g_hlsl, NULL), 1);
++        if (!strcmp(base, g_hlsl)) { printf("[PASS] WPOS FP at 1x unchanged\n"); g_pass++; }
++        else { printf("[FAIL] WPOS FP at 1x changed\n"); g_fail++; }
++    }
++
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return g_fail ? 1 : 0;
+ }
