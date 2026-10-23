@@ -208,6 +208,9 @@ static void present_guest_frame(void)
     InterlockedIncrement(&g_frames_presented);
 }
 
+/* cellSysutil.c: the in-game menu's Quit game (REQUEST_EXITGAME, then exit 0). */
+extern "C" void ps3_host_quit(const char* why);
+
 static DWORD WINAPI frame_clock(LPVOID)
 {
     /* PS3_QOS=1: this thread walks the FIFO, encodes the draws and presents --
@@ -298,6 +301,9 @@ static DWORD WINAPI frame_clock(LPVOID)
                 last_pump = now;
                 if (rsx_backend_pump() != 0) {
                     rsx_ok = 0;              /* window closed */
+                    /* The red button quits like F1 > Quit game / Cmd+Q, instead
+                     * of leaving the process running with no window. */
+                    ps3_host_quit("window closed");
                     continue;
                 }
             }

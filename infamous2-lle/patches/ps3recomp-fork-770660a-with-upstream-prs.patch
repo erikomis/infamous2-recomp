@@ -104,6 +104,20 @@ index 0000000..2ba1dfe
 +NV_vertex_program also documents normalized color attributes at the fragment
 +boundary, while texture-coordinate results remain unrestricted.
 +https://registry.khronos.org/OpenGL/extensions/NV/NV_vertex_program.txt
+diff --git a/docs/ONLINE.md b/docs/ONLINE.md
+index ba0d6c0..c176535 100644
+--- a/docs/ONLINE.md
++++ b/docs/ONLINE.md
+@@ -52,7 +52,8 @@ stage starts, and the title drops the peer as "not responding". Set
+ | sceNpScore | Title and transaction contexts. Record score, and ranking by range and by NP ID, sync and async, all on psnr leaderboards. |
+ | sceNpLookup | Profiles are answered locally from the online ID. There is no avatar. |
+ | cellSysutilAvc2 | Voice chat loads, joins and streams, but carries no audio. |
+-| sceNp manager | Reports ONLINE when psnr is set, and fires the manager callback once. |
++| sceNp manager | Reports ONLINE when psnr is set, and fires the manager callback once. Tickets, the account region and the network time answer OFFLINE without psnr; with it a ticket request gets a failed GOT_TICKET at once (psnr issues none), and the region (`us`) and the time are local. |
++| cellSysutilNpEula | The terms-of-service check answers through its callback on the next sysutil poll: ERROR offline (the terms cannot be fetched, and titles give up quietly), ALREADY_ACCEPTED with `PS3_NET_ONLINE=1` or psnr (as RPCS3). "Show the terms" closes at once. |
+ | sys_net | P2P sockets map to plain UDP/TCP on `PS3_NET_P2P_PORT`. There is no vport multiplexing. |
+ 
+ ## How it was verified
 diff --git a/docs/SHADOW_COMPARISON.md b/docs/SHADOW_COMPARISON.md
 new file mode 100644
 index 0000000..df98ec6
@@ -488,10 +502,10 @@ index 0000000..3bb1978
 +#endif
 diff --git a/include/ps3emu/ps3_toggles.h b/include/ps3emu/ps3_toggles.h
 new file mode 100644
-index 0000000..b6457c5
+index 0000000..43e1b10
 --- /dev/null
 +++ b/include/ps3emu/ps3_toggles.h
-@@ -0,0 +1,257 @@
+@@ -0,0 +1,259 @@
 +/*
 + * ps3_toggles -- performance and debug knobs that change while the game runs.
 + *
@@ -569,6 +583,7 @@ index 0000000..b6457c5
 +    PS3T_LUT_PRESET,         /* rsx_metal_backend.m: built-in LUT (warm/cool/...) */
 +    PS3T_SPU_IBCACHE,        /* spu_channels.c: indirect-branch inline cache      */
 +    PS3T_SPU_DMA_LEAN,       /* spu_dma.h: no per-PUT poison scan, MFC slot hint  */
++    PS3T_QUIT,               /* cellSysutil.c: 1 = quit the game (ps3_host_quit)  */
 +    PS3T_COUNT
 +};
 +
@@ -614,6 +629,7 @@ index 0000000..b6457c5
 +        { "PS3_LUT_PRESET",             PS3_TK_STR,  0 },
 +        { "PS3_SPU_IBCACHE",            PS3_TK_NOT0, 1 },
 +        { "PS3_SPU_DMA_LEAN",           PS3_TK_NOT0, 1 },
++        { "PS3_QUIT",                   PS3_TK_ATOI, 0 },
 +    };
 +    return &d[id];
 +}
@@ -4462,10 +4478,20 @@ index 0000000..49beb54
 +    toggles_apply_text(buf);
 +}
 diff --git a/libs/network/cellNetCtl.c b/libs/network/cellNetCtl.c
-index c7926c0..7ad0c5d 100644
+index c7926c0..b95197a 100644
 --- a/libs/network/cellNetCtl.c
 +++ b/libs/network/cellNetCtl.c
-@@ -361,11 +361,19 @@ s32 cellNetCtlNetStartDialogAbortAsync(void)
+@@ -49,6 +49,9 @@ static int netctl_online(void)
+     return v;
+ }
+ 
++/* For the libraries that answer the same question (cellSysutilNpEula.c). */
++int ps3_netctl_online(void) { return netctl_online(); }
++
+ typedef struct {
+     int              in_use;
+     cellNetCtlHandler handler;
+@@ -361,11 +364,19 @@ s32 cellNetCtlNetStartDialogAbortAsync(void)
  
  s32 cellNetCtlNetStartDialogUnloadAsync(CellNetCtlNetStartDialogResult* result)
  {
@@ -4487,11 +4513,29 @@ index c7926c0..7ad0c5d 100644
      netstart_broadcast(CELL_SYSUTIL_NET_CTL_NETSTART_UNLOADED);
      return CELL_OK;
  }
+diff --git a/libs/network/cellNetCtl.h b/libs/network/cellNetCtl.h
+index c5ab148..944812f 100644
+--- a/libs/network/cellNetCtl.h
++++ b/libs/network/cellNetCtl.h
+@@ -187,6 +187,9 @@ s32 cellNetCtlNetStartDialogLoadAsync(const CellNetCtlNetStartDialogParam* param
+ s32 cellNetCtlNetStartDialogAbortAsync(void);
+ s32 cellNetCtlNetStartDialogUnloadAsync(CellNetCtlNetStartDialogResult* result);
+ 
++/* 1 with PS3_NET_ONLINE (fake connected), 0 offline (the default). */
++int ps3_netctl_online(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
 diff --git a/libs/network/sceNp.c b/libs/network/sceNp.c
-index 8bb66db..764c79f 100644
+index 8bb66db..079ef70 100644
 --- a/libs/network/sceNp.c
 +++ b/libs/network/sceNp.c
-@@ -12,6 +12,7 @@
+@@ -9,9 +9,11 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdint.h>
++#include <time.h>
  #include "../../runtime/ppu/ppu_memory.h"   /* vm_write*: guest EA -> host, byte-swapped */
  #include "np_psnr.h"
  #include "../system/cellSysutil.h"
@@ -4499,7 +4543,79 @@ index 8bb66db..764c79f 100644
  
  
  /* ---------------------------------------------------------------------------
-@@ -308,3 +309,35 @@ s32 sceNpScoreTerm(void)
+@@ -287,6 +289,71 @@ s32 sceNpManagerGetChatRestrictionFlag(s32* isRestricted)
+     return CELL_OK;
+ }
+ 
++/* Tickets, the account region and the network time come from the PSN
++ * servers. Unimplemented, these imports answered CELL_OK with nothing
++ * written, and a title that requested a ticket waited forever for the
++ * GOT_TICKET event. Offline (no psnr server) they say so, as RPCS3 does;
++ * signed in to a psnr server, which issues no tickets, a request is answered
++ * at once with a failed GOT_TICKET, and the region and the time are local. */
++#define SCE_NP_MANAGER_EVENT_GOT_TICKET 255
++
++s32 sceNpManagerRequestTicket2(u32 npId, u32 version, u32 serviceId, u32 cookie,
++                               u32 cookieSize, u32 entitlementId, u32 consumedCount)
++{
++    (void)version; (void)cookie; (void)cookieSize; (void)entitlementId; (void)consumedCount;
++    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
++    if (!npId || !serviceId) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    if (!np_psnr_enabled()) {
++        printf("[sceNp] ManagerRequestTicket2() -> OFFLINE\n");
++        return SCE_NP_ERROR_OFFLINE;
++    }
++    if (s_npmgr_cb) {
++        const u64 args[8] = { SCE_NP_MANAGER_EVENT_GOT_TICKET, (u64)(u32)SCE_NP_ERROR_INVALID_STATE,
++                              (u64)(u32)(uintptr_t)s_npmgr_cb_arg, 0, 0, 0, 0, 0 };
++        cellSysutilQueueGuestCallbackArgs((u32)(uintptr_t)s_npmgr_cb, args);
++    }
++    printf("[sceNp] ManagerRequestTicket2() -> GOT_TICKET failed (psnr issues no tickets)\n");
++    return CELL_OK;
++}
++
++s32 sceNpManagerGetTicket(u32 buffer, u32 bufferSize)
++{
++    (void)buffer;
++    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
++    if (!bufferSize) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    return SCE_NP_ERROR_INVALID_STATE;   /* no ticket was ever issued */
++}
++
++s32 sceNpManagerGetTicketParam(s32 paramId, u32 param)
++{
++    (void)paramId;
++    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
++    if (!param) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    return SCE_NP_ERROR_INVALID_STATE;
++}
++
++s32 sceNpManagerGetAccountRegion(u32 countryCode, u32 language)
++{
++    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
++    if (!countryCode || !language) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    if (!np_psnr_enabled()) return SCE_NP_ERROR_OFFLINE;
++    vm_write8(countryCode + 0, 'u'); vm_write8(countryCode + 1, 's');   /* SceNpCountryCode */
++    vm_write8(countryCode + 2, 0);   vm_write8(countryCode + 3, 0);
++    vm_write32(language, 1);         /* CELL_SYSUTIL_LANG_ENGLISH_US */
++    return CELL_OK;
++}
++
++s32 sceNpManagerGetNetworkTime(u32 pTick)
++{
++    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
++    if (!pTick) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    if (!np_psnr_enabled()) return SCE_NP_ERROR_OFFLINE;
++    /* CellRtcTick: microseconds since 0001-01-01 00:00 UTC. */
++    const u64 unix_us = (u64)time(NULL) * 1000000ull;
++    vm_write64(pTick, unix_us + 62135596800000000ull);
++    return CELL_OK;
++}
++
+ /* Score setup is local even while the NP manager is offline. Games may
+  * initialize it before starting the worker that decides whether to use PSN. */
+ s32 sceNpScoreInit(void)
+@@ -308,3 +375,35 @@ s32 sceNpScoreTerm(void)
      s_score_initialized = 0;
      return CELL_OK;
  }
@@ -5014,7 +5130,7 @@ index 632e646..0a0962d 100644
  #define CELL_MSGDIALOG_BUTTON_YES      1
  #define CELL_MSGDIALOG_BUTTON_NO       2
 diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
-index 79ea8ca..a581869 100644
+index 79ea8ca..65d34fd 100644
 --- a/libs/system/cellSaveData.c
 +++ b/libs/system/cellSaveData.c
 @@ -52,6 +52,19 @@
@@ -5053,8 +5169,167 @@ index 79ea8ca..a581869 100644
      ensure_dirs(s_save_root);
  
  #ifdef _WIN32
+@@ -515,50 +530,50 @@ static u32 savedata_content_type(const char* name)
+     return CELL_SAVEDATA_FILETYPE_NORMALFILE;
+ }
+ 
+-/* Which files were written as SECUREFILE. A real save records them in
+- * PARAM.PFD; ours keeps one name per line there, and the file stays hidden
+- * from the guest's list (savedata_system_file). Without it every file came
+- * back as NORMALFILE, and a title that looks for its secure payload in the
+- * stat list (The Simpsons Arcade Game) called its own fresh save corrupt. */
+-static void pfd_path(const char* save_path, char* out, size_t n)
+-{
+-    snprintf(out, n, "%s/PARAM.PFD", save_path);
+-#ifdef _WIN32
+-    for (char* p = out; *p; p++) if (*p == '/') *p = '\\';
+-#endif
+-}
+-
+-static int pfd_has(const char* save_path, const char* name)
+-{
+-    char path[1024], line[64];
+-    pfd_path(save_path, path, sizeof(path));
+-    FILE* fp = fopen(path, "rb");
+-    if (!fp) return 0;
+-    int found = 0;
+-    while (!found && fgets(line, sizeof(line), fp)) {
+-        line[strcspn(line, "\r\n")] = 0;
+-        found = !strcmp(line, name);
+-    }
+-    fclose(fp);
+-    return found;
+-}
+-
+-static void pfd_add(const char* save_path, const char* name)
+-{
+-    if (pfd_has(save_path, name)) return;
+-    char path[1024];
+-    pfd_path(save_path, path, sizeof(path));
+-    FILE* fp = fopen(path, "ab");
+-    if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
+-}
+-
+-static u32 savedata_file_type(const char* save_path, const char* name)
+-{
+-    u32 t = savedata_content_type(name);
+-    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && pfd_has(save_path, name)
+-         ? CELL_SAVEDATA_FILETYPE_SECUREFILE : t;
+-}
+-
++/* Which files were written as SECUREFILE. A real save records them in
++ * PARAM.PFD; ours keeps one name per line there, and the file stays hidden
++ * from the guest's list (savedata_system_file). Without it every file came
++ * back as NORMALFILE, and a title that looks for its secure payload in the
++ * stat list (The Simpsons Arcade Game) called its own fresh save corrupt. */
++static void pfd_path(const char* save_path, char* out, size_t n)
++{
++    snprintf(out, n, "%s/PARAM.PFD", save_path);
++#ifdef _WIN32
++    for (char* p = out; *p; p++) if (*p == '/') *p = '\\';
++#endif
++}
++
++static int pfd_has(const char* save_path, const char* name)
++{
++    char path[1024], line[64];
++    pfd_path(save_path, path, sizeof(path));
++    FILE* fp = fopen(path, "rb");
++    if (!fp) return 0;
++    int found = 0;
++    while (!found && fgets(line, sizeof(line), fp)) {
++        line[strcspn(line, "\r\n")] = 0;
++        found = !strcmp(line, name);
++    }
++    fclose(fp);
++    return found;
++}
++
++static void pfd_add(const char* save_path, const char* name)
++{
++    if (pfd_has(save_path, name)) return;
++    char path[1024];
++    pfd_path(save_path, path, sizeof(path));
++    FILE* fp = fopen(path, "ab");
++    if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
++}
++
++static u32 savedata_file_type(const char* save_path, const char* name)
++{
++    u32 t = savedata_content_type(name);
++    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && pfd_has(save_path, name)
++         ? CELL_SAVEDATA_FILETYPE_SECUREFILE : t;
++}
++
+ /* Enumerate files in a save directory. Returns count, fills fileList up to max. */
+ static u32 enumerate_save_files(const char* save_path,
+                                  CellSaveDataFileStat* fileList, u32 max)
+@@ -579,7 +594,7 @@ static u32 enumerate_save_files(const char* save_path,
+                 continue;
+             if (count < max && fileList) {
+                 memset(&fileList[count], 0, sizeof(CellSaveDataFileStat));
+-                fileList[count].fileType = savedata_file_type(save_path, fd.cFileName);
++                fileList[count].fileType = savedata_file_type(save_path, fd.cFileName);
+                 strncpy(fileList[count].fileName, fd.cFileName,
+                         CELL_SAVEDATA_FILENAME_SIZE - 1);
+                 ULARGE_INTEGER sz;
+@@ -616,7 +631,7 @@ static u32 enumerate_save_files(const char* save_path,
+ #endif
+             if (count < max && fileList) {
+                 memset(&fileList[count], 0, sizeof(CellSaveDataFileStat));
+-                fileList[count].fileType = savedata_file_type(save_path, de->d_name);
++                fileList[count].fileType = savedata_file_type(save_path, de->d_name);
+                 strncpy(fileList[count].fileName, de->d_name,
+                         CELL_SAVEDATA_FILENAME_SIZE - 1);
+                 fileList[count].st_size = (u64)st.st_size;
+@@ -721,8 +736,8 @@ static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
+         size_t wrote = fwrite(set->fileBuf, 1, write_size, fp);
+         int failed = wrote != write_size;
+         if (fclose(fp) != 0) failed = 1;
+-        if (!failed && set->fileType == CELL_SAVEDATA_FILETYPE_SECUREFILE)
+-            pfd_add(save_path, name);
++        if (!failed && set->fileType == CELL_SAVEDATA_FILETYPE_SECUREFILE)
++            pfd_add(save_path, name);
+         return failed ? CELL_SAVEDATA_ERROR_ACCESS_ERROR : (s32)wrote;
+     }
+ 
+@@ -800,11 +815,34 @@ static void read_param_sfo(const char* save_path, CellSaveDataSystemFileParam* p
+ }
+ 
+ /* Core save/load implementation shared by List/Fixed/Auto variants */
++/* Saves in flight, for a host-side quit (cellSysutil.c ps3_host_quit): it
++ * waits for this to reach 0 so it never cuts a save file short. */
++static volatile int s_savedata_busy;
++int ps3_savedata_busy(void) { return __atomic_load_n(&s_savedata_busy, __ATOMIC_ACQUIRE); }
++
++static s32 savedata_execute_run(const char* dirName, int is_save,
++                                CellSaveDataSetBuf* setBuf,
++                                CellSaveDataStatCallback funcStat,
++                                CellSaveDataFileCallback funcFile,
++                                void* userdata);
++
+ static s32 savedata_execute(const char* dirName, int is_save,
+                              CellSaveDataSetBuf* setBuf,
+                              CellSaveDataStatCallback funcStat,
+                              CellSaveDataFileCallback funcFile,
+                              void* userdata)
++{
++    __atomic_add_fetch(&s_savedata_busy, 1, __ATOMIC_ACQ_REL);
++    const s32 r = savedata_execute_run(dirName, is_save, setBuf, funcStat, funcFile, userdata);
++    __atomic_sub_fetch(&s_savedata_busy, 1, __ATOMIC_ACQ_REL);
++    return r;
++}
++
++static s32 savedata_execute_run(const char* dirName, int is_save,
++                             CellSaveDataSetBuf* setBuf,
++                             CellSaveDataStatCallback funcStat,
++                             CellSaveDataFileCallback funcFile,
++                             void* userdata)
+ {
+     if (!dirName || !funcStat)
+         return CELL_SAVEDATA_ERROR_PARAM;
 diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
-index d1b8f32..5b8dce7 100644
+index d1b8f32..caed4a3 100644
 --- a/libs/system/cellSysutil.c
 +++ b/libs/system/cellSysutil.c
 @@ -11,6 +11,9 @@
@@ -5067,7 +5342,40 @@ index d1b8f32..5b8dce7 100644
  
  /* Guest-memory stores — out-params from the recompiled title are guest VM
   * addresses, not host pointers. */
-@@ -257,6 +260,145 @@ s32 cellSysutilCheckCallback(void)
+@@ -198,6 +201,13 @@ s32 cellSysutilUnregisterCallback(s32 slot)
+ static int s_pump_seen = 0;
+ int cellSysutil_pump_seen(void) { return s_pump_seen; }
+ 
++#include "ps3emu/ps3_toggles.h"
++static void quit_toggle(int id, int value)
++{
++    (void)id;
++    if (value == 1) ps3_host_quit("PS3_QUIT toggle");
++}
++
+ s32 cellSysutilCheckCallback(void)
+ {
+     /* Give a no-button dialog the title has left open past its grace period
+@@ -207,6 +217,9 @@ s32 cellSysutilCheckCallback(void)
+     /* Turn psnr replies and pushes into queued NP callbacks first, so this
+      * same poll delivers them. A no-op when no psnr server is configured. */
+     { extern void np_psnr_pump(void); np_psnr_pump(); }
++    /* A pending PSN terms-of-service answer (cellSysutilNpEula.c) joins the
++     * completions, so this same poll runs the title's callback. */
++    { extern void ps3_np_eula_tick(void); ps3_np_eula_tick(); }
+     drain_guest_completions();
+     /* No cellMsgDialog_pump() here: #155 replaced that mechanism with
+      * drain_guest_completions() above, deferring a dialog answer to this poll
+@@ -216,6 +229,8 @@ s32 cellSysutilCheckCallback(void)
+       if (!s_pump_seen) {
+           s_pump_seen = 1;
+           printf("[cellSysutil] CheckCallback: the title pumps sysutil%c", 10);
++          /* PS3_QUIT=1 in the PS3_TOGGLE_FILE: quit as the menu does. */
++          ps3_toggle_watch(PS3T_QUIT, quit_toggle);
+       }
+     }
+     /* Drain the event queue, dispatching each event into guest code via
+@@ -257,6 +272,145 @@ s32 cellSysutilCheckCallback(void)
   * near the guest's variable, and nothing on the way says a word.
   *
   * A u32 cannot be passed a host pointer by accident. */
@@ -5213,7 +5521,7 @@ index d1b8f32..5b8dce7 100644
  s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
  {
      if (!value_ea)
-@@ -265,7 +407,7 @@ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
+@@ -265,7 +419,7 @@ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
      s32 v = 0;
      switch (id) {
      case CELL_SYSUTIL_SYSTEMPARAM_ID_LANG:
@@ -5222,6 +5530,300 @@ index d1b8f32..5b8dce7 100644
          break;
      case CELL_SYSUTIL_SYSTEMPARAM_ID_ENTER_BUTTON_ASSIGN:
          v = CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CROSS;
+@@ -509,3 +663,87 @@ s32 cellSysutilIsMeetingApp(void)
+ {
+     return 0; /* Not a meeting app */
+ }
++
++/* ---------------------------------------------------------------------------
++ * Host quit: the in-game menu's "Quit game", Cmd+Q, the PS3_QUIT live toggle.
++ *
++ * What the console's "Quit Game" does first: every registered sysutil
++ * callback gets CELL_SYSUTIL_REQUEST_EXITGAME, and the title tidies up and
++ * calls sys_process_exit, which ends the process here (exit()). A title that
++ * has not done so within PS3_QUIT_GRACE_MS (default 3000) is ended for it,
++ * as the console does: once no save is being written (cellSaveData.c
++ * ps3_savedata_busy, waited on for up to 10 s), with stdio flushed and the
++ * atexit handlers run, exit(0). 0 is a normal end for the launcher
++ * (--exit-with-game, the Steam shortcut). Runs on its own thread, so the
++ * caller (the main thread, the frame clock) returns at once; a second request
++ * is ignored.
++ * -----------------------------------------------------------------------*/
++#ifdef _WIN32
++static DWORD WINAPI host_quit_thread(LPVOID unused)
++#else
++#include <unistd.h>
++static void* host_quit_thread(void* unused)
++#endif
++{
++    (void)unused;
++    extern int ps3_savedata_busy(void);   /* cellSaveData.c */
++    int grace = 3000;
++    { const char* e = getenv("PS3_QUIT_GRACE_MS"); if (e && *e) grace = atoi(e); }
++    if (grace < 0) grace = 0;
++    int asked = 0;
++    for (int slot = 0; slot < CELL_SYSUTIL_MAX_CALLBACKS; ++slot) {
++        if (!s_callbacks[slot].registered || !s_callbacks[slot].guest_opd) continue;
++        const u64 args[8] = { CELL_SYSUTIL_REQUEST_EXITGAME, 0, s_callbacks[slot].userdata, 0, 0, 0, 0, 0 };
++        cellSysutilQueueGuestCallbackArgs(s_callbacks[slot].guest_opd, args);
++        asked++;
++    }
++    printf("[quit] REQUEST_EXITGAME to %d sysutil callback(s); waiting up to %d ms for the game\n",
++           asked, grace);
++    fflush(stdout);
++    const int step = 50;
++    for (int t = 0; t < grace; t += step) {
++#ifdef _WIN32
++        Sleep(step);
++#else
++        usleep(step * 1000);
++#endif
++    }
++    int waited = 0;
++    while (ps3_savedata_busy() && waited < 10000) {
++#ifdef _WIN32
++        Sleep(step);
++#else
++        usleep(step * 1000);
++#endif
++        waited += step;
++    }
++    printf("[quit] the game did not exit on its own; ending it (save in flight: %s, waited %d ms) -> exit 0\n",
++           ps3_savedata_busy() ? "yes, gave up" : "no", waited);
++    fflush(NULL);
++    exit(0);
++#ifdef _WIN32
++    return 0;
++#else
++    return NULL;
++#endif
++}
++
++static volatile int s_host_quit;
++
++int ps3_host_quitting(void) { return __atomic_load_n(&s_host_quit, __ATOMIC_ACQUIRE); }
++
++void ps3_host_quit(const char* why)
++{
++    if (__atomic_exchange_n(&s_host_quit, 1, __ATOMIC_ACQ_REL)) return;
++    printf("[quit] requested (%s)\n", why ? why : "host");
++    fflush(stdout);
++#ifdef _WIN32
++    HANDLE h = CreateThread(NULL, 0, host_quit_thread, NULL, 0, NULL);
++    if (h) { CloseHandle(h); return; }
++#else
++    pthread_t th;
++    if (pthread_create(&th, NULL, host_quit_thread, NULL) == 0) { pthread_detach(th); return; }
++#endif
++    fflush(NULL);
++    exit(0);
++}
+diff --git a/libs/system/cellSysutil.h b/libs/system/cellSysutil.h
+index 238e188..6c0081f 100644
+--- a/libs/system/cellSysutil.h
++++ b/libs/system/cellSysutil.h
+@@ -120,6 +120,13 @@ s32 cellSysutilQueueGuestCallbackArgs(u32 opd, const u64 args[8]);
+  * games use slot 0. */
+ void cellSysutilQueueEvent(int slot, u32 status, u32 param);
+ 
++/* Quit the game from the host (the in-game menu, Cmd+Q, PS3_QUIT): sends
++ * REQUEST_EXITGAME, then ends the process with status 0 if the title has not
++ * within PS3_QUIT_GRACE_MS, never while a save is being written. Returns at
++ * once; a second call does nothing. ps3_host_quitting(): 1 once asked. */
++void ps3_host_quit(const char* why);
++int  ps3_host_quitting(void);
++
+ /* value_ea / buf_ea are GUEST addresses, not host pointers: both write into
+  * the title's own memory through vm_write*. Spelt u32 so a caller cannot
+  * translate the argument first and hand over a host address. */
+diff --git a/libs/system/cellSysutilNpEula.c b/libs/system/cellSysutilNpEula.c
+index d480187..8832334 100644
+--- a/libs/system/cellSysutilNpEula.c
++++ b/libs/system/cellSysutilNpEula.c
+@@ -1,16 +1,126 @@
+ /*
+  * ps3recomp - cellSysutilNpEula HLE implementation
+  *
+- * EULA check: returns "already accepted" so games skip the EULA dialog.
++ * sceNpEulaCheckEulaStatus asks the system whether the player has accepted
++ * the title's PSN terms of service; the system answers later, through the
++ * callback the title passed, on one of its cellSysutilCheckCallback polls.
++ * Unimplemented, the import answered 0 (CELL_OK) and no callback ever came:
++ * inFAMOUS 2 asks right after the PSN connect dialog and then waits forever
++ * behind its "Please wait..." spinner (the "AGUARDE..." box at dusk in New
++ * Marais).
++ *
++ * The answer follows RPCS3 (rpcs3/Emu/Cell/Modules/cellSysutilNpEula.cpp):
++ * one call at a time, the callback runs from the sysutil poll, and
++ * sceNpEulaAbort turns the pending answer into ABORTED. Where it differs:
++ *   - offline (the default; cellNetCtl reports no connection and the NP
++ *     manager is OFFLINE) the terms cannot be fetched, so the answer is
++ *     SCE_NP_EULA_ERROR. inFAMOUS 2 maps ERROR/ABORTED/UNKNOWN to "give up"
++ *     (func_002BA9E4 stores 2 -> its network state machine goes idle, state
++ *     24, and the spinner closes) without an error box. RPCS3's
++ *     ALREADY_ACCEPTED would send it on to request a PSN ticket instead.
++ *   - online (PS3_NET_ONLINE=1, or a psnr server) the answer is RPCS3's:
++ *     ALREADY_ACCEPTED, version 1.
++ *   - sceNpEulaShowCurrentEula (RPCS3: a TODO that never calls back) closes
++ *     at once with the callback, so a "show terms" menu entry does not leave
++ *     its spinner up either.
+  */
+ 
+ #include "cellSysutilNpEula.h"
++#include "cellSysutil.h"          /* cellSysutilQueueGuestCallbackArgs */
+ #include <stdio.h>
++#include <string.h>
++
++int ps3_netctl_online(void);      /* libs/network/cellNetCtl.c */
++int np_psnr_enabled(void);        /* libs/network/np_psnr.c */
++
++#ifdef _WIN32
++#include <windows.h>
++static SRWLOCK s_eula_lock = SRWLOCK_INIT;
++#define EULA_LOCK()   AcquireSRWLockExclusive(&s_eula_lock)
++#define EULA_UNLOCK() ReleaseSRWLockExclusive(&s_eula_lock)
++#else
++#include <pthread.h>
++static pthread_mutex_t s_eula_lock = PTHREAD_MUTEX_INITIALIZER;
++#define EULA_LOCK()   pthread_mutex_lock(&s_eula_lock)
++#define EULA_UNLOCK() pthread_mutex_unlock(&s_eula_lock)
++#endif
++
++enum { EULA_IDLE = 0, EULA_CHECK, EULA_SHOW };
++
++static struct {
++    int  kind;        /* EULA_IDLE: nothing pending */
++    u32  status;      /* SceNpEulaStatus the callback will get */
++    u32  error;
++    u32  version;
++    u32  cb;          /* guest OPD */
++    u32  arg;
++} s_eula;
++
++static int eula_online(void) { return ps3_netctl_online() || np_psnr_enabled(); }
++
++s32 sceNpEulaCheckEulaStatus(u32 communicationId, u32 arg2, u64 arg3,
++                             u32 cbFunc, u32 cbFuncArg)
++{
++    if (!communicationId || !cbFunc) return (s32)SCE_NP_EULA_ERROR_INVALID_ARGUMENT;
++    EULA_LOCK();
++    if (s_eula.kind != EULA_IDLE) { EULA_UNLOCK(); return (s32)SCE_NP_EULA_ERROR_ALREADY_INITIALIZED; }
++    const int online = eula_online();
++    s_eula.kind    = EULA_CHECK;
++    s_eula.status  = online ? SCE_NP_EULA_ALREADY_ACCEPTED : SCE_NP_EULA_ERROR;
++    s_eula.error   = online ? 0u : SCE_NP_EULA_ERROR_UNKNOWN;
++    s_eula.version = online ? 1u : 0u;
++    s_eula.cb      = cbFunc;
++    s_eula.arg     = cbFuncArg;
++    EULA_UNLOCK();
++    printf("[cellSysutilNpEula] CheckEulaStatus(arg2=0x%X, arg3=0x%llX, cb=0x%08X) -> %s\n",
++           arg2, (unsigned long long)arg3, cbFunc,
++           online ? "already accepted" : "error (offline: the terms cannot be fetched)");
++    return CELL_OK;
++}
++
++s32 sceNpEulaAbort(void)
++{
++    EULA_LOCK();
++    if (s_eula.kind == EULA_IDLE) { EULA_UNLOCK(); return (s32)SCE_NP_EULA_ERROR_NOT_INITIALIZED; }
++    /* Nothing is on screen to take down: the pending answer becomes ABORTED. */
++    if (s_eula.kind == EULA_CHECK) s_eula.status = SCE_NP_EULA_ABORTED;
++    EULA_UNLOCK();
++    printf("[cellSysutilNpEula] Abort()\n");
++    return CELL_OK;
++}
++
++s32 sceNpEulaShowCurrentEula(u32 communicationId, u64 arg2, u32 cbFunc, u32 cbFuncArg)
++{
++    if (!communicationId || !cbFunc) return (s32)SCE_NP_EULA_ERROR_INVALID_ARGUMENT;
++    EULA_LOCK();
++    if (s_eula.kind != EULA_IDLE) { EULA_UNLOCK(); return (s32)SCE_NP_EULA_ERROR_ALREADY_INITIALIZED; }
++    s_eula.kind   = EULA_SHOW;
++    s_eula.status = 0; s_eula.error = 0; s_eula.version = 0;
++    s_eula.cb     = cbFunc;
++    s_eula.arg    = cbFuncArg;
++    EULA_UNLOCK();
++    printf("[cellSysutilNpEula] ShowCurrentEula(arg2=0x%llX, cb=0x%08X) -> closed (nothing to show)\n",
++           (unsigned long long)arg2, cbFunc);
++    return CELL_OK;
++}
+ 
+-s32 cellSysutilNpEulaCheck(void* cb, void* arg)
++void ps3_np_eula_tick(void)
+ {
+-    (void)cb; (void)arg;
+-    printf("[cellSysutilNpEula] EulaCheck() — returning accepted\n");
+-    /* Return 1 = EULA already accepted */
+-    return 1;
++    EULA_LOCK();
++    if (s_eula.kind == EULA_IDLE) { EULA_UNLOCK(); return; }
++    u64 args[8] = {0};
++    if (s_eula.kind == EULA_CHECK) {
++        args[0] = s_eula.status; args[1] = s_eula.error;
++        args[2] = s_eula.version; args[3] = s_eula.arg;
++    } else {
++        args[0] = 0; args[1] = 0; args[2] = s_eula.arg;
++    }
++    const u32 cb = s_eula.cb, status = s_eula.status;
++    const int kind = s_eula.kind;
++    /* Idle before the callback runs, so the title may ask again from it. */
++    memset(&s_eula, 0, sizeof s_eula);
++    EULA_UNLOCK();
++    cellSysutilQueueGuestCallbackArgs(cb, args);
++    if (kind == EULA_CHECK)
++        printf("[cellSysutilNpEula] callback status=%u delivered\n", status);
+ }
+diff --git a/libs/system/cellSysutilNpEula.h b/libs/system/cellSysutilNpEula.h
+index 3d8a1c9..70546ad 100644
+--- a/libs/system/cellSysutilNpEula.h
++++ b/libs/system/cellSysutilNpEula.h
+@@ -1,8 +1,10 @@
+ /*
+  * ps3recomp - cellSysutilNpEula HLE
+  *
+- * NP EULA (End User License Agreement) acceptance dialog.
+- * Returns "already accepted" so games proceed past the EULA check.
++ * The PSN terms-of-service (EULA) check a title runs before its online
++ * features. The answer always arrives through the title's callback on its
++ * next cellSysutilCheckCallback, as on the console; cellSysutilNpEula.c says
++ * which answer.
+  */
+ 
+ #ifndef PS3RECOMP_CELL_SYSUTIL_NP_EULA_H
+@@ -15,7 +17,32 @@
+ extern "C" {
+ #endif
+ 
+-s32 cellSysutilNpEulaCheck(void* cb, void* arg);
++/* SceNpEulaStatus, the callback's first argument (RPCS3 cellSysutilNpEula.cpp). */
++#define SCE_NP_EULA_UNKNOWN           0
++#define SCE_NP_EULA_ACCEPTED          1
++#define SCE_NP_EULA_ALREADY_ACCEPTED  2
++#define SCE_NP_EULA_REJECTED          3
++#define SCE_NP_EULA_ABORTED           4
++#define SCE_NP_EULA_ERROR             5
++
++#define SCE_NP_EULA_ERROR_UNKNOWN             0x8002e500
++#define SCE_NP_EULA_ERROR_INVALID_ARGUMENT    0x8002e501
++#define SCE_NP_EULA_ERROR_NOT_INITIALIZED     0x8002e502
++#define SCE_NP_EULA_ERROR_ALREADY_INITIALIZED 0x8002e503
++
++/* Pointers (communicationId, cbFunc = an OPD, cbFuncArg) are guest addresses:
++ * the HLE ABI passes them through untranslated.
++ *   check: cbFunc(status, errorCode, version, cbFuncArg)
++ *   show:  cbFunc(status, param, cbFuncArg), a CellSysutilCallback          */
++s32 sceNpEulaCheckEulaStatus(u32 communicationId, u32 arg2, u64 arg3,
++                             u32 cbFunc, u32 cbFuncArg);              /* NID 0x59D1629A */
++s32 sceNpEulaAbort(void);                                             /* NID 0x5EC05AD8 */
++s32 sceNpEulaShowCurrentEula(u32 communicationId, u64 arg2,
++                             u32 cbFunc, u32 cbFuncArg);              /* NID 0x6599500D */
++
++/* Called by cellSysutilCheckCallback: moves a pending answer to the guest
++ * callback queue, which that same poll drains (RPCS3's sysutil_register_cb). */
++void ps3_np_eula_tick(void);
+ 
+ #ifdef __cplusplus
+ }
 diff --git a/libs/system/sysPrxForUser.c b/libs/system/sysPrxForUser.c
 index d2db25f..2321d8d 100644
 --- a/libs/system/sysPrxForUser.c
@@ -5262,10 +5864,19 @@ index d2db25f..2321d8d 100644
      vm_write32(user - 12, 0);                            /* poison: catch double free */
      slot_lock();
 diff --git a/libs/system/tests/test_dialog_callbacks.c b/libs/system/tests/test_dialog_callbacks.c
-index f473cc3..ae87960 100644
+index f473cc3..cd739ff 100644
 --- a/libs/system/tests/test_dialog_callbacks.c
 +++ b/libs/system/tests/test_dialog_callbacks.c
-@@ -51,6 +51,8 @@ int main(void)
+@@ -14,6 +14,8 @@ void spu_coh_notify_write(uint32_t a) { (void)a; }
+ void spu_lockline_lock(void) {}
+ void spu_lockline_unlock(void) {}
+ void np_psnr_pump(void) {}
++void ps3_np_eula_tick(void) {}
++int ps3_savedata_busy(void) { return 0; }
+ 
+ static unsigned calls;
+ static int waiting;
+@@ -51,6 +53,8 @@ int main(void)
      cellSysutilCheckCallback(); assert(calls == 2);
      g_ps3_guest_caller = callback;
      cellSysutilCheckCallback(); assert(calls == 3 && last_result == CELL_MSGDIALOG_BUTTON_NONE);
@@ -5274,6 +5885,82 @@ index f473cc3..ae87960 100644
      cellSysutilCheckCallback(); assert(calls == 3);
  
      /* The yes/no auto-answer. DEFAULT is a blanket YES, including for a prompt
+diff --git a/libs/system/tests/test_np_eula.c b/libs/system/tests/test_np_eula.c
+new file mode 100644
+index 0000000..d80626b
+--- /dev/null
++++ b/libs/system/tests/test_np_eula.c
+@@ -0,0 +1,70 @@
++/* macOS: clang -std=gnu17 -I include libs/system/tests/test_np_eula.c
++ * libs/system/cellSysutil.c -Wl,-dead_strip -pthread -o /tmp/test_np_eula && /tmp/test_np_eula
++ *
++ * The PSN terms-of-service check answers through the title's callback on the
++ * next sysutil poll, never at call time and never not at all (inFAMOUS 2
++ * waited forever behind "Please wait..." when it did not). */
++#include "../cellSysutilNpEula.c"
++#include "ps3emu/guest_call.h"
++#include <assert.h>
++#include <stdlib.h>
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++void np_psnr_pump(void) {}
++void cellMsgDialog_tick(void) {}
++int ps3_savedata_busy(void) { return 0; }
++static int s_online;
++int ps3_netctl_online(void) { return s_online; }
++int np_psnr_enabled(void) { return 0; }
++
++static unsigned calls;
++static u64 got[8];
++static u32 got_opd;
++static void caller(u32 opd, u64 a, u64 b, u64 c, u64 d, u64 e, u64 f, u64 g, u64 h)
++{
++    calls++; got_opd = opd;
++    got[0] = a; got[1] = b; got[2] = c; got[3] = d; got[4] = e; got[5] = f; got[6] = g; got[7] = h;
++}
++
++int main(void)
++{
++    g_ps3_guest_caller = caller;
++
++    /* Bad arguments fail at call time, as RPCS3's. */
++    assert(sceNpEulaCheckEulaStatus(0, 0, 0, 0x100, 0) == (s32)SCE_NP_EULA_ERROR_INVALID_ARGUMENT);
++    assert(sceNpEulaCheckEulaStatus(0x200, 0, 0, 0, 0) == (s32)SCE_NP_EULA_ERROR_INVALID_ARGUMENT);
++    assert(sceNpEulaAbort() == (s32)SCE_NP_EULA_ERROR_NOT_INITIALIZED);
++
++    /* Offline (the default): CELL_OK now, then status ERROR on the next poll.
++     * inFAMOUS 2's func_002BA9E4 maps ERROR to "give up" (state 24, spinner off),
++     * the call shape is its func_002BA498: r4 from its config, r5 = 0, r7 = 0. */
++    assert(sceNpEulaCheckEulaStatus(0x200, 0x10, 0, 0x100, 0) == CELL_OK);
++    assert(calls == 0);                                  /* not from inside the call */
++    assert(sceNpEulaCheckEulaStatus(0x200, 0x10, 0, 0x100, 0) == (s32)SCE_NP_EULA_ERROR_ALREADY_INITIALIZED);
++    cellSysutilCheckCallback();
++    assert(calls == 1 && got_opd == 0x100);
++    assert(got[0] == SCE_NP_EULA_ERROR && got[1] == SCE_NP_EULA_ERROR_UNKNOWN && got[2] == 0 && got[3] == 0);
++    cellSysutilCheckCallback(); assert(calls == 1);      /* once */
++
++    /* Abort before the poll: the answer becomes ABORTED (RPCS3), userdata kept. */
++    assert(sceNpEulaCheckEulaStatus(0x200, 0, 0, 0x100, 0x5555) == CELL_OK);
++    assert(sceNpEulaAbort() == CELL_OK);
++    cellSysutilCheckCallback();
++    assert(calls == 2 && got[0] == SCE_NP_EULA_ABORTED && got[3] == 0x5555);
++
++    /* PS3_NET_ONLINE=1: RPCS3's answer, already accepted, version 1. */
++    s_online = 1;
++    assert(sceNpEulaCheckEulaStatus(0x200, 0, 0, 0x100, 0x77) == CELL_OK);
++    cellSysutilCheckCallback();
++    assert(calls == 3 && got[0] == SCE_NP_EULA_ALREADY_ACCEPTED && got[1] == 0 && got[2] == 1 && got[3] == 0x77);
++    s_online = 0;
++
++    /* "Show the terms": nothing to show, so it closes on the next poll. */
++    assert(sceNpEulaShowCurrentEula(0x200, 0, 0x300, 0x99) == CELL_OK);
++    assert(sceNpEulaCheckEulaStatus(0x200, 0, 0, 0x100, 0) == (s32)SCE_NP_EULA_ERROR_ALREADY_INITIALIZED);
++    cellSysutilCheckCallback();
++    assert(calls == 4 && got_opd == 0x300 && got[0] == 0 && got[2] == 0x99);
++
++    puts("cellSysutilNpEula checks passed");
++    return 0;
++}
 diff --git a/libs/system/tests/test_savedata_root.c b/libs/system/tests/test_savedata_root.c
 new file mode 100644
 index 0000000..f8ee047
@@ -6245,10 +6932,10 @@ index 0000000..4621361
 +#endif
 diff --git a/libs/video/ps3_overlay.h b/libs/video/ps3_overlay.h
 new file mode 100644
-index 0000000..726177a
+index 0000000..8514b88
 --- /dev/null
 +++ b/libs/video/ps3_overlay.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,92 @@
 +/*
 + * ps3_overlay -- the in-game menu and performance HUD of the Metal backend
 + * (Dear ImGui, third_party/imgui), drawn on the drawable after the game's
@@ -6329,6 +7016,9 @@ index 0000000..726177a
 +/* A notice in a corner for a few seconds (any thread). */
 +void ps3_overlay_notice(const char* text);
 +
++/* "Quitting the game..." in the menu's language (Cmd+Q, rsx_metal_backend.m). */
++void ps3_overlay_quit_notice(void);
++
 +/* Headless + PS3_OVERLAY_FORCE_OPEN/HUD: the frame dump should read the
 + * composed target instead of the game's surface. */
 +int ps3_overlay_composes_headless(void);
@@ -6340,10 +7030,10 @@ index 0000000..726177a
 +#endif
 diff --git a/libs/video/ps3_overlay.mm b/libs/video/ps3_overlay.mm
 new file mode 100644
-index 0000000..bd25ccb
+index 0000000..ed3121b
 --- /dev/null
 +++ b/libs/video/ps3_overlay.mm
-@@ -0,0 +1,1663 @@
+@@ -0,0 +1,1721 @@
 +/*
 + * ps3_overlay -- the in-game menu and performance HUD (see ps3_overlay.h).
 + *
@@ -6434,6 +7124,7 @@ index 0000000..bd25ccb
 +int   ps3_button_icons_effective(void);
 +void  ps3_lang_in_use(int kind, char* asked, char* given, size_t n);   /* runtime/ppu/ppu_fs_lang.h */
 +int   ps3_lang_available(int kind, char (*out)[24], int max);
++void  ps3_host_quit(const char* why);              /* libs/system/cellSysutil.c */
 +extern volatile int      g_pad_overlay_open;
 +extern volatile uint32_t g_pad_overlay_toggle, g_pad_overlay_nav, g_pad_overlay_nav2, g_pad_overlay_raw;
 +}
@@ -6575,6 +7266,10 @@ index 0000000..bd25ccb
 +static uint32_t s_seen_toggle;
 +static char  s_title[64] = "ps3recomp";
 +static int   s_tab, s_tab_want = -1;   /* the menu's tab; one to switch to */
++/* "Quit game": 1 = open the confirmation next frame, 2 = it is showing.
++ * s_quit_cancel: Esc or Circle closes it (both close the whole menu otherwise). */
++static volatile int  s_quit_ask;
++static volatile bool s_quit_cancel;
 +
 +static const char* L(const char* en, const char* pt) { return s_pt ? pt : en; }
 +
@@ -6650,6 +7345,12 @@ index 0000000..bd25ccb
 +    update_active();
 +}
 +
++/* Cmd+Q (rsx_metal_backend.m): the notice in the menu's language. */
++extern "C" void ps3_overlay_quit_notice(void)
++{
++    ps3_overlay_notice(L("Quitting the game...", "Saindo do jogo..."));
++}
++
 +extern "C" int ps3_overlay_menu_open(void)
 +{
 +    if (!s_enabled) return 0;
@@ -6686,6 +7387,9 @@ index 0000000..bd25ccb
 +    { const char* e = getenv("PS3_OVERLAY_TAB"); if (e && *e) { const int t = atoi(e); s_tab_want = t >= 0 && t < 5 ? t : 0; } }
 +    s_enabled = true;
 +    if (s_force_open) set_open(1);
++    /* PS3_OVERLAY_FORCE_OPEN=quit: open on the "Quit the game?" confirmation
++     * (a headless frame dump shows it; nothing is pressed). */
++    { const char* e = getenv("PS3_OVERLAY_FORCE_OPEN"); if (e && !strcmp(e, "quit")) s_quit_ask = 1; }
 +    update_active();
 +    fprintf(stderr, "[overlay] in-game menu: F1 (fn+F1), Insert/Help or Cmd+, ; L3+R3 on a controller%s%s\n",
 +            s_hud ? "; HUD on" : "", s_force_open ? "; forced open" : "");
@@ -6820,6 +7524,10 @@ index 0000000..bd25ccb
 +                                         "O F12 captura no modo de depuração (app: Avançado > Modo de depuração)"));
 +                }
 +            }
++            return 1;
++        }
++        if (vk == 0x35 && s_open && s_quit_ask) {      /* Esc: back out of "Quit game?" */
++            if (down && ![ev isARepeat]) s_quit_cancel = true;
 +            return 1;
 +        }
 +        if (toggle || (vk == 0x35 && s_open)) {
@@ -7807,6 +8515,42 @@ index 0000000..bd25ccb
 +           "espera GPU: tempo que o apresentador esperou a GPU. Linha do tempo por SPU e FIFO: PS3_FTRACE."));
 +}
 +
++/* "Quit game?": Quit saves the menu's settings (closing it does that), then
++ * ps3_host_quit (cellSysutil.c) ends the game the way the console's Quit Game
++ * does and the process exits 0. Cancel has the focus, so a stray Cross does
++ * not quit. */
++static void quit_confirm(void)
++{
++    if (s_quit_ask == 1) { ImGui::OpenPopup("###quitask"); s_quit_ask = 2; }
++    if (s_quit_ask != 2) return;
++    const ImGuiIO& io = ImGui::GetIO();
++    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
++    char title[64];
++    snprintf(title, sizeof title, "%s###quitask", L("Quit the game?", "Sair do jogo?"));
++    if (!ImGui::BeginPopupModal(title, NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
++                                              ImGuiWindowFlags_NoSavedSettings)) {
++        s_quit_ask = 0; s_quit_cancel = false; return;
++    }
++    ImGui::TextUnformatted(L("Unsaved progress since the last autosave will be lost.",
++                             "O progresso não salvo desde o último salvamento automático será perdido."));
++    ImGui::Spacing();
++    const bool quit = ImGui::Button(L("Quit", "Sair"));
++    ImGui::SameLine();
++    const bool cancel = ImGui::Button(L("Cancel", "Cancelar"));
++    ImGui::SetItemDefaultFocus();   /* Cancel */
++    if (cancel || s_quit_cancel) {
++        s_quit_ask = 0; s_quit_cancel = false;
++        ImGui::CloseCurrentPopup();
++    } else if (quit) {
++        s_quit_ask = 0;
++        ImGui::CloseCurrentPopup();
++        set_open(0);
++        ps3_overlay_notice(L("Quitting the game...", "Saindo do jogo..."));
++        ps3_host_quit("in-game menu");
++    }
++    ImGui::EndPopup();
++}
++
 +static void draw_menu(void)
 +{
 +    const ImGuiIO& io = ImGui::GetIO();
@@ -7841,10 +8585,13 @@ index 0000000..bd25ccb
 +    ImGui::Separator();
 +    if (ImGui::Button(L("Close", "Fechar"))) set_open(0);
 +    ImGui::SameLine();
++    if (ImGui::Button(L("Quit game", "Sair do jogo"))) s_quit_ask = 1;
++    ImGui::SameLine();
 +    hint(s_ini_path[0] ? L("Changes apply at once and are saved when the menu closes.",
 +                           "As mudanças valem na hora e são salvas ao fechar o menu.")
 +                       : L("Changes apply at once (not saved: no PS3_OVERLAY_INI).",
 +                           "As mudanças valem na hora (não são salvas: sem PS3_OVERLAY_INI)."));
++    quit_confirm();
 +    ImGui::End();
 +}
 +
@@ -7950,6 +8697,7 @@ index 0000000..bd25ccb
 +    for (auto& s : sticks) io.AddKeyAnalogEvent(s.k, s.v > 0.1f, s.v);
 +    const uint16_t pressed = b & (uint16_t)~prev;
 +    prev = b;
++    if (s_quit_ask) { if (pressed & PAD_CIRCLE) s_quit_cancel = true; return; }
 +    if (pressed & PAD_L1) s_tab_want = (s_tab + 4) % 5;
 +    if (pressed & PAD_R1) s_tab_want = (s_tab + 1) % 5;
 +    if ((pressed & PAD_CIRCLE) && !ImGui::IsAnyItemActive()) set_open(0);
@@ -13546,7 +14294,7 @@ index aee795c..5845a3f 100644
  
  /* The clear colour most recently set via NV4097_SET_COLOR_CLEAR_VALUE, in the
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..c7ba807 100644
+index 98db285..828b53a 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -48,11 +48,30 @@
@@ -17137,10 +17885,26 @@ index 98db285..c7ba807 100644
          if (s_window) { [s_window close]; s_window = nil; }
  #endif
          free(s_verts); s_verts = NULL;
-@@ -3886,25 +6516,164 @@ static int pump_messages_impl(void)
+@@ -3886,25 +6516,180 @@ static int pump_messages_impl(void)
                                                  inMode:NSDefaultRunLoopMode
                                                 dequeue:YES];
              if (!ev) break;
++            /* Cmd+Q quits, menu open or not, on the first press. There is no
++             * app menu (the host turns a plain run loop) to give AppKit's
++             * Quit, and the keyboard pad swallows every Cmd key, so before
++             * this nothing happened. It ends the game the way the menu's
++             * "Quit game" does (cellSysutil.c ps3_host_quit), without asking:
++             * Cmd+Q is a deliberate key on the Mac. */
++            if ([ev type] == NSEventTypeKeyDown && ([ev keyCode] & 127u) == 0x0C &&
++                ([ev modifierFlags] & NSEventModifierFlagCommand)) {
++                if (![ev isARepeat]) {
++                    extern void ps3_overlay_quit_notice(void);
++                    extern void ps3_host_quit(const char* why);
++                    ps3_overlay_quit_notice();
++                    ps3_host_quit("Cmd+Q");
++                }
++                continue;
++            }
 +            /* The in-game menu (ps3_overlay.mm) first: its keys open it, and
 +             * while it is open it takes the keyboard and the mouse. A mouse
 +             * event it took still goes to AppKit (focus, the title bar). */
@@ -17306,7 +18070,7 @@ index 98db285..c7ba807 100644
      }
  #endif
      return s_closed ? -1 : 0;
-@@ -4010,8 +6779,9 @@ void rsx_metal_backend_present(void)
+@@ -4010,8 +6795,9 @@ void rsx_metal_backend_present(void)
              encode_draw(enc, &rec->u.draw, &ps);
          }
          if (enc) [enc endEncoding];
@@ -17317,7 +18081,7 @@ index 98db285..c7ba807 100644
  
          if (s_headless) {
              /* The readback below must see a completed frame. */
-@@ -4068,3 +6838,121 @@ u32 rsx_metal_backend_guest_draws(void)
+@@ -4068,3 +6854,121 @@ u32 rsx_metal_backend_guest_draws(void)
  {
      return s_eng_active ? rsx_draw_engine_guest_draws() : s_last_guest_draws;
  }
