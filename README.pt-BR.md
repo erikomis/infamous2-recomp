@@ -329,6 +329,7 @@ faixas pretas quando a janela tem outro formato.
 | Cmd+Ctrl+F | liga/desliga a tela cheia do macOS |
 | Esc / Cmd | solta o mouse |
 | F1 (fn+F1 no teclado do Mac), Insert ou Cmd+, ; L3+R3 no controle | o menu dentro do jogo (abaixo) |
+| Cmd+Q | sai do jogo na hora (como o **Sair do jogo** do menu, sem a pergunta) |
 
 ### Menu dentro do jogo
 
@@ -341,6 +342,14 @@ cursor é solto), mas continua rodando: pause antes com START se precisar. Um
 clique de analógico sozinho continua chegando ao jogo como antes; com os dois
 apertados, nenhum chega. `PS3_OVERLAY_PAD=0` desliga a combinação no controle,
 `PS3_OVERLAY=0` o menu inteiro.
+
+**Sair do jogo**, embaixo ao lado de Fechar, pergunta antes ("O progresso não
+salvo desde o último salvamento automático será perdido"; o foco fica em
+Cancelar, Esc ou ○ desistem). Sair faz o que o Sair do Jogo do console faz:
+pede ao jogo que feche (`CELL_SYSUTIL_REQUEST_EXITGAME`) e, se ele não fechar
+em 3 s, encerra por ele, nunca no meio da gravação de um save, com status de
+saída 0, então o launcher (e o `--exit-with-game`, o atalho da Steam) vê um fim
+normal. O progresso vale até o último salvamento automático, como no console.
 
 | Aba | O que muda, na hora |
 | --- | --- |
@@ -453,7 +462,8 @@ mudança aparece no log como `[toggle] NOME antigo -> novo`. Ao vivo:
 (a lista inteira), `PS3_SPU_FASTJOB`, `PS3_SPU_STUB_MICRO`,
 `PS3_SPU_STACK_HINT`, `PS3_SPU_DRAIN_INLINE` (a checagem de lançamento inline
 do dreno), `PS3_DISPLAY_GAMMA`, `PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO`,
-`PS3RECOMP_METAL_FPS` e `PS3_BUTTON_ICONS`; o resto (entre elas as passadas de luz/SSAO na GPU)
+`PS3RECOMP_METAL_FPS`, `PS3_BUTTON_ICONS` e `PS3_QUIT=1` (sai do jogo como o Sair do
+jogo do menu: uma execução por script termina com status 0); o resto (entre elas as passadas de luz/SSAO na GPU)
 continua lido uma vez na partida. Sem a variável nada muda.
 `tools/ab_live.sh <nome> <OPÇÃO> [B] [A]` usa isso para um A/B de fps dentro
 de uma só execução sem janela: alterna a opção a cada 20 s a partir dos 200 s
