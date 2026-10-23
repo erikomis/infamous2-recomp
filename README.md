@@ -316,6 +316,7 @@ when the window has another one.
 | Cmd+Ctrl+F | macOS fullscreen on/off |
 | Esc / Cmd | release the mouse |
 | F1 (fn+F1 on a Mac keyboard), Insert or Cmd+, ; L3+R3 on a controller | the in-game menu (below) |
+| Cmd+Q | quit the game at once (as the menu's **Quit game**, without the question) |
 
 ### In-game menu
 
@@ -328,6 +329,14 @@ cursor is released), but it keeps running: pause it first with START if
 needed. One stick click alone still reaches the game as before; while both
 are held down neither does. `PS3_OVERLAY_PAD=0` turns the
 controller combo off, `PS3_OVERLAY=0` the whole menu.
+
+**Quit game**, at the bottom next to Close, asks first ("Unsaved progress since
+the last autosave will be lost"; Cancel has the focus, Esc or ○ backs out).
+Quit does what the console's Quit Game does: the game is asked to exit
+(`CELL_SYSUTIL_REQUEST_EXITGAME`), and if it has not after 3 s it is ended for
+it, never in the middle of writing a save, with exit status 0, so the
+launcher (and `--exit-with-game`, the Steam shortcut) sees a normal end.
+Progress counts up to the last autosave, as on the console.
 
 | Tab | What it changes, live |
 | --- | --- |
@@ -438,7 +447,9 @@ that variable, a removed line goes back to it, and each change logs
 `PS3RECOMP_ENG_TEXHASH_FULL`, `PS3RECOMP_ENG_SKIP_FP` (the whole list),
 `PS3_SPU_FASTJOB`, `PS3_SPU_STUB_MICRO`, `PS3_SPU_STACK_HINT`,
 `PS3_SPU_DRAIN_INLINE` (the drain's inline launch check), `PS3_DISPLAY_GAMMA`,
-`PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO`, `PS3RECOMP_METAL_FPS` and `PS3_BUTTON_ICONS`; everything else
+`PS3_SHARPEN`, `PS3_AA`, `PS3_ANISO`, `PS3RECOMP_METAL_FPS`, `PS3_BUTTON_ICONS` and
+`PS3_QUIT=1` (quit the game as the menu's Quit game does: a scripted run ends
+with status 0); everything else
 (the GPU light/SSAO passes among them) is still read once at start. Without the
 variable nothing changes. `tools/ab_live.sh <name> <KNOB> [B] [A]` uses it for
 an fps A/B inside one headless run: it flips the knob every 20 s from 200 s
