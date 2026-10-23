@@ -86,6 +86,9 @@ pub struct Settings {
     pub lut_strength: f32,
     /// PS3_UPSCALE: "" (off) or "metalfx" (macOS 13+).
     pub upscale: String,
+    /// PS3_RES_SCALE: the internal resolution as a multiple of 1280x720,
+    /// "" (native), "1.5" (1080p), "2" (1440p) or "3" (4K).
+    pub res_scale: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X,
     /// PS3_MOUSE_DEADZONE.
     pub mouse: bool,
@@ -162,6 +165,7 @@ impl Default for Settings {
             lut_path: String::new(),
             lut_strength: 1.0,
             upscale: String::new(),
+            res_scale: String::new(),
             mouse: true,
             mouse_sens: 1.0,
             mouse_invert_y: false,
@@ -616,6 +620,17 @@ const OCCLUSION_VOLUME_FPS: &str = "5f740845528b0e62,7875289ea6b856a6";
 /// The environment "Play" adds on top of run.sh's defaults. run.sh uses
 /// `${VAR-default}`, so an empty value turns a default off, exactly as on the
 /// command line.
+/// PS3_RES_SCALE for the `res_scale` setting: a multiple above 1 and up to 4
+/// (the runtime's range), or None for native (also for anything unparsable).
+fn res_scale_value(v: &str) -> Option<String> {
+    let x: f32 = v.trim().parse().ok()?;
+    if x > 1.0 && x <= 4.0 {
+        Some(format!("{}", (x * 4.0).round() / 4.0))
+    } else {
+        None
+    }
+}
+
 fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     let mut set = |k: &str, v: String| env.push((k.to_string(), v));
@@ -680,6 +695,9 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if s.upscale == "metalfx" {
         set("PS3_UPSCALE", "metalfx".into());
+    }
+    if let Some(k) = res_scale_value(&s.res_scale) {
+        set("PS3_RES_SCALE", k);
     }
     if let Some(p) = &input.path {
         set("PS3_INPUT_MAP", p.clone());
@@ -2803,6 +2821,13 @@ mod tests {
         s.aa = "smaa".into();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3_AA").map(String::as_str), Some("smaa"));
+        assert!(!env.contains_key("PS3_RES_SCALE"), "native resolution passes nothing");
+        for (v, want) in [("1.5", Some("1.5")), ("2", Some("2")), ("3", Some("3")), ("1", None), ("", None), ("9", None), ("x", None)] {
+            s.res_scale = v.into();
+            let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+            assert_eq!(env.get("PS3_RES_SCALE").map(String::as_str), want, "res_scale {v:?}");
+        }
+        s.res_scale = String::new();
         s.aa = "bogus".into();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert!(!env.contains_key("PS3_AA"), "an unknown AA mode stays out");
