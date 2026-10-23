@@ -150,6 +150,8 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #   PS3_CLARITY=-1..1           local contrast; PS3_SHADOWS / PS3_MIDTONES /
 #                               PS3_HIGHLIGHTS=-1..1 a tone curve
 #   PS3_LUT_PRESET=warm|cool|film|vivid  a built-in colour grade
+#   PS3_RES_SCALE=1.5|2|3       internal resolution: the game renders at 1080p,
+#                               1440p or 4K instead of 720p (restart to change)
 # Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
 # PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200.
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or

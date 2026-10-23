@@ -40,6 +40,7 @@ interface Settings {
   clarity: number;
   mods: string[];
   upscale: string;
+  resScale: string;
   mouse: boolean;
   mouseSens: number;
   mouseInvertY: boolean;
@@ -557,6 +558,7 @@ function bindSettings() {
       clarity: 0,
       mods: [],
       upscale: "",
+      resScale: "",
       mouse: true,
       mouseSens: 1.0,
       mouseInvertY: false,
@@ -583,7 +585,7 @@ function bindSettings() {
 }
 
 /** A fixed list (window mode and size, anisotropic, AA, upscaling). */
-function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa" | "upscale" | "buttonIcons") {
+function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa" | "upscale" | "resScale" | "buttonIcons") {
   const el = $<HTMLSelectElement>(id);
   const sync = () => {
     el.value = String(settings[key]);
@@ -606,6 +608,7 @@ function bindGraphics(bindRange: (id: string, key: keyof Settings, fmt: (v: numb
   bindSelect("aa", "aa");
   bindSelect("upscale", "upscale");
   bindSelect("q-upscale", "upscale");
+  bindSelect("res-scale", "resScale");
   bindRange("sharpen", "sharpen", (v) => (v > 0 ? `${Math.round(v * 100)}%` : t("settings.off")));
   bindRange("vibrance", "vibrance", (v) => (Math.abs(v) >= 0.005 ? `${v > 0 ? "+" : ""}${Math.round(v * 100)}%` : t("settings.off")));
   bindRange("contrast", "contrast", (v) => (Math.abs(v - 1) >= 0.005 ? `${Math.round(v * 100)}%` : t("settings.normal")));
