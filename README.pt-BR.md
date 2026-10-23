@@ -426,6 +426,8 @@ Opções úteis:
 | `PS3RECOMP_ENG_GPU_SSAO=` (vazio) | devolve o job de SSAO para os SPUs (na GPU por padrão desde 2026-10-17: ~21 → 26–28 fps andando) |
 | `PS3RECOMP_ENG_GPU_LIGHT=` (vazio) | devolve a iluminação para os SPUs (mais lento; por padrão ela roda na GPU) |
 | `PS3_DISPLAY_GAMMA=<0.8..1.2>` | força o gamma da saída de vídeo; por padrão vale o brilho escolhido nas opções do jogo, como no console |
+| `PS3RECOMP_ENG_USER_CLIP=0` | ignora os planos de clip do usuário do RSX (ligados por padrão desde 2026-10-22: o reflexo planar da água corta no plano da água) |
+| `PS3RECOMP_ENG_DEPTH_EXPORT=0` | ignora a profundidade escrita pelo fragment program (ligada por padrão desde 2026-10-22: a profundidade reduzida que as partículas suaves testam) |
 
 `tools/play_dump.sh <nome>` abre o jogo na janela e, a cada Enter no terminal,
 salva aquele frame (render targets, shaders, log de passes) em `out/<nome>/`:

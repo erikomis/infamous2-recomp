@@ -412,6 +412,8 @@ Options worth knowing:
 | `PS3RECOMP_ENG_GPU_SSAO=` (empty) | puts the SSAO job back on the SPUs (on the GPU by default since 2026-10-17: ~21 → 26–28 fps walking) |
 | `PS3RECOMP_ENG_GPU_LIGHT=` (empty) | puts the light pass back on the SPUs (slower; on the GPU by default) |
 | `PS3_DISPLAY_GAMMA=<0.8..1.2>` | overrides the display gamma; by default the game's own brightness setting is applied, as on the console |
+| `PS3RECOMP_ENG_USER_CLIP=0` | ignores the RSX user clip planes (on by default since 2026-10-22: the water's planar reflection clips at the water plane) |
+| `PS3RECOMP_ENG_DEPTH_EXPORT=0` | ignores fragment-program depth export (on by default since 2026-10-22: the depth downsample the soft particles test against) |
 
 `tools/play_dump.sh <name>` opens the game in a window and, each time Return is
 pressed in its terminal, saves that frame (render targets, shaders, pass log)
