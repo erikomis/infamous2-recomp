@@ -85,7 +85,9 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   to Debug mode. Play first backs up the saves (see Saves).
 - **Graphics / Gráficos**: Display (window mode `PS3_WINDOW_MODE`, size
   `PS3_WINDOW_SIZE`, internal resolution `PS3_RES_SCALE` (720p, 1080p, 1440p
-  or 4K; passed only above 720p), screen `PS3_DISPLAY` from AppKit's screen names through
+  or 4K; passed only above 720p), aspect ratio `PS3_ASPECT` (16:9, 21:9 or
+  32:9 ultrawide, hor+ with the HUD kept 16:9; passed only when wide),
+  screen `PS3_DISPLAY` from AppKit's screen names through
   `osascript`, "Your copy's icon in the Dock": see "The icon from your copy"
   below) and Image quality
   (MetalFX upscaling `PS3_UPSCALE`, FXAA `PS3_AA`, sharpening `PS3_SHARPEN`,
