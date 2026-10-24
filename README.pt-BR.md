@@ -154,6 +154,11 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 
 ## Problemas conhecidos
 
+- Corrigido na main depois da v0.2.11: as sombras do sol estavam invertidas
+  e fora do lugar (chão escuro com faixas claras de borda dura, sem sombra
+  embaixo do Cole, sombras duplicadas ou soltas do que as projetava). A
+  comparação do shadow map estava ao contrário, e os mapas eram lidos por uma
+  cópia 1,25x larga demais.
 - Corrigido na v0.2.5: fachadas viradas para longe do sol (e as costas e os
   lados do Cole) ficavam pretas, e as sombras do sol faltavam no jogo todo. Os
   mapas de sombra do sol eram lidos de um buffer de cor vazio no mesmo
