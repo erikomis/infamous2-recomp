@@ -8,9 +8,11 @@ code is translated to C/C++ and compiled into a native executable, with
 graphics on Metal. It is not an emulator.
 
 **It boots, shows its menus and cutscenes, and New Marais is playable**, at
-the game's own 30 fps cap on Apple silicon. Get the app from the
-[**v0.2.4 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
-and it rebuilds the game from your own copy ([how](#download-and-play)).
+~38-40 fps on Apple silicon in headless runs (the game has no 30 fps cap in
+gameplay). Get the app from the
+[**v0.2.12 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+and it rebuilds the game from your own copy ([how](#download-and-play)); from
+v0.2.7 on, the app updates itself.
 
 | | |
 | --- | --- |
@@ -52,14 +54,20 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | New game → comic-book intro → in-engine cutscenes | ✅ |
 | Empire City prologue (the Beast, the freighter) | ✅ |
 | New Marais: first missions, played in a window with a DualSense | ✅ |
-| Performance | ✅ ~30 fps walking in New Marais (the game's own cap) in headless runs on Apple silicon: frames of 29.7–30.4 ms, ~33–36 fps of headroom. Windowed confirmation pending |
+| Performance | ✅ ~38-40 fps on the headless New Marais walk on Apple silicon. The game has no 30 fps cap in gameplay; menus and the comics stay at 30, as on the console. A long windowed session is still to confirm it |
+| Internal resolution 1080p / 1440p / 4K | ✅ since v0.2.9; 1080p runs at ~37 fps headless since the framebuffer-fetch fix (v0.2.11); 4K is too heavy for now |
+| Ultrawide 21:9 and 32:9 (wider view, HUD kept 16:9 in the centre) | ✅ since v0.2.10, checked headless |
 | Controller (DualSense tested; DualShock 4 and Xbox through SDL), rumble, reconnect without a restart | ✅ |
 | Keyboard and mouse (mouse camera, remappable, also live in the in-game menu) | 🧪 mapped, little tested in a window |
-| Button prompts that follow the controller (Xbox A/B/X/Y, keyboard keys) | 🧪 checked headless, waiting for a windowed test |
-| In-game menu (F1 / Cmd+, / L3+R3): image, audio, controls, performance HUD | ✅ since v0.2.4 (live changes) |
+| Button prompts that follow the controller (Xbox A/B/X/Y, keyboard keys) | 🧪 since v0.2.6, checked headless, waiting for a windowed test |
+| In-game menu (F1 / Cmd+, / L3+R3): image, audio, controls, game languages, performance HUD | ✅ since v0.2.4 (live changes) |
+| Quit game (F1 > Quit game, Cmd+Q, closing the window) | ✅ since v0.2.10, checked headless; a save being written finishes first |
+| Texture packs and more image effects (clarity, curves, colour presets) | 🧪 since v0.2.8, waiting for a windowed test |
 | Saves and trophies (in `~/Library/Application Support`), saves manager in the app | ✅ |
 | Brazilian Portuguese dub and subtitles (default), other languages your copy ships, DLC | ✅ |
-| The app: install, rebuild, play, settings, controls, saves, debug mode | ✅ [v0.2.4 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) |
+| The app: install, rebuild, play, settings, controls, saves, debug mode | ✅ [v0.2.12 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12) |
+| The app updates itself | 🧪 since v0.2.7 (v0.2.8 to v0.2.12 were offered through it), waiting for Erik's confirmation |
+| Add to Steam (Big Picture with the controller) | 🧪 since v0.2.7, waiting for a test with Steam |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Linux and Windows | ⏳ planned |
 
@@ -71,8 +79,10 @@ You need an Apple-silicon Mac and your own copy of inFAMOUS 2 (the PSN
 release `NPUA80638`, for example installed in [RPCS3](https://rpcs3.net) with
 its `.rap` licence).
 
-1. Download `infamous2-recomp_0.2.4_aarch64.dmg` from the
-   [v0.2.4 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
+1. Download `infamous2-recomp_0.2.12_aarch64.dmg` from the
+   [v0.2.12 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+   (every release so far is a pre-release; the
+   [releases page](https://github.com/erikomis/infamous2-recomp/releases) lists any newer one)
    and drag the app to Applications. It is not notarized: the first time,
    right-click > Open (or System Settings > Privacy & Security > Open Anyway).
 2. The app lists what your Mac still needs (Xcode Command Line Tools, a few
@@ -82,10 +92,12 @@ its `.rap` licence).
    `dev_flash` folder or Sony's `PS3UPDAT.PUP`). No keys ship with the app.
 4. **Install** (the first rebuild takes a few minutes), then **Play**.
 
-From the release after v0.2.6 on, the app updates itself: the Updates card
-on Home offers **Download and install**, then **Restart to finish** (signed
-and checked; "Check for updates automatically" can be turned off). After an
-update it offers **Rebuild the game**. The release ships no game files: the app recompiles the game on your Mac.
+From v0.2.7 on, the app updates itself: the Updates card on Home offers
+**Download and install**, then **Restart to finish** (signed and checked;
+"Check for updates automatically" can be turned off). After an update it
+offers **Rebuild the game**. On v0.2.6 or older, install the new app by hand
+once. The release ships no game files: the app recompiles the game on your
+Mac.
 
 ## The app
 
@@ -131,11 +143,13 @@ Advanced.
   controller; **Remove from Steam** takes it out again.
 
 **In the game,** F1 (fn+F1), Cmd+, or L3+R3 opens the **in-game menu**:
-image (gamma, sharpening, FXAA/SMAA, vibrance, contrast, MetalFX, vsync,
-display mode), audio volume, controls (live remapping of keyboard, mouse and
+image (gamma, sharpening, FXAA/SMAA, vibrance, contrast, clarity, curves,
+colour presets, MetalFX, vsync, display mode, internal resolution, aspect
+ratio), audio volume, controls (live remapping of keyboard, mouse and
 controller, "play with" controller / keyboard and mouse / both, vibration,
-mouse) and a performance HUD (fps, frame time, CPU/GPU). A DualSense that
-switches off comes back by itself within about a second.
+mouse), the game's voice and text languages, a performance HUD (fps, frame
+time, CPU/GPU) and **Quit game**. A DualSense that switches off comes back by
+itself within about a second.
 
 | | |
 | --- | --- |
@@ -146,19 +160,26 @@ builds only on macOS so far); the installers are not signed yet.
 
 ## Known problems
 
-- Fixed on main after v0.2.11: sun shadows were inverted and out of place
-  (dark ground with bright hard-edged streaks, no shadow under Cole, shadows
-  doubled or detached from what cast them). The shadow-map compare ran the
-  wrong way round, and the maps were read through a copy 1.25x too wide.
+- Fixed in v0.2.12: sun shadows were inverted and out of place (dark ground
+  with bright hard-edged streaks, no shadow under Cole, shadows detached from
+  what cast them). The shadow-map compare ran the wrong way round, and the
+  maps were read through a copy 1.25x too wide. The doubled sun shadows on
+  some ground in daylight most likely had the same cause; not confirmed in a
+  window yet.
+- A rare hang during the city load: seen in 2 of 9 headless runs on a
+  heavily loaded Mac, with and without the v0.2.12 shadow fix. Report it if
+  it happens to you.
+- The first time the game shows a new effect, its shader is translated on
+  the render thread, which can stall up to ~2 s. Windowed play caches them,
+  so each one happens once; `PS3_SHADER_ASYNC=1` builds them in the
+  background instead (some objects appear a moment late).
 - Fixed in v0.2.5: facades turned away from the sun (and Cole's back and
   sides) went black, and sun shadows were missing everywhere. The sun shadow
   maps were read from an empty colour buffer at the same address as their
   depth buffer, so every surface counted as sunlit and the unclamped sun term
   went negative on the far side. The occlusion-volume passes (soft contact
-  shadows), skipped while they were the suspect, are drawn again on main.
-- Fixed in v0.2.2: the rare Edge geometry SPU fault (about 1 run in 8) and
-  the rare hang where the light job never finished a frame were the same
-  bug, a stale cache of translated SPU code. None since, in any test run.
+  shadows), skipped while they were the suspect, are drawn again since
+  v0.2.8.
 - Windows and Linux are not supported yet.
 - With less than about 3 GB free on the disk the game shows a "not enough
   space" error at boot, which in the window is just a black screen.
@@ -167,20 +188,21 @@ builds only on macOS so far); the installers are not signed yet.
 
 What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
 
-- **Steady 30 fps or more:** the shader cache, a 1 ms frame clock and the
-  vertex-cache prune (2026-10-22) took out the first-use hitches and part of
-  the dips; what is left in New Marais is mostly SPU time.
-- **Keyboard icons in the button prompts**, instead of the PS3 ones.
-- **Texture packs** (`PS3_MODS`, Game > Texture packs) and **more image
-  effects** (clarity, a tone curve, built-in colour presets) are in,
-  waiting for a windowed test.
+- **Playing the whole story:** nobody has gone past 1% yet, so later
+  missions may break; `tools/play_capture.sh` records what a graphics bug
+  needs in a windowed session.
+- **Doubled sun shadows in daylight:** most likely gone with the v0.2.12
+  shadow fix; waiting for a look in a window, in daylight.
+- **The rare city-load hang** (see Known problems): so far seen only on a
+  heavily loaded Mac.
+- **MetalFX temporal upscaling, HDR (EDR) and TAA:** not started; the
+  temporal ones need motion vectors.
+- **Windows and Linux:** planned.
 - **Pull requests to [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
-  all of this port's PRs up to #375 were merged on 2026-10-19; the sixth
-  round (#470 SMAA, vibrance and contrast; #472 controller hot-plug; #476
-  texture border colour) is open.
-- New ideas (a controller combo for the capture, a PNG screenshot key) are
-  listed in the roadmap; the app auto-update and the Steam shortcut are
-  implemented and waiting for the next release / a test with Steam.
+  all of this port's PRs up to #375 were merged on 2026-10-19. Open: round 6
+  (#470, #472, #476), round 7 (#502, #503, #510, #511) and round 8 (#537,
+  #541-#545), plus issue #546, a proposal for internal resolution, texture
+  packs and more grading upstream.
 
 ## Building from source
 
@@ -311,8 +333,8 @@ select = "touchpad"
   too (`cross`, `options`, `share`, `l1`, `r2`, `lb`, `rt`, ...). The physical
   sticks always drive the PS3 sticks.
 
-The window resizes freely and the image keeps its 16:9 shape, with black bars
-when the window has another one.
+The window resizes freely and the image keeps its 16:9 shape (or the
+`PS3_ASPECT` one), with black bars when the window has another one.
 
 | Shortcut | What it does |
 | --- | --- |
@@ -344,8 +366,8 @@ Progress counts up to the last autosave, as on the console.
 
 | Tab | What it changes, live |
 | --- | --- |
-| Image | the gamma override (or the game's own brightness), sharpening, FXAA, MetalFX upscaling, vsync, window / macOS fullscreen / borderless; anisotropic filtering applies at the next start |
-| Audio | master volume |
+| Image | the gamma override (or the game's own brightness), sharpening, FXAA or SMAA, vibrance, contrast, clarity, the tone curve, a colour preset or LUT, vignette, film grain, MetalFX upscaling, vsync, window / macOS fullscreen / borderless; anisotropic filtering, internal resolution and aspect ratio apply at the next start |
+| Audio | master volume (movies included) |
 | Controls | play with controller + keyboard/mouse, controller only, or keyboard/mouse only; the button icons in the game's prompts (automatic, PlayStation, Xbox, keyboard and mouse); vibration on/off and strength; mouse camera on/off, sensitivity and vertical/horizontal inversion; a table of every PS3 button with its key, mouse button and controller button: click a cell (or pick it with the pad and press ✕), press the new input and it applies at once (Esc cancels, right-click unbinds, "Restore defaults"). The press goes to the menu, never to the game. Rebindings are saved straight away to the same `input.toml` the launcher's Controls screen edits |
 | Performance | a small HUD in a corner that stays when the menu is closed: fps, frame time with a graph, CPU cores in use and threads busy (≥ 80% of a core: here mostly the SPU threads), the RSX's Metal encode time and the GPU wait per frame; corner, opacity and graph are options |
 | Game | the game language, the voice and the text (menus and subtitles), each among the languages your copy has, and which ones are in use now. The game loads its language when it starts, so these apply when it restarts (the menu says so) |
@@ -428,6 +450,9 @@ Options worth knowing:
 | `PS3_DISPLAY_GAMMA=<0.8..1.2>` | overrides the display gamma; by default the game's own brightness setting is applied, as on the console |
 | `PS3RECOMP_ENG_USER_CLIP=0` | ignores the RSX user clip planes (on by default since 2026-10-22: the water's planar reflection clips at the water plane) |
 | `PS3RECOMP_ENG_DEPTH_EXPORT=0` | ignores fragment-program depth export (on by default since 2026-10-22: the depth downsample the soft particles test against) |
+| `PS3RECOMP_ENG_FBFETCH=0` | the G-buffer decals read the pixel under them through copies again instead of Metal framebuffer fetch (on by default since v0.2.11: faces right at 1080p and above, GPU time at 1080p 19 → 9 ms a frame) |
+| `PS3RECOMP_ENG_DEPTH_BOUNDS=0` | ignores the RSX depth-bounds test (emulated in the shader by default since v0.2.11: the sun-shadow cascades and the light and occlusion volumes); also live |
+| `PS3RECOMP_ENG_SHADOW_CMP=0`, `PS3RECOMP_ENG_ZTEX_CROP=0` | the old shadow-map compare direction / the old stretched shadow-map read (both fixed in v0.2.12: sun shadows as on the PS3); live |
 
 `tools/play_dump.sh <name>` opens the game in a window and, each time Return is
 pressed in its terminal, saves that frame (render targets, shaders, pass log)
