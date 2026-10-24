@@ -461,6 +461,7 @@ Opções úteis:
 | `PS3RECOMP_ENG_FBFETCH=0` | os decalques do G-buffer voltam a ler o pixel de baixo por cópias em vez do framebuffer fetch do Metal (ligado por padrão desde a v0.2.11: rostos certos em 1080p ou mais, tempo de GPU em 1080p de 19 → 9 ms por quadro) |
 | `PS3RECOMP_ENG_DEPTH_BOUNDS=0` | ignora o teste de depth bounds do RSX (emulado no shader por padrão desde a v0.2.11: as cascatas de sombra do sol e os volumes de luz e de oclusão); também ao vivo |
 | `PS3RECOMP_ENG_SHADOW_CMP=0`, `PS3RECOMP_ENG_ZTEX_CROP=0` | a comparação antiga do shadow map / a leitura antiga, esticada, do shadow map (os dois corrigidos na v0.2.12: sombras do sol como no PS3); ao vivo |
+| `PS3RECOMP_ENG_POLY_OFFSET=0` | o draw antigo, sem o polygon offset (os objetos que projetam sombra no jogo usam um; sem ele, faixas de acne em paredes e frisos desde a v0.2.12); ao vivo |
 
 `tools/play_dump.sh <nome>` abre o jogo na janela e, a cada Enter no terminal,
 salva aquele frame (render targets, shaders, log de passes) em `out/<nome>/`:

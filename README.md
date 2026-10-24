@@ -453,6 +453,7 @@ Options worth knowing:
 | `PS3RECOMP_ENG_FBFETCH=0` | the G-buffer decals read the pixel under them through copies again instead of Metal framebuffer fetch (on by default since v0.2.11: faces right at 1080p and above, GPU time at 1080p 19 → 9 ms a frame) |
 | `PS3RECOMP_ENG_DEPTH_BOUNDS=0` | ignores the RSX depth-bounds test (emulated in the shader by default since v0.2.11: the sun-shadow cascades and the light and occlusion volumes); also live |
 | `PS3RECOMP_ENG_SHADOW_CMP=0`, `PS3RECOMP_ENG_ZTEX_CROP=0` | the old shadow-map compare direction / the old stretched shadow-map read (both fixed in v0.2.12: sun shadows as on the PS3); live |
+| `PS3RECOMP_ENG_POLY_OFFSET=0` | the old draw without the polygon offset (the game's shadow casters set one; without it, acne bands on walls and trims since v0.2.12); live |
 
 `tools/play_dump.sh <name>` opens the game in a window and, each time Return is
 pressed in its terminal, saves that frame (render targets, shaders, pass log)
