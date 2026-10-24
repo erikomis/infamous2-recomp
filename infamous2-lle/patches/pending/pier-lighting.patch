@@ -1,0 +1,227 @@
+diff --git a/include/ps3emu/ps3_toggles.h b/include/ps3emu/ps3_toggles.h
+index 5c3f7a4..72d9743 100644
+--- a/include/ps3emu/ps3_toggles.h
++++ b/include/ps3emu/ps3_toggles.h
+@@ -79,6 +79,8 @@ enum ps3_toggle_id {
+     PS3T_RES_SSAO_FULL,      /* rsx_metal_backend.m: SSAO upsample at RES_SCALE   */
+     PS3T_ENG_FBFETCH,        /* rsx_draw_engine.c: own-target reads as fb fetch   */
+     PS3T_ENG_DEPTH_BOUNDS,   /* rsx_draw_engine.c: the depth-bounds test          */
++    PS3T_ENG_SHADOW_CMP,     /* rsx_draw_engine.c: RSX order of the depth compare */
++    PS3T_ENG_ZTEX_CROP,      /* rsx_draw_engine.c: depth textures read their crop */
+     PS3T_COUNT
+ };
+ 
+@@ -128,6 +130,8 @@ static inline const ps3_toggle_def* ps3_toggle_def_of(int id)
+         { "PS3_RES_SSAO_FULL",          PS3_TK_NOT0, 1 },
+         { "PS3RECOMP_ENG_FBFETCH",      PS3_TK_ATOI, -1 },
+         { "PS3RECOMP_ENG_DEPTH_BOUNDS", PS3_TK_NOT0, 1 },
++        { "PS3RECOMP_ENG_SHADOW_CMP",   PS3_TK_NOT0, 1 },
++        { "PS3RECOMP_ENG_ZTEX_CROP",    PS3_TK_NOT0, 1 },
+     };
+     return &d[id];
+ }
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+index 0bc2f08..3c05d07 100644
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -45,6 +45,10 @@ static int s_skip_fp_dirty;       /* PS3RECOMP_ENG_SKIP_FP changed: re-read the
+ static void eng_skip_fp_set(int id, int v) { (void)id; (void)v; __atomic_store_n(&s_skip_fp_dirty, 1, __ATOMIC_RELAXED); }
+ static int s_dbounds_on = -1;     /* PS3RECOMP_ENG_DEPTH_BOUNDS (live); -1 not read yet */
+ static void eng_dbounds_set(int id, int v) { (void)id; __atomic_store_n(&s_dbounds_on, v != 0, __ATOMIC_RELAXED); }
++/* PS3RECOMP_ENG_SHADOW_CMP (live): the depth compare's operand order
++ * (rsx_fp_set_shadow_rsx_order); the shadow descriptors are part of the
++ * program key, so a change recompiles the comparing programs. */
++static void eng_shadow_cmp_set(int id, int v) { (void)id; rsx_fp_set_shadow_rsx_order(v != 0); }
+ /* The current draw's depth-bounds test as the fragment program emulates it
+  * (eng_depth_bounds_prepare): unit + 1 of the depth copy it reads, 0 = none. */
+ static struct { u32 unit; float mn, mx; } s_dbz;
+@@ -161,6 +165,9 @@ typedef struct {
+     u32 crop_rgba;         /* top-left crop of the colour-format copy, or 0 */
+     u32 crop_w, crop_h;    /* its size (a texture smaller than the buffer)  */
+     int crop_valid;
++    u32 crop_z;            /* top-left crop of the sampleable copy, or 0    */
++    u32 crop_z_w, crop_z_h;
++    int crop_z_valid;
+     u32 stamp;             /* last depth write (s_surf_clock)             */
+     u32 wb_stamp;          /* stamp at the last write-back into guest memory */
+     u64 writer_fp;         /* structural hash of the last depth-writing FP (RESOLVE_LOG) */
+@@ -757,6 +764,8 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+     z->snapshot_rgba = 0;
+     if (z->crop_rgba && g.be->texture_release) g.be->texture_release(g.be->user, z->crop_rgba);
+     z->crop_rgba = 0; z->crop_w = z->crop_h = 0;
++    if (z->crop_z && g.be->texture_release) g.be->texture_release(g.be->user, z->crop_z);
++    z->crop_z = 0; z->crop_z_w = z->crop_z_h = 0; z->crop_z_valid = 0;
+     z->location = location; z->offset = offset;
+     z->w = want_w; z->h = want_h;
+     z->handle = handle;
+@@ -872,6 +881,38 @@ static u32 eng_zdepth_snapshot_rgba8_sized(u32 slot, u32 w, u32 h)
+     return tex;
+ }
+ 
++/* The sampleable (R32F) copy for a DEPTH-format texture of w x h over the
++ * depth buffer: its top-left corner when the texture is smaller, as the
++ * colour-format copy above. A depth buffer grows to the largest size any
++ * surface at its address asked for, and inFAMOUS 2's sun-shadow zeta at
++ * 0x0F2F0000 (1024x1024 cascades) lives in a 1280-wide buffer; sampled whole,
++ * every shadow lookup landed 1.25x too far along x: the shadows of the
++ * casters near the camera (Cole's own) fell outside the frame or onto the
++ * wrong spot, each cascade mis-scaled differently (shadows doubled where two
++ * cascades meet), and shadows of things never near the receiver showed up on
++ * it. PS3RECOMP_ENG_ZTEX_CROP=0 (live) samples the whole buffer, as before. */
++static int s_ztex_crop = -1;   /* PS3RECOMP_ENG_ZTEX_CROP (live); -1 not read yet */
++static void eng_ztex_crop_set(int id, int v) { (void)id; __atomic_store_n(&s_ztex_crop, v != 0, __ATOMIC_RELAXED); }
++static u32 eng_zdepth_snapshot_sized(u32 slot, u32 w, u32 h)
++{
++    if (__builtin_expect(__atomic_load_n(&s_ztex_crop, __ATOMIC_RELAXED) < 0, 0))
++        ps3_toggle_watch(PS3T_ENG_ZTEX_CROP, eng_ztex_crop_set);
++    eng_zdepth* z = &g.zdepths[slot];
++    if (!__atomic_load_n(&s_ztex_crop, __ATOMIC_RELAXED) || !w || !h || (w >= z->w && h >= z->h))
++        return eng_zdepth_snapshot(slot);
++    if (w > z->w) w = z->w;
++    if (h > z->h) h = z->h;
++    if (!z->handle || !z->had_write || !g.be->depth_snapshot) return 0;
++    if (z->crop_z_valid && z->crop_z && z->crop_z_w == w && z->crop_z_h == h) return z->crop_z;
++    eng_resolve_note(z, 0);
++    const u32 tex = g.be->depth_snapshot(g.be->user, z->handle, w, h);
++    if (!tex) return 0;
++    if (z->crop_z && z->crop_z != tex && g.be->texture_release)
++        g.be->texture_release(g.be->user, z->crop_z);   /* as eng_zdepth_snapshot */
++    z->crop_z = tex; z->crop_z_w = w; z->crop_z_h = h; z->crop_z_valid = 1;
++    return tex;
++}
++
+ /* ---- textures ------------------------------------------------------------ */
+ 
+ static rsx_be_format eng_texfmt(rsx_texfmt f)
+@@ -2160,6 +2201,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+      * depth (upstream PR #302, adapted: this engine has no UN-unit scaling). */
+     rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES] = {{0}};
+     u32 shadow_mask = 0;
++    { static int watched; if (!watched) { watched = 1; ps3_toggle_watch(PS3T_ENG_SHADOW_CMP, eng_shadow_cmp_set); } }
+     const u32 sampled_units = fixed ? 0 : fp->sampled_units;
+     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
+         if (!(sampled_units & (1u << u))) continue;
+@@ -3453,7 +3495,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+               for (u32 i = 0; i < g.n_zdepths; i++)
+                   if (g.zdepths[i].handle && g.zdepths[i].location == t.location &&
+                       g.zdepths[i].offset == t.offset && current_zslot != i) {
+-                      const u32 snap = eng_zdepth_snapshot(i);
++                      const u32 snap = eng_zdepth_snapshot_sized(i, t.width, t.height);
+                       if (snap) textures[u] = snap;
+                       break;
+                   }
+@@ -3582,7 +3624,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+             for (u32 i = 0; i < g.n_zdepths; i++)
+                 if (g.zdepths[i].location == t.location &&
+                     g.zdepths[i].offset == t.offset && current_zslot != i) {
+-                    const u32 snap = eng_zdepth_snapshot(i);
++                    const u32 snap = eng_zdepth_snapshot_sized(i, t.width, t.height);
+                     if (snap) textures[u] = snap;
+                     break;
+                 }
+@@ -4392,7 +4434,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
+          * inFAMOUS 2's occlusion volumes (drawn after the G-buffer) sampled a
+          * snapshot an earlier reader had frozen and reconstructed positions
+          * from the wrong depth: flat dark boxes around props and characters. */
+-        g.zdepths[zslot].snapshot_valid = 0;
++        g.zdepths[zslot].snapshot_valid = 0; g.zdepths[zslot].crop_z_valid = 0;
+         g.zdepths[zslot].snapshot_rgba_valid = 0; g.zdepths[zslot].crop_valid = 0;
+         { static int on = -1;
+           if (on < 0) on = getenv("PS3RECOMP_ENG_RESOLVE_LOG") ? 1 : 0;
+@@ -4459,7 +4501,7 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+             /* A clear invalidates the older published depth image; the next
+              * texture consumer resolves the newly written pass exactly once. */
+             g.zdepths[zslot].had_write = 0;
+-            g.zdepths[zslot].snapshot_valid = 0;
++            g.zdepths[zslot].snapshot_valid = 0; g.zdepths[zslot].crop_z_valid = 0;
+             g.zdepths[zslot].snapshot_rgba_valid = 0; g.zdepths[zslot].crop_valid = 0;
+         }
+     }
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 9f846ed..3e4b3c6 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -490,6 +490,27 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+     return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
+ }
+ 
++/* The RSX's texture depth compare (SET_TEXTURE_ADDRESS zfunc, bits 28..31)
++ * reads "stored texel OP reference": GREATER passes where the map's depth is
++ * beyond the fragment's, i.e. where the fragment is lit. RPCS3 says the same
++ * by flipping the operator for its API samplers (get_compare_func(zfunc,
++ * true)), whose order is "reference OP texel". This file's helpers compare in
++ * that API order, so the operator is mirrored here (LESS <-> GREATER, LEQUAL
++ * <-> GEQUAL). Taken as written, inFAMOUS 2's sun shadows came out inverted:
++ * every lit surface read "in shadow" and only the shapes of the shadows read
++ * "lit" -- bright streaks on a dark ground, no shadow under Cole.
++ * PS3RECOMP_ENG_SHADOW_CMP=0 (live, the engine forwards PS3_TOGGLE_FILE)
++ * compares in the old order. */
++static int s_fp_shadow_rsx = -1;
++void rsx_fp_set_shadow_rsx_order(int on) { __atomic_store_n(&s_fp_shadow_rsx, on ? 1 : 0, __ATOMIC_RELAXED); }
++static int fp_shadow_rsx_order(void)
++{
++    int v = __atomic_load_n(&s_fp_shadow_rsx, __ATOMIC_RELAXED);
++    if (v < 0) { const char* e = getenv("PS3RECOMP_ENG_SHADOW_CMP"); v = !(e && *e == '0');
++                 __atomic_store_n(&s_fp_shadow_rsx, v, __ATOMIC_RELAXED); }
++    return v;
++}
++
+ void rsx_fp_shadow_desc_from_texture(rsx_fp_shadow_desc* out, u32 format,
+     u32 dimension, u32 cube, u32 mips, u32 filter, u32 address, u32 control0)
+ {
+@@ -503,7 +524,8 @@ void rsx_fp_shadow_desc_from_texture(rsx_fp_shadow_desc* out, u32 format,
+     const int maglin = magf == 2;
+     out->enabled = (base == 0x91 || base == 0x93 || func > 7 || dimension != 2 || cube || mips > 1 ||
+         minf < 1 || minf > 6 || magf < 1 || magf > 2 || minlin != maglin) ? 2 : 1;
+-    out->func = (u8)func;
++    static const u8 mirrored[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
++    out->func = (u8)(func <= 7u && fp_shadow_rsx_order() ? mirrored[func] : func);
+     out->linear = (u8)minlin;
+     out->unnormalized = (u8)((format & 0x40u) != 0);
+ }
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+index a05c73c..4e58199 100644
+--- a/libs/video/rsx_fp_decompiler.h
++++ b/libs/video/rsx_fp_decompiler.h
+@@ -156,6 +156,10 @@ typedef struct rsx_fp_shadow_desc {
+ } rsx_fp_shadow_desc;
+ void rsx_fp_shadow_desc_from_texture(rsx_fp_shadow_desc* out, u32 format,
+     u32 dimension, u32 cube, u32 mips, u32 filter, u32 address, u32 control0);
++/* 1 (default, PS3RECOMP_ENG_SHADOW_CMP): desc.func is the RSX zfunc mirrored
++ * into the helpers' "reference OP stored depth" order (the RSX compares
++ * "stored OP reference"); 0: the zfunc as written (the old behaviour). */
++void rsx_fp_set_shadow_rsx_order(int on);
+ u32 rsx_fp_texture_units(const u8* ucode, u32 max_bytes);
+ int rsx_fp_decompile_buffered_shadow_ex(
+     const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+index e402431..9c28614 100644
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -3252,7 +3252,11 @@ static void gfx_post_release(void)
+ "fragment float eng_depth_fs(BOut i [[stage_in]],\n"
+ "                            depth2d<float> src [[texture(0)]],\n"
+ "                            sampler s [[sampler(0)]]) {\n"
+-"    return src.sample(s, i.uv);\n"
++"    /* Pixel for pixel, as eng_depth_rgba8_fs: a copy smaller than the\n"
++"     * depth buffer is its top-left corner (a depth texture over part of it,\n"
++"     * the engine's eng_zdepth_snapshot_sized); a full-size copy is the same\n"
++"     * texel for texel as before. */\n"
++"    return src.sample(s, i.pos.xy / float2(src.get_width(), src.get_height()));\n"
+ "}\n"
+ "fragment float4 eng_depth_rgba8_fs(BOut i [[stage_in]],\n"
+ "                                   depth2d<float> src [[texture(0)]],\n"
+diff --git a/libs/video/tests/test_shadow_compare_metal.m b/libs/video/tests/test_shadow_compare_metal.m
+index 8844a8a..388fefd 100644
+--- a/libs/video/tests/test_shadow_compare_metal.m
++++ b/libs/video/tests/test_shadow_compare_metal.m
+@@ -7,7 +7,8 @@
+ u32 cellGcmResolveLocated(int local,u32 off){(void)local;return off;}
+ static int checks,failures;
+ #define CHECK(c,n) do{checks++;if(!(c)){failures++;fprintf(stderr,"FAIL %s\n",n);}}while(0)
+-static float expected(unsigned mode,float ref,float d){switch(mode){case 1:return ref<d;case 2:return ref==d;case 3:return ref<=d;case 4:return ref>d;case 5:return ref!=d;case 6:return ref>=d;default:return d;}}
++/* The RSX compares "stored OP reference" (rsx_fp_shadow_desc_from_texture). */
++static float expected(unsigned mode,float ref,float d){switch(mode){case 1:return d<ref;case 2:return ref==d;case 3:return d<=ref;case 4:return d>ref;case 5:return ref!=d;case 6:return d>=ref;default:return d;}}
+ int main(void){@autoreleasepool{
+  s_dev=MTLCreateSystemDefaultDevice();if(!s_dev)return 2;s_queue=[s_dev newCommandQueue];vm_base=calloc(1,4096);
+  rsx_test_fp_instr(vm_base+256,RSX_TEST_FP_OPC(0x18)|RSX_TEST_FP_MASK_XYZW|RSX_TEST_FP_INSRC_TC0|RSX_TEST_FP_END,RSX_TEST_FP_SRC_INPUT|RSX_TEST_FP_SWZ_IDENT);
