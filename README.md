@@ -146,6 +146,10 @@ builds only on macOS so far); the installers are not signed yet.
 
 ## Known problems
 
+- Fixed on main after v0.2.11: sun shadows were inverted and out of place
+  (dark ground with bright hard-edged streaks, no shadow under Cole, shadows
+  doubled or detached from what cast them). The shadow-map compare ran the
+  wrong way round, and the maps were read through a copy 1.25x too wide.
 - Fixed in v0.2.5: facades turned away from the sun (and Cole's back and
   sides) went black, and sun shadows were missing everywhere. The sun shadow
   maps were read from an empty colour buffer at the same address as their
