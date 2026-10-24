@@ -7,10 +7,12 @@ Port nativo do **inFAMOUS 2** (PS3, versão digital `NPUA80638`) para
 jogo é traduzido para C/C++ e compilado como um executável nativo, com
 gráficos em Metal. Não é um emulador.
 
-**O jogo inicia, mostra os menus e as cutscenes, e New Marais é jogável**, no
-limite de 30 fps do próprio jogo em Macs com Apple silicon. Baixe o app na
-[**release alpha v0.2.4**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
-e ele recompila o jogo a partir da sua própria cópia ([como](#baixar-e-jogar)).
+**O jogo inicia, mostra os menus e as cutscenes, e New Marais é jogável**, a
+~38-40 fps em Macs com Apple silicon nas execuções sem janela (o jogo não tem
+limite de 30 fps no gameplay). Baixe o app na
+[**release alpha v0.2.12**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+e ele recompila o jogo a partir da sua própria cópia ([como](#baixar-e-jogar));
+a partir da v0.2.7, o app se atualiza sozinho.
 
 | | |
 | --- | --- |
@@ -53,14 +55,20 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Jogo novo → abertura em quadrinhos → cutscenes no motor do jogo | ✅ |
 | Prólogo em Empire City (a Besta, o cargueiro) | ✅ |
 | New Marais: primeiras missões, jogadas com janela e DualSense | ✅ |
-| Desempenho | ✅ ~30 fps andando em New Marais (o limite do próprio jogo) nas execuções sem janela em Apple silicon: frames de 29,7–30,4 ms, folga de ~33–36 fps. Falta confirmar com janela |
+| Desempenho | ✅ ~38-40 fps na caminhada por New Marais sem janela em Apple silicon. O jogo não tem limite de 30 fps no gameplay; menus e quadrinhos ficam em 30, como no console. Falta confirmar numa sessão longa com janela |
+| Resolução interna 1080p / 1440p / 4K | ✅ desde a v0.2.9; 1080p roda a ~37 fps sem janela desde a correção com framebuffer fetch (v0.2.11); 4K ainda é pesado demais |
+| Ultrawide 21:9 e 32:9 (visão mais larga, HUD em 16:9 no centro) | ✅ desde a v0.2.10, conferido sem janela |
 | Controle (DualSense testado; DualShock 4 e Xbox pelo SDL), vibração, reconexão sem reiniciar | ✅ |
 | Teclado e mouse (câmera no mouse, remapeáveis, também ao vivo no menu dentro do jogo) | 🧪 mapeados, pouco testados com janela |
-| Avisos de botão que seguem o controle (A/B/X/Y do Xbox, teclas do teclado) | 🧪 conferidos sem janela, falta testar com janela |
-| Menu dentro do jogo (F1 / Cmd+, / L3+R3): imagem, áudio, controles, HUD de desempenho | ✅ desde a v0.2.4 (mudanças ao vivo) |
+| Avisos de botão que seguem o controle (A/B/X/Y do Xbox, teclas do teclado) | 🧪 desde a v0.2.6, conferidos sem janela, falta testar com janela |
+| Menu dentro do jogo (F1 / Cmd+, / L3+R3): imagem, áudio, controles, idiomas do jogo, HUD de desempenho | ✅ desde a v0.2.4 (mudanças ao vivo) |
+| Sair do jogo (F1 > Sair do jogo, Cmd+Q, fechar a janela) | ✅ desde a v0.2.10, conferido sem janela; um save sendo gravado termina antes |
+| Pacotes de texturas e mais efeitos de imagem (claridade, curvas, predefinições de cor) | 🧪 desde a v0.2.8, falta testar com janela |
 | Saves e troféus (em `~/Library/Application Support`), gerenciador de saves no app | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), outros idiomas que a sua cópia traz, DLC | ✅ |
-| O app: instalar, recompilar, jogar, ajustes, controles, saves, modo de depuração | ✅ [alpha v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4) |
+| O app: instalar, recompilar, jogar, ajustes, controles, saves, modo de depuração | ✅ [alpha v0.2.12](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12) |
+| O app se atualiza sozinho | 🧪 desde a v0.2.7 (da v0.2.8 à v0.2.12 foram oferecidas por ele), falta a confirmação do Erik |
+| Adicionar à Steam (Big Picture com o controle) | 🧪 desde a v0.2.7, falta testar com a Steam |
 | Jogo inteiro | ❓ ninguém passou ainda de 1% |
 | Linux e Windows | ⏳ planejado |
 
@@ -72,8 +80,10 @@ Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
 (a versão da PSN `NPUA80638`, por exemplo instalada no
 [RPCS3](https://rpcs3.net) com a licença `.rap`).
 
-1. Baixe o `infamous2-recomp_0.2.4_aarch64.dmg` da
-   [release v0.2.4](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.4)
+1. Baixe o `infamous2-recomp_0.2.12_aarch64.dmg` da
+   [release v0.2.12](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+   (até agora toda release é pré-release; a
+   [página de releases](https://github.com/erikomis/infamous2-recomp/releases) mostra se saiu uma mais nova)
    e arraste o app para Aplicativos. Ele não é notarizado: na primeira vez,
    botão direito > Abrir (ou Ajustes do Sistema > Privacidade e Segurança >
    Abrir Mesmo Assim).
@@ -86,12 +96,12 @@ Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
 4. **Instalar** (a primeira recompilação leva alguns minutos), depois
    **Jogar**.
 
-A partir da release depois da v0.2.6, o app se atualiza sozinho: o cartão de
-Atualizações na tela inicial oferece **Baixar e instalar** e depois
-**Reiniciar para concluir** (assinado e conferido; "Procurar atualizações
-automaticamente" pode ser desligado). Depois de atualizar, ele oferece
-**Recompilar o jogo**. A release não traz arquivos do jogo: o app recompila o
-jogo no seu Mac.
+A partir da v0.2.7, o app se atualiza sozinho: o cartão de Atualizações na
+tela inicial oferece **Baixar e instalar** e depois **Reiniciar para
+concluir** (assinado e conferido; "Procurar atualizações automaticamente"
+pode ser desligado). Depois de atualizar, ele oferece **Recompilar o jogo**.
+Na v0.2.6 ou anterior, instale o app novo à mão uma vez. A release não traz
+arquivos do jogo: o app recompila o jogo no seu Mac.
 
 ## O app
 
@@ -139,11 +149,13 @@ Controles e Avançado.
   Picture com o controle; **Remover da Steam** tira de novo.
 
 **Dentro do jogo,** F1 (fn+F1), Cmd+, ou L3+R3 abre o **menu dentro do
-jogo**: imagem (gama, nitidez, FXAA/SMAA, vibrance, contraste, MetalFX, vsync,
-modo de tela), volume, controles (remapeamento ao vivo de teclado, mouse e
-controle, "jogar com" controle / teclado e mouse / os dois, vibração, mouse)
-e um HUD de desempenho (fps, tempo de quadro, CPU/GPU). Um DualSense que
-desliga volta sozinho em cerca de um segundo.
+jogo**: imagem (gama, nitidez, FXAA/SMAA, vibrance, contraste, claridade,
+curvas, predefinições de cor, MetalFX, vsync, modo de tela, resolução interna,
+proporção da tela), volume, controles (remapeamento ao vivo de teclado, mouse
+e controle, "jogar com" controle / teclado e mouse / os dois, vibração,
+mouse), os idiomas da voz e do texto, um HUD de desempenho (fps, tempo de
+quadro, CPU/GPU) e **Sair do jogo**. Um DualSense que desliga volta sozinho em
+cerca de um segundo.
 
 | | |
 | --- | --- |
@@ -154,22 +166,26 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 
 ## Problemas conhecidos
 
-- Corrigido na main depois da v0.2.11: as sombras do sol estavam invertidas
-  e fora do lugar (chão escuro com faixas claras de borda dura, sem sombra
-  embaixo do Cole, sombras duplicadas ou soltas do que as projetava). A
-  comparação do shadow map estava ao contrário, e os mapas eram lidos por uma
-  cópia 1,25x larga demais.
+- Corrigido na v0.2.12: as sombras do sol estavam invertidas e fora do
+  lugar (chão escuro com faixas claras de borda dura, sem sombra embaixo do
+  Cole, sombras soltas do que as projetava). A comparação do shadow map
+  estava ao contrário, e os mapas eram lidos por uma cópia 1,25x larga
+  demais. As sombras duplicadas em alguns chãos de dia provavelmente tinham
+  a mesma causa; ainda não foi confirmado com janela.
+- Um travamento raro no carregamento da cidade: apareceu em 2 de 9
+  execuções sem janela num Mac muito carregado, com e sem a correção das
+  sombras da v0.2.12. Avise se acontecer com você.
+- Na primeira vez que o jogo mostra um efeito novo, o shader dele é traduzido
+  na thread de renderização, o que pode travar até ~2 s. Com janela eles
+  ficam em cache, então cada um acontece uma vez só; `PS3_SHADER_ASYNC=1`
+  compila em segundo plano (alguns objetos aparecem um instante depois).
 - Corrigido na v0.2.5: fachadas viradas para longe do sol (e as costas e os
   lados do Cole) ficavam pretas, e as sombras do sol faltavam no jogo todo. Os
   mapas de sombra do sol eram lidos de um buffer de cor vazio no mesmo
   endereço do buffer de profundidade, então tudo contava como no sol e o termo
   do sol, sem limite, ficava negativo do lado oposto. Os passes de occlusion
   volume (a sombra suave de contato), desligados enquanto eram suspeitos,
-  voltaram a ser desenhados na main.
-- Corrigido na v0.2.2: a falha rara do SPU no job de geometria do Edge
-  (cerca de 1 execução em 8) e o travamento raro em que o job de luz não
-  terminava o frame eram o mesmo bug, um cache desatualizado de código SPU
-  traduzido. Nenhum desde então, em nenhuma execução de teste.
+  voltaram a ser desenhados desde a v0.2.8.
 - Windows e Linux ainda não são suportados.
 - Com menos de uns 3 GB livres no disco o jogo mostra um erro de "espaço
   insuficiente" no boot, que na janela aparece só como tela preta.
@@ -178,22 +194,21 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 
 O que está sendo feito agora (detalhes no [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md)):
 
-- **30 fps ou mais o tempo todo:** o cache de shaders, o relógio de quadros
-  de 1 ms e a poda do cache de vértices (2026-10-22) tiraram os engasgos de
-  primeiro uso e parte das quedas; o que sobra em New Marais é sobretudo tempo
-  das SPUs.
-- **Ícones de teclado nos prompts de botão**, no lugar dos do PS3.
-- **Pacotes de texturas** (`PS3_MODS`, Jogo > Pacotes de texturas) e **mais
-  efeitos de imagem** (claridade, curva de tons, predefinições de cor)
-  entraram, esperando um teste com janela.
+- **Jogar a história inteira:** ninguém passou ainda de 1%, então missões
+  mais adiante podem quebrar; o `tools/play_capture.sh` grava o que um
+  defeito de imagem precisa numa sessão com janela.
+- **Sombras do sol duplicadas de dia:** provavelmente sumiram com a correção
+  das sombras da v0.2.12; falta olhar com janela, de dia.
+- **O travamento raro no carregamento da cidade** (veja Problemas
+  conhecidos): até agora só num Mac muito carregado.
+- **MetalFX temporal, HDR (EDR) e TAA:** não começados; os temporais
+  precisam de vetores de movimento.
+- **Windows e Linux:** planejados.
 - **Pull requests para o [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
-  todos os PRs deste port até o #375 foram aceitos em 2026-10-19; a sexta
-  rodada (#470 SMAA, vibrance e contraste; #472 reconexão do controle; #476
-  cor da borda das texturas) está aberta.
-- Ideias novas (combinação no controle para a captura, tecla de captura de
-  tela em PNG) estão no roadmap; a atualização automática do app e o atalho
-  na Steam estão implementados e esperando a próxima release / um teste com
-  a Steam.
+  todos os PRs deste port até o #375 foram aceitos em 2026-10-19. Abertos: a
+  rodada 6 (#470, #472, #476), a 7 (#502, #503, #510, #511) e a 8 (#537,
+  #541-#545), mais a issue #546, uma proposta de resolução interna, pacotes
+  de texturas e mais ajustes de cor no upstream.
 
 ## Montar a partir do código
 
@@ -325,8 +340,8 @@ select = "touchpad"
   também valem (`cross`, `options`, `share`, `l1`, `r2`, `lb`, `rt`, ...). Os
   analógicos físicos sempre movem os analógicos do PS3.
 
-A janela muda de tamanho livremente e a imagem mantém o formato 16:9, com
-faixas pretas quando a janela tem outro formato.
+A janela muda de tamanho livremente e a imagem mantém o formato 16:9 (ou o
+do `PS3_ASPECT`), com faixas pretas quando a janela tem outro formato.
 
 | Atalho | O que faz |
 | --- | --- |
@@ -358,8 +373,8 @@ normal. O progresso vale até o último salvamento automático, como no console.
 
 | Aba | O que muda, na hora |
 | --- | --- |
-| Imagem | a gama própria (ou o brilho do próprio jogo), nitidez, FXAA, escala MetalFX, vsync, janela / tela cheia do macOS / sem bordas; a filtragem anisotrópica vale no próximo início |
-| Áudio | volume geral |
+| Imagem | a gama própria (ou o brilho do próprio jogo), nitidez, FXAA ou SMAA, vibrance, contraste, claridade, a curva de tons, uma predefinição de cor ou LUT, vinheta, granulado, escala MetalFX, vsync, janela / tela cheia do macOS / sem bordas; a filtragem anisotrópica, a resolução interna e a proporção da tela valem no próximo início |
+| Áudio | volume geral (os vídeos também) |
 | Controles | jogar com controle + teclado/mouse, só o controle ou só teclado/mouse; os ícones dos botões nos avisos do jogo (automático, PlayStation, Xbox, teclado e mouse); vibração liga/desliga e força; câmera no mouse liga/desliga, sensibilidade e inversão vertical/horizontal; uma tabela com cada botão do PS3 e sua tecla, botão do mouse e botão do controle: clique numa célula (ou escolha com o controle e aperte ✕), aperte a nova entrada e ela vale na hora (Esc cancela, botão direito limpa, "Restaurar padrões"). O aperto vai para o menu, nunca para o jogo. As trocas são salvas na hora no mesmo `input.toml` que a tela Controles do launcher edita |
 | Desempenho | um painel pequeno num canto que fica com o menu fechado: fps, tempo de quadro com gráfico, núcleos de CPU em uso e threads ocupadas (≥ 80% de um núcleo: aqui sobretudo as das SPUs), o tempo de codificação Metal do RSX e a espera pela GPU por quadro; canto, opacidade e gráfico são opções |
 | Jogo | o idioma do jogo, a voz e o texto (menus e legendas), cada um entre os idiomas que a sua cópia traz, e quais estão em uso agora. O jogo carrega o idioma ao abrir, então valem quando ele reiniciar (o menu avisa) |
@@ -443,6 +458,9 @@ Opções úteis:
 | `PS3_DISPLAY_GAMMA=<0.8..1.2>` | força o gamma da saída de vídeo; por padrão vale o brilho escolhido nas opções do jogo, como no console |
 | `PS3RECOMP_ENG_USER_CLIP=0` | ignora os planos de clip do usuário do RSX (ligados por padrão desde 2026-10-22: o reflexo planar da água corta no plano da água) |
 | `PS3RECOMP_ENG_DEPTH_EXPORT=0` | ignora a profundidade escrita pelo fragment program (ligada por padrão desde 2026-10-22: a profundidade reduzida que as partículas suaves testam) |
+| `PS3RECOMP_ENG_FBFETCH=0` | os decalques do G-buffer voltam a ler o pixel de baixo por cópias em vez do framebuffer fetch do Metal (ligado por padrão desde a v0.2.11: rostos certos em 1080p ou mais, tempo de GPU em 1080p de 19 → 9 ms por quadro) |
+| `PS3RECOMP_ENG_DEPTH_BOUNDS=0` | ignora o teste de depth bounds do RSX (emulado no shader por padrão desde a v0.2.11: as cascatas de sombra do sol e os volumes de luz e de oclusão); também ao vivo |
+| `PS3RECOMP_ENG_SHADOW_CMP=0`, `PS3RECOMP_ENG_ZTEX_CROP=0` | a comparação antiga do shadow map / a leitura antiga, esticada, do shadow map (os dois corrigidos na v0.2.12: sombras do sol como no PS3); ao vivo |
 
 `tools/play_dump.sh <nome>` abre o jogo na janela e, a cada Enter no terminal,
 salva aquele frame (render targets, shaders, log de passes) em `out/<nome>/`:
