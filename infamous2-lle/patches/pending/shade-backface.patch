@@ -1,0 +1,146 @@
+shade-backface.patch (2026-10-31, branch fix/shade-backface): toolkit changes on top of the toolkit patch of main ddbb4c1.
+
+PS3RECOMP_ENG_SHADE_BACKFACE (live, default 1; 0 = v0.2.14; toggle after PS3T_ENG_SHADOW_D24): in
+inFAMOUS 2's deferred composite (FP f384f111ad5956ba) a receiver without stencil bit 7 whose N.L is
+negative reads the sun mask as 0 (shadowed). The world's sun-shadow casters are drawn second-depth
+(cull FRONT, no polygon offset), so world surfaces turned away from the sun compared against their own
+depth: the 2x2 PCF ramp printed as blue/dark dot grids and stair-steps through the unclamped
+mask x sun x N.L. The program variant is part of the pipeline key, so a live change rebuilds it.
+PS3RECOMP_ENG_BACKFACE_CASTER_BIAS=<N> (diagnostic, read once): cull-FRONT depth-only casters get a
+depth bias of -N x slope, -1000 x N units (pulled towards the light; < 0 pushes them away).
+Apply with: git apply -p1 inside ps3recomp-fork/.
+
+--- a/include/ps3emu/ps3_toggles.h
++++ b/include/ps3emu/ps3_toggles.h
+@@ -85,6 +85,7 @@
+     PS3T_ENG_DEPTH_CLAMP,    /* rsx_draw_engine.c: ZMIN_MAX_CONTROL depth clamp   */
+     PS3T_ENG_CLAMP_CULL_FLIP,/* rsx_draw_engine.c: flip clamped draws (diagnostic)*/
+     PS3T_ENG_SHADOW_D24,     /* rsx_draw_engine.c: shadow compare precision (diagnostic) */
++    PS3T_ENG_SHADE_BACKFACE, /* rsx_draw_engine.c: back-facing world = sun-shadowed */
+     PS3T_COUNT
+ };
+ 
+@@ -140,6 +141,7 @@
+         { "PS3RECOMP_ENG_DEPTH_CLAMP",  PS3_TK_NOT0, 1 },
+         { "PS3RECOMP_ENG_CLAMP_CULL_FLIP", PS3_TK_ATOI, 0 },
+         { "PS3RECOMP_ENG_SHADOW_D24",   PS3_TK_ATOI, 0 },
++        { "PS3RECOMP_ENG_SHADE_BACKFACE", PS3_TK_NOT0, 1 },
+     };
+     return &d[id];
+ }
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -68,6 +68,25 @@
+  * against a depth map (unit, operator, map size). */
+ static int s_poly_offset = -1;
+ static void eng_poly_offset_set(int id, int v) { (void)id; __atomic_store_n(&s_poly_offset, v > 0 ? v : 0, __ATOMIC_RELAXED); }
++/* PS3RECOMP_ENG_SHADE_BACKFACE (live, after PS3T_ENG_SHADOW_D24; default 1):
++ * inFAMOUS 2 draws its world sun-shadow casters "second-depth" (cull FRONT,
++ * no polygon offset: the map holds the casters' back faces; game code
++ * 0x002F05D0-0x002F0720, mode counter at guest 0x00A8EF50), and its sun mask
++ * (FP 55295a0f6cc1985b) biases the reference only for stencil bit 7
++ * (characters and some props). A world surface turned away from the sun
++ * therefore compares against its own depth: the 2x2 PCF gives a 0..1 ramp
++ * per shadow texel, and the deferred composite (FP f384f111ad5956ba) adds
++ * mask x sun x N.L unclamped, so the ramp prints as a lattice of dark and
++ * ambient-blue dots and stair-steps on every shaded wall at dusk. 1: the
++ * composite treats a stencil-bit-7-clear receiver whose N.L < 0 as shadowed
++ * (sun mask 0, i.e. ambient only), the look a second-depth map is meant to
++ * give; bit-7 receivers keep the game's designed negative N.L. 0 = v0.2.14.
++ * PS3RECOMP_ENG_BACKFACE_CASTER_BIAS=<N> (read once, diagnostic): those
++ * cull-FRONT depth-only casters get a depth bias of -N x the slope and
++ * -1000 x N units (pulled towards the light; < 0 pushes them away). */
++static int s_shade_backface = -1;
++static void eng_shade_backface_set(int id, int v) { (void)id; __atomic_store_n(&s_shade_backface, v != 0, __ATOMIC_RELAXED); }
++#define ENG_SHADE_BACKFACE_FP 0xf384f111ad5956baull
+ /* PS3RECOMP_ENG_DEPTH_CLAMP (live): NV4097_SET_ZMIN_MAX_CONTROL (0x1D78,
+  * cellGcmSetZMinMaxControl: bits 0-3 cull at the near/far planes, 4-7 depth
+  * clamp, 8-11 cull ignores W), which this engine used to ignore (always
+@@ -307,6 +326,14 @@
+         if (slope != slope) slope = 0.0f;
+         if (constant != constant) constant = 0.0f;
+         constant *= units_k * (float)mode;   /* mode > 1: diagnostic multiple */
++    }
++    /* PS3RECOMP_ENG_BACKFACE_CASTER_BIAS (diagnostic, see SHADE_BACKFACE). */
++    static int sb = -1000;
++    if (sb == -1000) { const char* e = getenv("PS3RECOMP_ENG_BACKFACE_CASTER_BIAS"); sb = e ? atoi(e) : 0; }
++    if (sb && !(en && mode) && rs->depth_write && rs->depth_test && rs->color_mask == 0 &&
++        rs->cull_enable && rs->cull_face == 0x0404u) {
++        slope = -(float)sb;
++        constant = -1000.0f * (float)sb;
+     }
+     if (log_on && rs->depth_write) {
+         /* Which depth targets the offset draws write, how they cull. */
+@@ -2339,7 +2366,7 @@
+         int valid, fixed;
+         u64 vp_hash, fp_struct;
+         u32 fp_ctrl_key, cube_mask, vol_mask, vtex_mask, layout_mask, layout_stride, rt_count;
+-        u32 shadow_mask, srgb_output, gamma_units, expand_units, ucp, dbz;
++        u32 shadow_mask, srgb_output, gamma_units, expand_units, ucp, dbz, shade_bf;
+         u32 fbf_cand; u8 fbf_att[16]; u8 fbf_sel[16][4];
+         u8 gamma_masks[RSX_DSP_NUM_TEXTURES];
+         u8 expand_masks[RSX_DSP_NUM_TEXTURES];
+@@ -2364,6 +2391,15 @@
+     if (!fixed && !in_fp) return 0;
+     const u32 ucp = fixed ? 0 : eng_user_clip_key();
+     const u32 dbz = fixed ? 0 : s_dbz.unit;   /* depth-bounds emulation: the copy's unit + 1 */
++    /* PS3RECOMP_ENG_SHADE_BACKFACE: the composite's back-face fix is part of
++     * that program's identity, so a live change builds the other variant. */
++    if (__builtin_expect(__atomic_load_n(&s_shade_backface, __ATOMIC_RELAXED) < 0, 0)) {
++        const char* e = getenv("PS3RECOMP_ENG_SHADE_BACKFACE");
++        __atomic_store_n(&s_shade_backface, !(e && *e == '0'), __ATOMIC_RELAXED);
++        ps3_toggle_watch(PS3T_ENG_SHADE_BACKFACE, eng_shade_backface_set);
++    }
++    const u32 shade_bf = (!fixed && in_fp == ENG_SHADE_BACKFACE_FP)
++                       ? (u32)__atomic_load_n(&s_shade_backface, __ATOMIC_RELAXED) : 0u;
+     u64 key;
+     if (kmemo.valid && kmemo.fixed == fixed && kmemo.vp_hash == in_vp && kmemo.fp_struct == in_fp &&
+         kmemo.fp_ctrl_key == fp_ctrl_key && kmemo.cube_mask == cube_mask && kmemo.vol_mask == vol_mask &&
+@@ -2372,6 +2408,7 @@
+         kmemo.rt_fmt == rt_fmt && !memcmp(&kmemo.rs, rs, sizeof *rs) &&
+         kmemo.shadow_mask == shadow_mask && kmemo.srgb_output == srgb_output &&
+         kmemo.gamma_units == gamma_units && kmemo.ucp == ucp && kmemo.dbz == dbz &&
++        kmemo.shade_bf == shade_bf &&
+         (!gamma_units || !memcmp(kmemo.gamma_masks, gamma_masks, sizeof gamma_masks)) &&
+         kmemo.expand_units == expand_units &&
+         (!expand_units || !memcmp(kmemo.expand_masks, expand_masks, sizeof expand_masks)) &&
+@@ -2407,6 +2444,7 @@
+             key = eng_fnv1a(s_fbf.sel, sizeof s_fbf.sel, key);
+         }
+         if (dbz) { const u32 tag = 0x5A424400u | dbz; key = eng_fnv1a(&tag, sizeof tag, key); }
++        if (shade_bf) { const u32 tag = 0x53424631u; key = eng_fnv1a(&tag, sizeof tag, key); }   /* "SBF1" */
+     }
+     key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
+     key = eng_fnv1a(&layout->stride, sizeof layout->stride, key);
+@@ -2422,6 +2460,7 @@
+     kmemo.shadow_mask = shadow_mask; memcpy(kmemo.shadow, shadow, sizeof shadow);
+     kmemo.srgb_output = srgb_output;
+     kmemo.gamma_units = gamma_units; kmemo.expand_units = expand_units; kmemo.ucp = ucp; kmemo.dbz = dbz;
++    kmemo.shade_bf = shade_bf;
+     memcpy(kmemo.expand_masks, expand_masks, sizeof expand_masks); memcpy(kmemo.gamma_masks, gamma_masks, sizeof gamma_masks);
+     kmemo.fbf_cand = s_fbf.cand; memcpy(kmemo.fbf_att, s_fbf.att, sizeof s_fbf.att); memcpy(kmemo.fbf_sel, s_fbf.sel, sizeof s_fbf.sel);
+     kmemo.key = key;
+@@ -2513,6 +2552,23 @@
+             }
+             e = c2 ? c2 + 1 : NULL;
+         } }
++    /* PS3RECOMP_ENG_SHADE_BACKFACE: right after the composite reads the sun
++     * mask (unit 2's R into h4), a receiver without stencil bit 7 (cc0.w, the
++     * program's own flag) whose N.L (h5.z, normal . sun) is negative counts as
++     * shadowed. Sampled after h5.z and cc0.w are set, before h4.x is used. */
++    if (fi > 0 && shade_bf) {
++        static const char anchor[] = "h[4].xyzw = _v.xyzw; }";
++        static const char fix[] = "\n    /* PS3RECOMP_ENG_SHADE_BACKFACE */ if (cc0.w == 0.0 && h[5].z < 0.0) h[4].x = 0.0;";
++        char* at = strstr(s_ps_hlsl, "rsx_tex2.Sample(");
++        at = at ? strstr(at, anchor) : NULL;
++        const size_t len = strlen(s_ps_hlsl);
++        if (at && len + sizeof fix < sizeof s_ps_hlsl && strstr(s_ps_hlsl, "cc0.w = _v.w;") && strstr(s_ps_hlsl, "h[5].z = _v.z;")) {
++            at += sizeof anchor - 1;
++            memmove(at + sizeof fix - 1, at, len + 1 - (size_t)(at - s_ps_hlsl));
++            memcpy(at, fix, sizeof fix - 1);
++            static u32 said; if (said++ < 2) fprintf(stderr, "[rsx engine] shade-backface: composite %016llx patched\n", (unsigned long long)in_fp);
++        } else { static u32 said; if (said++ < 2) fprintf(stderr, "[rsx engine] shade-backface: composite %016llx NOT patched (unexpected text)\n", (unsigned long long)in_fp); }
++    }
+     /* PS3RECOMP_ENG_FBFETCH: the units that read their own target. */
+     u32 fbf_applied = 0;
+     static char fbf_orig[sizeof s_ps_hlsl];
