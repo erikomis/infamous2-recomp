@@ -440,7 +440,7 @@ staged port files (`infamous2-lle/*`, `infamous2-lle/tools/**`,
 
 | Job | Runner | Bundles (artifact `infamous2-launcher-<job>`) |
 |---|---|---|
-| `macos-arm64` | `macos-14` | `infamous2-recomp_<ver>_aarch64.dmg`, `infamous2-recomp_<ver>_aarch64.app.zip`, and with the updater key `infamous2-recomp_<ver>_aarch64.app.tar.gz` + `.sig` |
+| `macos-arm64` | `macos-15` | `infamous2-recomp_<ver>_aarch64.dmg`, `infamous2-recomp_<ver>_aarch64.app.zip`, and with the updater key `infamous2-recomp_<ver>_aarch64.app.tar.gz` + `.sig` |
 | `windows-x64` | `windows-latest` | `infamous2-recomp_<ver>_x64-setup.exe` (NSIS), `infamous2-recomp_<ver>_x64_en-US.msi` |
 | `linux-x64` | `ubuntu-22.04` | `infamous2-recomp_<ver>_amd64.AppImage`, `infamous2-recomp_<ver>_amd64.deb` |
 
