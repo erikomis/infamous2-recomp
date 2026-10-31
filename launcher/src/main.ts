@@ -103,7 +103,8 @@ interface Status {
   finderIcon: boolean;
 }
 interface CheckItem {
-  level: "ok" | "warn" | "fail";
+  /** rebuild.py writes ok / warn / fail; the window adds "info" and "optional". */
+  level: "ok" | "warn" | "fail" | "info" | "optional";
   name: string;
   message: string;
 }
@@ -1191,6 +1192,73 @@ function checkLabel(name: string): string {
   return v === k ? name : v;
 }
 
+const tildePath = (p: string) => p.replace(/^\/Users\/[^/]+/, "~");
+
+/** A check as the window shows it: rebuild.py --check-json writes English
+ * details, so the known formats (tools/rebuild.py, check_*) are turned into
+ * translated text, with the path that is part of them on a line of its own;
+ * anything else is shown as rebuild.py wrote it. The optional DLC licence is
+ * shown as optional rather than as a warning. */
+interface ShownCheck {
+  level: "ok" | "warn" | "fail" | "info" | "optional";
+  detail: string;
+  path: string | null;
+  optional: boolean;
+}
+type Rule = [RegExp, (m: RegExpMatchArray) => { key?: Key; vars?: Record<string, string>; path?: string; text?: string }];
+const CHECK_RULES: Rule[] = [
+  [/^existing venv (.+)$/, (m) => ({ key: "prereq.msg.venvExisting", path: m[1] })],
+  [/^(.+?) not found \((?:macOS: )?(brew install [^)]+)\)$/, (m) => ({ key: "prereq.msg.notFoundBrew", vars: { what: m[1], cmd: m[2] } })],
+  [/^(.+): 3\.20 or newer needed$/, (m) => ({ key: "prereq.msg.cmakeOld", vars: { v: m[1] } })],
+  [/^Xcode Command Line Tools not installed/, () => ({ key: "prereq.msg.cltMissing" })],
+  [/^no C\/C\+\+ compiler/, () => ({ key: "prereq.msg.noCompiler" })],
+  [/^git found$/, () => ({ key: "prereq.msg.found" })],
+  [/^git not found/, () => ({ key: "prereq.msg.gitMissing" })],
+  [/^RPCS3 not found/, () => ({ key: "prereq.msg.rpcs3Missing" })],
+  [/^pass --firmware/, () => ({ key: "prereq.msg.firmwareNone" })],
+  [/^PS3 firmware not found: no (.+) in (.+) \(or its sys\/external\)$/, (m) => ({ key: "prereq.msg.firmwareNotIn", vars: { files: m[1] }, path: m[2] })],
+  [/^(.+): firmware (\S+) \(tested: ([^;]+);.*\)$/, (m) => ({ key: "prereq.msg.firmwareOther", vars: { v: m[2], tested: m[3] }, path: m[1] })],
+  [/^(.+): firmware (\S+), extracted in the "pup" step$/, (m) => ({ key: "prereq.msg.firmwarePup", vars: { v: m[2] }, path: m[1] })],
+  [/^(.+): no dev_flash packages in it$/, (m) => ({ key: "prereq.msg.firmwareEmpty", path: m[1] })],
+  [/^(.+) \(decryption without RPCS3\)$/, (m) => ({ key: "prereq.msg.keysOk", path: m[1] })],
+  [/^(.+) \(the PUP's PKG key set\)$/, (m) => ({ key: "prereq.msg.keysPup", path: m[1] })],
+  [/^(.+) lacks: (.+)$/, (m) => ({ key: "prereq.msg.keysLack", vars: { list: m[2] }, path: m[1] })],
+  [/^(.+) \(patched\)$/, (m) => ({ key: "prereq.msg.toolkitPatched", path: m[1] })],
+  [/^(.+) \(patch not detected: .*\)$/, (m) => ({ key: "prereq.msg.toolkitAhead", path: m[1] })],
+  [/^(.+) is not a ps3recomp checkout$/, (m) => ({ key: "prereq.msg.toolkitNot", path: m[1] })],
+  [/^(\/.+): not found$/, (m) => ({ key: "prereq.msg.notFoundAt", path: m[1] })],
+  [/^macOS (\S+) arm64$/, (m) => ({ key: "prereq.msg.hostOk", vars: { v: m[1] } })],
+  [/^macOS (\S*) (\S+): only macOS on Apple Silicon is tested$/, (m) => ({ key: "prereq.msg.hostUntested", vars: { v: m[1], arch: m[2] } })],
+  [/^PS3_RAP_KEY set/, () => ({ key: "prereq.msg.dlcOn" })],
+  [/^PS3_RAP_KEY not set/, () => ({ key: "prereq.msg.dlcOff" })],
+  // a path with a short note (python: its version)
+  [/^(\/\S.*?) \(([^()]+)\)$/, (m) => ({ text: m[2], path: m[1] })],
+  [/^(\/\S.*)$/, (m) => ({ path: m[1] })],
+];
+
+function describeCheck(c: CheckItem): ShownCheck {
+  const shown: ShownCheck = { level: c.level, detail: c.message, path: null, optional: c.name === "dlc" };
+  if (shown.optional && c.level === "warn") shown.level = "optional";
+  if (c.name === "disk") {
+    const m = c.message.match(/^need ~(.+?)( \(game data cloned, no copy\))?, (.+?) free on (.+?)(; the game needs ~3 GB free to boot)?$/);
+    if (m) {
+      shown.detail =
+        t("prereq.msg.diskNeedFree", { need: m[1], free: m[3] }) + (m[2] ? " " + t("prereq.msg.diskCloned") : "") + (m[5] ? ". " + t("prereq.msg.diskBoot") : "");
+      shown.path = m[4];
+      return shown;
+    }
+  }
+  for (const [re, f] of CHECK_RULES) {
+    const m = c.message.match(re);
+    if (!m) continue;
+    const r = f(m);
+    shown.detail = r.key ? t(r.key, r.vars ?? {}) : (r.text ?? "");
+    shown.path = r.path ?? null;
+    return shown;
+  }
+  return shown;
+}
+
 /** The decryption the Install screen is set to (rebuild.py --keys/--firmware/--decrypt-with). */
 function decryptOpts() {
   return { keys: settings.keysPath ?? "", firmware: settings.firmwarePath ?? "", decryptWith: settings.decryptWith || "auto" };
@@ -1265,7 +1333,9 @@ function renderPrereqs() {
     show($("prereq-brew-missing"), false);
     return;
   }
-  const fails = p.checks.filter((c) => c.level === "fail");
+  const shown = p.checks.map((c) => ({ c, s: describeCheck(c) }));
+  const fails = shown.filter((x) => x.s.level === "fail");
+  const warns = shown.filter((x) => x.s.level === "warn");
   const hints: Record<string, Key> = {
     rpcs3: "prereq.hint.rpcs3",
     firmware: "prereq.hint.firmware",
@@ -1273,21 +1343,40 @@ function renderPrereqs() {
     "xcode-clt": "prereq.hint.clt",
     disk: "prereq.hint.disk",
   };
-  // the failed ones first, then the rest
-  for (const c of [...fails, ...p.checks.filter((c) => c.level !== "fail")]) {
-    const li = document.createElement("li");
-    li.className = `check-${c.level}`;
-    li.innerHTML = `<span class="ico"></span><span class="what"><b></b><span class="tip"></span><span class="msg"></span></span>`;
-    li.querySelector(".ico")!.textContent = ICON[c.level] ?? "·";
-    li.querySelector("b")!.textContent = checkLabel(c.name);
-    li.querySelector(".tip")!.textContent = c.level === "fail" && hints[c.name] ? t(hints[c.name]) : "";
-    li.querySelector(".msg")!.textContent = c.message;
-    li.append(...prereqActions(c));
+  // what needs doing first, then the rest in rebuild.py's order
+  for (const { c, s } of [...fails, ...warns, ...shown.filter((x) => x.s.level !== "fail" && x.s.level !== "warn")]) {
+    const li = el("li", `check check-${s.level}`);
+    li.append(el("span", "check-ico", ICON[s.level] ?? "·"));
+    const body = el("div", "check-body");
+    const title = el("div", "check-title");
+    title.append(el("b", "", checkLabel(c.name)));
+    if (s.optional) title.append(el("span", "check-tag", t("prereq.optionalTag")));
+    body.append(title);
+    if (s.detail) body.append(el("div", "check-detail", s.detail));
+    if (s.path) {
+      const path = el("div", "check-path", tildePath(s.path));
+      path.title = s.path;
+      body.append(path);
+    }
+    if (c.level === "fail" && hints[c.name]) body.append(el("div", "check-hint", t(hints[c.name])));
+    const acts = prereqActions(c);
+    if (acts.length) {
+      const row = el("div", "check-actions");
+      row.append(...acts);
+      body.append(row);
+    }
+    li.append(body);
     list.appendChild(li);
   }
   const sum = $("prereq-summary");
-  sum.className = "pill " + (p.ok ? "" : "bad");
-  sum.textContent = p.ok ? t("prereq.allOk") : t("prereq.missingN", { n: fails.length || 1 });
+  sum.className = "pill " + (fails.length || (!p.ok && !warns.length) ? "bad" : warns.length ? "warn" : "");
+  sum.textContent = fails.length
+    ? t("prereq.missingN", { n: fails.length })
+    : !p.ok
+      ? t("prereq.missingN", { n: 1 })
+      : warns.length
+        ? t(warns.length === 1 ? "prereq.readyWarning" : "prereq.readyWarnings", { n: warns.length })
+        : t("prereq.allOk");
   card.classList.toggle("done", p.ok);
   const brewable = p.brewMissing.length > 0;
   show($("prereq-fix"), !p.clt || (brewable && !!p.homebrew));
@@ -1537,7 +1626,7 @@ $("cancel").addEventListener("click", () => {
 });
 $("copy-log").addEventListener("click", () => navigator.clipboard.writeText(progress.log.join("\n")));
 
-const ICON: Record<string, string> = { ok: "✓", warn: "!", fail: "✕" };
+const ICON: Record<string, string> = { ok: "✓", warn: "!", fail: "✕", info: "i", optional: "–" };
 
 function renderProgress() {
   show($("cancel"), rebuildRunning);

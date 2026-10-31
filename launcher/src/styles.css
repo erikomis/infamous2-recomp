@@ -424,16 +424,35 @@ input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rg
 .card.step.done .step-no { background: rgba(79, 209, 139, 0.15); border-color: var(--ok); color: var(--ok); box-shadow: none; }
 .card.step.disabled { opacity: 0.5; pointer-events: none; }
 .card.step > .hint { margin: 6px 0 12px; }
-.prereqs li { align-items: center; }
-/* everything in place: a compact grid instead of a long list */
-.card.step.done .prereqs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 20px; }
-.prereqs .what { flex: 1; min-width: 0; }
-.prereqs .what b { display: block; font-weight: 600; }
-.prereqs button { flex: none; padding: 4px 10px; font-size: 12px; }
-.prereqs .tip { display: block; color: var(--text); margin: 2px 0; }
-.prereqs .tip:empty { display: none; }
-.prereqs .msg { display: block; word-break: normal; overflow-wrap: anywhere; font-size: 12px; }
-.prereqs .check-fail .msg { color: #e48a8a; }
+/* "What this computer needs": two columns of top-aligned items (one on a
+   narrow window), each a status badge, the name, one short detail line, the
+   path on a line of its own (shortened; the whole path in the tooltip) and
+   the item's actions under the text */
+.prereqs { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; align-items: start; }
+@media (max-width: 900px) { .prereqs { grid-template-columns: minmax(0, 1fr); } }
+.prereqs .check { display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.prereqs .check-ico {
+  width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px;
+  font-size: 11px; font-weight: 700; line-height: 1; background: var(--panel-3); color: var(--muted);
+}
+.prereqs .check-body { min-width: 0; display: grid; gap: 2px; }
+.prereqs .check-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.prereqs .check-title b { font-weight: 600; }
+.prereqs .check-tag { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--line-2); border-radius: 99px; padding: 0 6px; }
+.prereqs .check-detail { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.prereqs .check-detail code { font: 11.5px var(--mono); color: var(--text); }
+.prereqs .check-path { color: var(--muted); font: 11.5px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prereqs .check-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.prereqs .check-actions button { padding: 4px 10px; font-size: 12px; }
+.prereqs .check-ok .check-ico { background: rgba(79, 209, 139, 0.15); color: var(--ok); }
+.prereqs .check-warn .check-ico { background: rgba(255, 138, 43, 0.16); color: var(--warm); }
+.prereqs .check-fail .check-ico { background: rgba(255, 93, 93, 0.16); color: var(--bad); }
+.prereqs .check-fail .check-detail { color: #e48a8a; }
+.prereqs .check-info .check-ico { background: var(--panel-3); color: var(--muted); font-style: italic; font-family: Georgia, serif; }
+.prereqs .check-optional .check-ico { background: transparent; border: 1px dashed var(--line-2); color: var(--dim); }
+.prereqs .check-optional .check-title b { color: var(--muted); font-weight: 500; }
+.prereqs .check-hint { color: var(--text); font-size: 12px; }
+#card-prereqs .row.actions { margin-top: 14px; }
 .summary { margin: 12px 0 4px; padding: 10px 14px; border-radius: var(--radius); background: var(--panel-2); border: 1px solid var(--line); display: grid; gap: 6px; }
 .summary .ico { display: inline-block; width: 14px; font-weight: 700; }
 .summary .ok-ico { color: var(--ok); }
