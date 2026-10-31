@@ -610,7 +610,7 @@
               <span id="prereq-summary" class="pill"></span>
             </div>
             <p class="hint" data-i18n="prereq.lead"></p>
-            <ul id="prereqs" class="list prereqs"></ul>
+            <ul id="prereqs" class="prereqs"></ul>
             <div id="prereq-brew-missing" class="notice hidden">
               <p data-i18n="prereq.noBrew"></p>
               <code class="preview">/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</code>
@@ -619,7 +619,7 @@
                 <button id="copy-brew" class="link" data-i18n="prereq.copyCmd"></button>
               </div>
             </div>
-            <div class="row">
+            <div class="row actions">
               <button id="prereq-fix" class="primary hidden" data-i18n="prereq.fix">Instalar o que falta</button>
               <button id="prereq-recheck" data-i18n="prereq.recheck">Verificar de novo</button>
               <button id="setup-cancel" class="danger hidden" data-i18n="install.cancel">Cancelar</button>
