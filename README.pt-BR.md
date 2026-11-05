@@ -10,7 +10,7 @@ gráficos em Metal. Não é um emulador.
 **O jogo inicia, mostra os menus e as cutscenes, e New Marais é jogável**, a
 ~38-40 fps em Macs com Apple silicon nas execuções sem janela (o jogo não tem
 limite de 30 fps no gameplay). Baixe o app na
-[**release alpha v0.2.12**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+[**release alpha v0.2.16**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16)
 e ele recompila o jogo a partir da sua própria cópia ([como](#baixar-e-jogar));
 a partir da v0.2.7, o app se atualiza sozinho.
 
@@ -66,8 +66,8 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Pacotes de texturas e mais efeitos de imagem (claridade, curvas, predefinições de cor) | 🧪 desde a v0.2.8, falta testar com janela |
 | Saves e troféus (em `~/Library/Application Support`), gerenciador de saves no app | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), outros idiomas que a sua cópia traz, DLC | ✅ |
-| O app: instalar, recompilar, jogar, ajustes, controles, saves, modo de depuração | ✅ [alpha v0.2.12](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12) |
-| O app se atualiza sozinho | 🧪 desde a v0.2.7 (da v0.2.8 à v0.2.12 foram oferecidas por ele), falta a confirmação do Erik |
+| O app: instalar, recompilar, jogar, ajustes, controles, saves, modo de depuração | ✅ [alpha v0.2.16](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16) |
+| O app se atualiza sozinho | 🧪 desde a v0.2.7 (da v0.2.8 à v0.2.16 foram oferecidas por ele), falta a confirmação do Erik |
 | Adicionar à Steam (Big Picture com o controle) | 🧪 desde a v0.2.7, falta testar com a Steam |
 | Jogo inteiro | ❓ ninguém passou ainda de 1% |
 | Linux e Windows | ⏳ planejado |
@@ -80,8 +80,8 @@ Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
 (a versão da PSN `NPUA80638`, por exemplo instalada no
 [RPCS3](https://rpcs3.net) com a licença `.rap`).
 
-1. Baixe o `infamous2-recomp_0.2.12_aarch64.dmg` da
-   [release v0.2.12](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+1. Baixe o `infamous2-recomp_0.2.16_aarch64.dmg` da
+   [release v0.2.16](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16)
    (até agora toda release é pré-release; a
    [página de releases](https://github.com/erikomis/infamous2-recomp/releases) mostra se saiu uma mais nova)
    e arraste o app para Aplicativos. Ele não é notarizado: na primeira vez,
@@ -205,10 +205,11 @@ O que está sendo feito agora (detalhes no [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md))
   precisam de vetores de movimento.
 - **Windows e Linux:** planejados.
 - **Pull requests para o [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
-  todos os PRs deste port até o #375 foram aceitos em 2026-10-19. Abertos: a
-  rodada 6 (#470, #472, #476), a 7 (#502, #503, #510, #511) e a 8 (#537,
-  #541-#545), mais a issue #546, uma proposta de resolução interna, pacotes
-  de texturas e mais ajustes de cor no upstream.
+  68 PRs do Erik já foram aceitos; o último lote, em 2026-10-26, levou quase
+  todas as rodadas 6 a 8 e a correção do polygon offset (#562). Alguns ainda
+  estão abertos (entre eles o #470 e o #545), mais a issue #546, uma proposta
+  de resolução interna, pacotes de texturas e mais ajustes de cor no
+  upstream.
 
 ## Montar a partir do código
 
@@ -461,7 +462,10 @@ Opções úteis:
 | `PS3RECOMP_ENG_FBFETCH=0` | os decalques do G-buffer voltam a ler o pixel de baixo por cópias em vez do framebuffer fetch do Metal (ligado por padrão desde a v0.2.11: rostos certos em 1080p ou mais, tempo de GPU em 1080p de 19 → 9 ms por quadro) |
 | `PS3RECOMP_ENG_DEPTH_BOUNDS=0` | ignora o teste de depth bounds do RSX (emulado no shader por padrão desde a v0.2.11: as cascatas de sombra do sol e os volumes de luz e de oclusão); também ao vivo |
 | `PS3RECOMP_ENG_SHADOW_CMP=0`, `PS3RECOMP_ENG_ZTEX_CROP=0` | a comparação antiga do shadow map / a leitura antiga, esticada, do shadow map (os dois corrigidos na v0.2.12: sombras do sol como no PS3); ao vivo |
-| `PS3RECOMP_ENG_POLY_OFFSET=0` | o draw antigo, sem o polygon offset (os objetos que projetam sombra no jogo usam um; sem ele, faixas de acne em paredes e frisos desde a v0.2.12); ao vivo |
+| `PS3RECOMP_ENG_POLY_OFFSET=0` | o draw antigo, sem o polygon offset (os objetos que projetam sombra no jogo usam um; respeitado desde a v0.2.13, sem ele voltam as faixas de acne azul em paredes e frisos da v0.2.12); ao vivo |
+| `PS3RECOMP_ENG_DEPTH_CLAMP=0` | os objetos que projetam sombra do sol voltam a ser cortados nos planos near/far em vez de terem a profundidade limitada, como o jogo pede (desde a v0.2.14: as sombras de prédios não somem mais de perto); ao vivo |
+| `PS3RECOMP_ENG_VCACHE_PRUNE=1` | a limpeza do cache de vértices da v0.2.13 (desde a v0.2.14 ele descarta primeiro o que só foi usado num quadro, e não recomeça do zero nas ruas movimentadas) |
+| `PS3RECOMP_ENG_SHADE_BACKFACE=0` | as superfícies do cenário viradas para longe do sol voltam a ler o shadow map em vez de contarem como na sombra (desde a v0.2.16: fim das grades de pontos azuis em paredes, postes e caixotes ao entardecer); ao vivo |
 
 `tools/play_dump.sh <nome>` abre o jogo na janela e, a cada Enter no terminal,
 salva aquele frame (render targets, shaders, log de passes) em `out/<nome>/`:
