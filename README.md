@@ -10,7 +10,7 @@ graphics on Metal. It is not an emulator.
 **It boots, shows its menus and cutscenes, and New Marais is playable**, at
 ~38-40 fps on Apple silicon in headless runs (the game has no 30 fps cap in
 gameplay). Get the app from the
-[**v0.2.12 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+[**v0.2.16 alpha release**](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16)
 and it rebuilds the game from your own copy ([how](#download-and-play)); from
 v0.2.7 on, the app updates itself.
 
@@ -65,8 +65,8 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Texture packs and more image effects (clarity, curves, colour presets) | 🧪 since v0.2.8, waiting for a windowed test |
 | Saves and trophies (in `~/Library/Application Support`), saves manager in the app | ✅ |
 | Brazilian Portuguese dub and subtitles (default), other languages your copy ships, DLC | ✅ |
-| The app: install, rebuild, play, settings, controls, saves, debug mode | ✅ [v0.2.12 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12) |
-| The app updates itself | 🧪 since v0.2.7 (v0.2.8 to v0.2.12 were offered through it), waiting for Erik's confirmation |
+| The app: install, rebuild, play, settings, controls, saves, debug mode | ✅ [v0.2.16 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16) |
+| The app updates itself | 🧪 since v0.2.7 (v0.2.8 to v0.2.16 were offered through it), waiting for Erik's confirmation |
 | Add to Steam (Big Picture with the controller) | 🧪 since v0.2.7, waiting for a test with Steam |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Linux and Windows | ⏳ planned |
@@ -79,8 +79,8 @@ You need an Apple-silicon Mac and your own copy of inFAMOUS 2 (the PSN
 release `NPUA80638`, for example installed in [RPCS3](https://rpcs3.net) with
 its `.rap` licence).
 
-1. Download `infamous2-recomp_0.2.12_aarch64.dmg` from the
-   [v0.2.12 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.12)
+1. Download `infamous2-recomp_0.2.16_aarch64.dmg` from the
+   [v0.2.16 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16)
    (every release so far is a pre-release; the
    [releases page](https://github.com/erikomis/infamous2-recomp/releases) lists any newer one)
    and drag the app to Applications. It is not notarized: the first time,
@@ -199,10 +199,10 @@ What is being worked on now (details in [ROADMAP.md](ROADMAP.md)):
   temporal ones need motion vectors.
 - **Windows and Linux:** planned.
 - **Pull requests to [ps3recomp](https://github.com/sp00nznet/ps3recomp):**
-  all of this port's PRs up to #375 were merged on 2026-10-19. Open: round 6
-  (#470, #472, #476), round 7 (#502, #503, #510, #511) and round 8 (#537,
-  #541-#545), plus issue #546, a proposal for internal resolution, texture
-  packs and more grading upstream.
+  68 of Erik's PRs have been merged; the latest batch, on 2026-10-26, took
+  most of rounds 6 to 8 and the polygon-offset fix (#562). A few are still
+  open (#470 and #545 among them), plus issue #546, a proposal for internal
+  resolution, texture packs and more grading upstream.
 
 ## Building from source
 
@@ -453,7 +453,10 @@ Options worth knowing:
 | `PS3RECOMP_ENG_FBFETCH=0` | the G-buffer decals read the pixel under them through copies again instead of Metal framebuffer fetch (on by default since v0.2.11: faces right at 1080p and above, GPU time at 1080p 19 → 9 ms a frame) |
 | `PS3RECOMP_ENG_DEPTH_BOUNDS=0` | ignores the RSX depth-bounds test (emulated in the shader by default since v0.2.11: the sun-shadow cascades and the light and occlusion volumes); also live |
 | `PS3RECOMP_ENG_SHADOW_CMP=0`, `PS3RECOMP_ENG_ZTEX_CROP=0` | the old shadow-map compare direction / the old stretched shadow-map read (both fixed in v0.2.12: sun shadows as on the PS3); live |
-| `PS3RECOMP_ENG_POLY_OFFSET=0` | the old draw without the polygon offset (the game's shadow casters set one; without it, acne bands on walls and trims since v0.2.12); live |
+| `PS3RECOMP_ENG_POLY_OFFSET=0` | the old draw without the polygon offset (the game's shadow casters set one; honoured since v0.2.13, without it the blue acne bands on walls and trims of v0.2.12 come back); live |
+| `PS3RECOMP_ENG_DEPTH_CLAMP=0` | the sun-shadow casters clipped at the near/far planes again instead of depth-clamped as the game asks (since v0.2.14: building shadows no longer vanish up close); live |
+| `PS3RECOMP_ENG_VCACHE_PRUNE=1` | the vertex cache's v0.2.13 prune (since v0.2.14 it drops one-frame entries first, so it no longer starts over in busy streets) |
+| `PS3RECOMP_ENG_SHADE_BACKFACE=0` | world surfaces facing away from the sun read the shadow map again instead of counting as shaded (since v0.2.16: no more blue dot grids on walls, posts and crates at dusk); live |
 
 `tools/play_dump.sh <name>` opens the game in a window and, each time Return is
 pressed in its terminal, saves that frame (render targets, shaders, pass log)
