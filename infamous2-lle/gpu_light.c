@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "spu_context.h"
@@ -134,7 +135,17 @@ static void lcall_ls(spu_context* ctx, uint32_t target, uint32_t ret)
 static int time_up(spu_context* ctx, uint32_t ret)
 {
     lcall_ls(ctx, ls32(ctx, 0x9E10), ret);
-    return ctx->gpr[3]._u32[0] != 0;
+    int up = ctx->gpr[3]._u32[0] != 0;
+    /* PS3RECOMP_ENG_GPU_LIGHT_YIELD=<n> (diagnostic): also report the budget
+     * spent on every n-th check -- what a starved SPU thread sees when the
+     * decrementer runs on while it is descheduled. */
+    { static int every = -1; static unsigned calls;
+      if (every < 0) { const char* e = getenv("PS3RECOMP_ENG_GPU_LIGHT_YIELD"); every = e ? atoi(e) : 0; }
+      if (every > 0 && __atomic_add_fetch(&calls, 1, __ATOMIC_RELAXED) % (unsigned)every == 0) up = 1; }
+    if (up) { static unsigned n;
+              if (__atomic_add_fetch(&n, 1, __ATOMIC_RELAXED) <= 8)
+                  fprintf(stderr, "[gpu light] job yields (time budget spent) at 0x%X\n", ret); }
+    return up;
 }
 
 /* GETLLAR / PUTLLC of the iterator's line into LS 0x9E80, with the channel
@@ -207,11 +218,14 @@ static uint32_t light_skip_step(spu_context* ctx, uint32_t state_ea)
         const uint32_t n = 1 + grab_rest(ctx);           /* tiles t .. t+n-1 are ours */
         if (t == 0) light_tap_constants(ctx);            /* tile (0,0): what light_tile_gpu did */
         if (n > 1) add_done(ctx, n - 1);
-        { /* PS3RECOMP_ENG_GPU_LIGHT_DELAY_US=<us>: hold the final completion
-           * that long (A/B for a timing assumption in the PPU kicker). */
-          static int dly = -1;
-          if (dly < 0) { const char* e = getenv("PS3RECOMP_ENG_GPU_LIGHT_DELAY_US"); dly = e ? atoi(e) : 0; }
-          if (dly > 0) usleep((useconds_t)dly); }
+        { /* PS3RECOMP_ENG_GPU_LIGHT_DELAY_US=<us>[:<n>]: hold the final
+           * completion that long (A/B for a timing assumption in the PPU
+           * kicker), on every n-th pass only with :n (a starved SPU thread). */
+          static int dly = -1, every = 1; static unsigned cnt;
+          if (dly < 0) { const char* e = getenv("PS3RECOMP_ENG_GPU_LIGHT_DELAY_US"); dly = e ? atoi(e) : 0;
+                         const char* c = e ? strchr(e, ':') : 0; every = c && atoi(c + 1) > 0 ? atoi(c + 1) : 1; }
+          if (dly > 0 && __atomic_add_fetch(&cnt, 1, __ATOMIC_RELAXED) % (unsigned)every == 0)
+              usleep((useconds_t)dly); }
         lcall(ctx, LJ(00005748), 0x67C0);                /* last one: label 135, next pass */
         __atomic_add_fetch(&g_lightskip_tiles, n, __ATOMIC_RELAXED);
         if (time_up(ctx, 0x68E8)) return 1;

@@ -1,0 +1,149 @@
+load-hang.patch (2026-11-05, branch fix/load-hang): toolkit changes on top of the toolkit patch of main 0cdea24.
+
+GCM_STALL_GAP_MS (live, default 100; 0 = wall time as before; toggle after PS3T_ENG_SHADE_BACKFACE):
+the FIFO walker's two wall-clock bounds -- the self-JUMP park grace (GCM_PARK_GRACE_MS, 1000 in the
+port's run.sh) and the bounded semaphore acquire (GCM_SEMA_ACQUIRE_MS, 200) -- count only time the
+walker saw pass in steps of at most that many ms. A longer gap between two checks of the same wait
+means the process stood still (starved Mac, paging, SIGSTOP); it is not counted and is logged once
+("<n> ms with no drain pass (process stalled?) not counted against a park/acquire bound"). Before,
+a stall of 1 s or more inside a park "expired" it: the jump-park resync dropped the rest of the
+frame (only the ref fences are rescued), which is the state the 2026-10-23 city-load hangs were
+left in (get on the ring JUMP at put, park_off 0, label 135 at 0).
+
+Diagnostics in the "ref stuck" report: the flip state (status, request/tick sequence, request
+count, undelivered vblank/flip handler bits) and PS3_HANG_PEEK=<ea>:<len>[,...] (hex) guest words.
+
+
+--- a/include/ps3emu/ps3_toggles.h
++++ b/include/ps3emu/ps3_toggles.h
+@@ -86,6 +86,7 @@
+     PS3T_ENG_CLAMP_CULL_FLIP,/* rsx_draw_engine.c: flip clamped draws (diagnostic)*/
+     PS3T_ENG_SHADOW_D24,     /* rsx_draw_engine.c: shadow compare precision (diagnostic) */
+     PS3T_ENG_SHADE_BACKFACE, /* rsx_draw_engine.c: back-facing world = sun-shadowed */
++    PS3T_GCM_STALL_GAP,      /* cellGcmSys.c: park/acquire bounds skip stalls (ms) */
+     PS3T_COUNT
+ };
+ 
+@@ -142,6 +143,7 @@
+         { "PS3RECOMP_ENG_CLAMP_CULL_FLIP", PS3_TK_ATOI, 0 },
+         { "PS3RECOMP_ENG_SHADOW_D24",   PS3_TK_ATOI, 0 },
+         { "PS3RECOMP_ENG_SHADE_BACKFACE", PS3_TK_NOT0, 1 },
++        { "GCM_STALL_GAP_MS",           PS3_TK_ATOI, 100 },
+     };
+     return &d[id];
+ }
+
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -19,6 +19,7 @@
+ #include "rsx_commands.h"                    /* rsx_state, rsx_process_command_buffer */
+ #include "../../include/ps3emu/guest_call.h" /* g_ps3_guest_caller for direct handler dispatch */
+ #include "../../include/ps3emu/ps3_ftrace.h"  /* PS3_FTRACE timeline */
++#include "../../include/ps3emu/ps3_toggles.h" /* GCM_STALL_GAP_MS, live */
+ 
+ /* Guest EA of the GCM context (begin/end/current/callback) the title writes its
+  * command stream into; recorded by cellGcmSetupContext, drained by the RSX. */
+@@ -896,6 +897,43 @@
+     return ms;
+ }
+ #define GCM_PARK_GRACE_MS gcm_park_grace_ms()
++/* The walker's two wall-clock bounds -- the park grace above and the
++ * semaphore acquire's (GCM_SEMA_ACQUIRE_MS) -- are there for a producer that
++ * never comes. They must not fire because the whole process stood still: on a
++ * starved Mac (load 13-16, mediaanalysisd and another recomp) a game thread
++ * can be off the CPU for seconds and frames came minutes apart. Measured in
++ * wall time, a park whose patch was one store away "expired" during such a
++ * stall, the jump-park resync dropped the frame's commands with its fence,
++ * and inFAMOUS 2 hung for good at the New Marais load. So they count only
++ * time the walker saw pass in small steps: the drain re-checks a park or an
++ * acquire every pass (about 1 ms), and a gap between two checks longer than
++ * GCM_STALL_GAP_MS (default 100) means nobody ran -- that gap is not counted.
++ * GCM_STALL_GAP_MS=0 counts all wall time, as before. Live (PS3_TOGGLE_FILE). */
++static int s_stall_gap_ms = -1;
++static void gcm_stall_gap_set(int id, int v) { (void)id; __atomic_store_n(&s_stall_gap_ms, v, __ATOMIC_RELAXED); }
++static unsigned gcm_stall_gap_ms(void)
++{
++    int v = __atomic_load_n(&s_stall_gap_ms, __ATOMIC_RELAXED);
++    if (__builtin_expect(v < 0, 0)) v = ps3_toggle_watch(PS3T_GCM_STALL_GAP, gcm_stall_gap_set);
++    return v < 0 ? 0u : (unsigned)v;
++}
++/* Run time of one wait: restart it, then add each check's step. */
++typedef struct { unsigned long long last, run; } gcm_run_clock;
++static void gcm_run_clock_start(gcm_run_clock* c, unsigned long long now) { c->last = now; c->run = 0; }
++static unsigned long long gcm_run_clock_ms(gcm_run_clock* c, unsigned long long now)
++{
++    const unsigned long long step = now > c->last ? now - c->last : 0;
++    const unsigned cap = gcm_stall_gap_ms();
++    c->last = now;
++    if (!cap || step <= cap) c->run += step;
++    else {
++        static unsigned n;
++        if (n++ < 16)
++            fprintf(stderr, "[cellGcmSys] %llu ms with no drain pass (process stalled?) not counted "
++                            "against a park/acquire bound\n", step);
++    }
++    return c->run;
++}
+ /* GCM_PARK_STATS=1: every 30 s, how the parks went since the last line:
+  * stops at a new park, parks left through their patch (and the longest wait
+  * for one), parks left another way, jump-park resyncs. */
+@@ -1715,6 +1753,28 @@
+                       in ? "running for" : "idle,", in ? ms - in : 0ull, s_drain_why,
+                       end ? ms - end : 0ull, cnt - last_count);
+               last_count = cnt; }
++            /* The flip side: a title that writes its next put from the flip
++             * handler (inFAMOUS 2) waits here when a completion never reaches
++             * it. Status, request/tick sequence, undelivered handler bits. */
++#ifdef _WIN32
++            { const unsigned pend = (unsigned)s_gcm_pending;
++#else
++            { const unsigned pend = (unsigned)atomic_load(&s_gcm_pending);
++#endif
++              fprintf(stderr, "[cellGcmSys]   flip: status=%u req_seq=%u tick_seq=%u requests=%u pending=0x%X\n",
++                      s_flip_status, s_flip_req_seq, s_flip_tick_seq, s_flip_request_count, pend); }
++            /* PS3_HANG_PEEK=<ea>:<len>[,...] (hex): guest words to print with
++             * the report -- a title's own sync state, read at the stall. */
++            { const char* pk = getenv("PS3_HANG_PEEK");
++              if (pk && *pk) { char buf[512]; strncpy(buf, pk, sizeof buf - 1); buf[sizeof buf - 1] = 0;
++                  for (char* tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
++                      unsigned ea = 0, len = 4;
++                      if (sscanf(tok, "%x:%x", &ea, &len) < 1) continue;
++                      if (len > 0x100) len = 0x100;
++                      fprintf(stderr, "[cellGcmSys]   peek 0x%08X:", ea);
++                      for (unsigned o = 0; o < len; o += 4) fprintf(stderr, " %08X", vm_read32(ea + o));
++                      fputc('\n', stderr);
++                  } } }
+             gcm_fifo_dump_around(s_fifo_getoff);
+             /* PS3_HANG_DUMP=1 (the launcher's debug mode): where every guest
+              * thread is at that moment, not up to a minute later. */
+@@ -1998,12 +2058,12 @@
+                   if (put != s_fifo_getoff) {
+                       extern unsigned long long ps3_ms_now(void);
+                       static u32 park_put;
+-                      static unsigned long long grace_since;   /* restarts when put moves */
++                      static gcm_run_clock grace;               /* restarts when put moves */
+                       const unsigned long long now = ps3_ms_now();
+                       if (s_park_off != s_fifo_getoff || park_put != put) {
+                           if (s_park_off != s_fifo_getoff) { s_park_since = now; s_ps_parks++; }
+-                          s_park_off = s_fifo_getoff; park_put = put; grace_since = now;
+-                      } else if (now - grace_since >= GCM_PARK_GRACE_MS) {
++                          s_park_off = s_fifo_getoff; park_put = put; gcm_run_clock_start(&grace, now);
++                      } else if (gcm_run_clock_ms(&grace, now) >= GCM_PARK_GRACE_MS) {
+                           s_park_off = 0; s_park_since = 0; s_ps_resync++;
+                           gcm_fifo_dump_around(s_fifo_getoff);
+                           gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
+@@ -2106,10 +2166,12 @@
+                  * acquires the label its SPU lighting writes each frame: waiting
+                  * here is what orders the RSX's sampling after that write. */
+                 static u32 b_off, b_val; static unsigned long long b_t0;
++                static gcm_run_clock b_run;   /* time the wait ran (GCM_STALL_GAP_MS) */
+                 extern unsigned long long ps3_ms_now(void);
+                 const unsigned long long now = ps3_ms_now();
+-                if (!b_t0 || b_off != s_sema_offset || b_val != v) { b_off = s_sema_offset; b_val = v; b_t0 = now; }
+-                if (!blk_ms || now - b_t0 < blk_ms) {
++                if (!b_t0 || b_off != s_sema_offset || b_val != v) { b_off = s_sema_offset; b_val = v; b_t0 = now;
++                                                                      gcm_run_clock_start(&b_run, now); }
++                if (!blk_ms || gcm_run_clock_ms(&b_run, now) < blk_ms) {
+                     if (PS3_FT_ON() && !s_ft_sema_t0) s_ft_sema_t0 = ps3_ft_now();
+                     sem_blocked = 1; break;
+                 }
