@@ -194,8 +194,19 @@ static int g_flip_immediate = 0;
 extern "C" void rsx_metal_backend_note_guest_frame(void);
 #endif
 
+/* game_clock.c: PS3_GCLOCK_LOG (the game's own frame clock, per frame). */
+extern "C" void infamous2_gclock_frame(void);
+/* Toolkit sys_timer.c: PS3_TB_SCALE, the guest timebase's rate in percent.
+ * Weak: a toolkit without the knob links, and the toggle does nothing. */
+#if defined(_MSC_VER)
+extern "C" volatile int ps3_tb_scale_pct;
+#else
+extern "C" __attribute__((weak)) volatile int ps3_tb_scale_pct;
+#endif
+
 static void present_guest_frame(void)
 {
+    infamous2_gclock_frame();
     const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
     rsx_backend_present();
     if (ft_t0) ps3_ft_span(PS3_FT_PRESENT, 0, 0, 0, ft_t0, ps3_ft_now());
@@ -242,6 +253,14 @@ static DWORD WINAPI frame_clock(LPVOID)
     { const char* e = getenv("PS3_HOT_QOS");
       if (e && atoi(e)) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL); }
 
+    /* PS3_TB_SCALE=<percent>: the guest timebase runs at that rate (toolkit
+     * sys_timer.c). inFAMOUS 2 takes its frame delta from mftb, so 33 makes
+     * it step its simulation as if it ran at 3x the frame rate (slowed down
+     * in wall time): a frame-rate-dependence check that does not need a fast
+     * machine. Default 100. Read live here (PS3_TOGGLE_FILE). */
+    int tb_scale_env = 100;
+    { const char* e = getenv("PS3_TB_SCALE"); if (e && atoi(e) > 0) tb_scale_env = atoi(e); }
+
     ULONGLONG next_tick = GetTickCount64();
 
     for (;;) {
@@ -261,6 +280,9 @@ static DWORD WINAPI frame_clock(LPVOID)
          * A/B flips a knob inside one run (tools/ab_live.sh). Without the
          * variable this is one predictable branch. */
         ps3_toggles_poll();
+
+        {   const int tb = ps3_toggle_get("PS3_TB_SCALE", tb_scale_env);
+            if (&ps3_tb_scale_pct && tb > 0 && tb != ps3_tb_scale_pct) ps3_tb_scale_pct = tb; }
 
         int fired = 0;
         while ((long long)(now - next_tick) >= 0 && fired < 240) {
