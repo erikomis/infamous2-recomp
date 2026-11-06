@@ -1,0 +1,695 @@
+lifter-codegen.patch: on top of the toolkit as patched by infamous2-lle/patches/ps3recomp-fork-770660a-with-upstream-prs.patch at main 9a72070 (diffed against that tree, ps3recomp-fork-lift-base; it touches none of the files main 0cdea24 changed). 2026-11-05.
+
+Lean single-precision helpers in the lifted SPU code, plus register locals (opt-in).
+
+* runtime/spu/spu_helpers.h: spu_{fa,fs,fm,fma,fms,fnms,fceq,fcgt,fcmeq,fcmgt}_lean, bit-identical
+  to the plain forms and the exact scalar lanes, about half the instructions on the common path
+  (llvm-mca, M4: fa 76 -> 31, fm 67 -> 36, fma 103 -> 60, fcgt 50 -> 19). Exponent-0 operands
+  are made +0 up front; fm is the exact double product narrowed with round-to-odd; fa/fs work in
+  single precision with TwoSum telling which way the sum rounded (no exponent-gap fallback);
+  fma moves the double sum one ulp toward zero when TwoSum says the exact sum is inside it (no
+  24-bit-boundary fallback); compares are one integer compare. Exact lanes stay as the cold
+  fallback (extended range, overflow).
+* tools/spu_lifter.py: fa/fs/fm/fma/fms/fnms/fceq/fcgt/fcmeq/fcmgt lift to the _lean helpers
+  (SPU_LIFT_LEAN_FLOAT=0 or --no-lean-float = the plain helpers, byte-identical to the lift
+  before this patch). reg_localize(): a lifted function's SPU registers in C locals, written
+  back only before exits and runtime calls (may-dirty dataflow over labels/gotos), re-read after
+  them; functions with a shape it does not model are left alone. Opt-in (SPU_LIFT_REG_LOCALS=1
+  or --reg-locals): bit-exact, but no gain on inFAMOUS 2 (exit write-backs and spills of ~40
+  live registers cost what the per-instruction stores saved).
+* runtime/spu/tests/test_spu_float_lean.c (0 mismatches, 24M adversarial vectors x 10 ops),
+  tools/test_spu_reg_locals.py (structure + compiled old-vs-new semantics on 2000 random states).
+
+Verified on the port: every lifted function (14k, 72 images) run on seeded random register files
+and local stores in both forms through a stub runtime, every runtime call (with the register
+file at that moment), exit and final state compared: 0 mismatches for register locals (35.6k
+completed runs); for lean float the only differing line also differs between two builds of the
+same source (a layout-dependent harness artifact), and wrapping every lean call with a check
+against the exact lanes found no differing result. Headless New Marais walks: 14 x 300 s with
+the lean forms, no fault, hang or new log line; walk frames look the same as base.
+Measured (interleaved headless walks; quiet machine, load 6-8): 720p walk 34.1 -> 35.1 fps
+(+3.0%), SPU busy 25.9 -> 23.6 ms/frame (-9%), the RSX thread (drain 22 + present 5 ms) is now
+the limit; 1080p walk 29.4 -> 31.6 fps (+7.5%), SPU 30.3 -> 26.7 ms (-12%). See ROADMAP.md
+(Performance, "SPU: leaner single-precision helpers") for the noisy rounds and 1440p.
+rebuild.py relifts by itself (its spu/jobs/firmware steps are keyed on the toolkit patch); a
+development tree: infamous2-lle/tools/relift_spu.sh.
+
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index 7b9ade2..bf484ba 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -858,6 +858,130 @@ SPU__SF_V2(spu_fcmgt, spu__sf_mag(x) >  spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
+ #undef SPU__SF_V2
+ #undef SPU__SF_V3
+ 
++/* ---- single precision, lean forms (what spu_lifter.py emits by default) ----------------------
++ * spu_{fa,fs,fm,fma,fms,fnms,fceq,fcgt,fcmeq,fcmgt}_lean: bit-identical to the forms above (and to
++ * the exact lanes spu__*_lane), with about half the instructions on the common path. A profile of
++ * the New Marais walk (2026-11-05, Time Profiler with line tables) put ~40% of the SPU threads'
++ * time in the fa/fm/fma fast paths above, which test each operand's class before computing and
++ * send exponent gaps over 29 and fma results on a 24-bit boundary to the scalar fix-up.
++ * Here:
++ *  - exponent-0 operands are made +0 first (spu__ln_flush), so zeros, denormals and ordinary
++ *    singles all take the vector path; an extended-range operand (exponent 255) is Inf/NaN as an
++ *    IEEE single or double and shows up in the result's range check;
++ *  - fm: the double product is exact; |p| < 2^128 (FACGT, false for Inf/NaN) or the exact lanes;
++ *    its significand cut to 24 bits is narrowed with round-to-odd (FCVTXN): exact for a normal
++ *    single, and a value under 2^-126 stays under it (FCVTN could round 2^-126 - 2^-150 up to
++ *    2^-126); exponent-0 results -> +0;
++ *  - fa/fs: in single precision. The round-to-nearest sum s and its exact error e (TwoSum, exact
++ *    for any finite single sum under round-to-nearest, subnormals included) give the truncation:
++ *    s, or one step toward zero (the bit pattern minus 1) when e is nonzero and of the opposite
++ *    sign. No exponent-gap limit. A sum with exponent 255 (overflow, extended operands) takes the
++ *    exact lanes;
++ *  - fma/fms/fnms: the product exact in double, the sum rounded once, TwoSum's error says which
++ *    side of s the exact sum lies on; s moved one double ulp toward zero when the exact sum is
++ *    inside it (err * s < 0: |s| >= 2^-299 and |err| >= 2^-352 here, so the product cannot
++ *    underflow) truncates to the exact sum's truncation, boundary or not;
++ *  - compares: zeros made +0, then sign-magnitude as two's complement (x ^ (x >>s 31) >> 1),
++ *    one integer compare.
++ * They assume the host's default floating-point mode (round to nearest, no flush-to-zero), as the
++ * forms above do. tests/test_spu_float_lean.c checks them against the exact lanes.
++ * SPU_LIFT_LEAN_FLOAT=0 (or spu_lifter.py --no-lean-float) lifts to the forms above instead. */
++#if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++SPU__NV_INLINE uint32x4_t spu__ln_flush(uint32x4_t x) { return vandq_u32(x, vtstq_u32(x, vdupq_n_u32(0x7F800000u))); }
++SPU__NV_INLINE int spu__ln_all(uint32x4_t m) { return vminvq_u32(m) == 0xFFFFFFFFu; }
++/* |lo|, |hi| < 2^128 (false for Inf/NaN), as four lanes */
++SPU__NV_INLINE uint32x4_t spu__ln_range(float64x2_t lo, float64x2_t hi) {
++    const float64x2_t lim = vdupq_n_f64(0x1p128);
++    return vuzp1q_u32(vreinterpretq_u32_u64(vcaltq_f64(lo, lim)), vreinterpretq_u32_u64(vcaltq_f64(hi, lim)));
++}
++/* two doubles (as bits) cut to 24-bit significands, narrowed with round-to-odd, exponent-0 -> +0 */
++SPU__NV_INLINE uint32x4_t spu__ln_narrow(uint64x2_t lo, uint64x2_t hi) {
++    const uint64x2_t tm = vdupq_n_u64(~0x1FFFFFFFull);
++    const float32x2_t l = vcvtx_f32_f64(vreinterpretq_f64_u64(vandq_u64(lo, tm)));
++    return spu__ln_flush(vreinterpretq_u32_f32(vcvtx_high_f32_f64(l, vreinterpretq_f64_u64(vandq_u64(hi, tm)))));
++}
++/* The exact lanes, out of line, vectors in and out (a u128 return kept the fast path's result
++ * in general registers, see SPU__NV_LANES). */
++SPU__NV_SLOW uint32x4_t spu__ln_fa_slow(uint32x4_t a, uint32x4_t b, uint32_t negb) {
++    SPU__NV_LANES(a, x); SPU__NV_LANES(b, y);
++    for (int i = 0; i < 4; i++) x[i] = spu__fa_lane(x[i], y[i] ^ negb);
++    return vld1q_u32(x);
++}
++SPU__NV_SLOW uint32x4_t spu__ln_fm_slow(uint32x4_t a, uint32x4_t b) {
++    SPU__NV_LANES(a, x); SPU__NV_LANES(b, y);
++    for (int i = 0; i < 4; i++) x[i] = spu__fm_lane(x[i], y[i]);
++    return vld1q_u32(x);
++}
++SPU__NV_SLOW uint32x4_t spu__ln_fma_slow(uint32x4_t a, uint32x4_t b, uint32x4_t c, uint32_t negp, uint32_t negc) {
++    SPU__NV_LANES(a, x); SPU__NV_LANES(b, y); SPU__NV_LANES(c, z);
++    for (int i = 0; i < 4; i++) x[i] = spu__fma_lane(x[i], y[i], z[i], negp, negc);
++    return vld1q_u32(x);
++}
++SPU__NV_INLINE u128 spu__ln_fa(u128 a, u128 b, uint32_t negb) {
++    const uint32x4_t xa = vld1q_u32(a._u32), yb = vld1q_u32(b._u32);
++    const float32x4_t x = vreinterpretq_f32_u32(spu__ln_flush(xa));
++    const float32x4_t y = vreinterpretq_f32_u32(veorq_u32(spu__ln_flush(yb), vdupq_n_u32(negb)));
++    const float32x4_t s = vaddq_f32(x, y), bb = vsubq_f32(s, x);
++    const float32x4_t e = vaddq_f32(vsubq_f32(x, vsubq_f32(s, bb)), vsubq_f32(y, bb));
++    const uint32x4_t su = vreinterpretq_u32_f32(s), eu = vreinterpretq_u32_f32(e);
++    if (__builtin_expect(vmaxvq_u32(vceqq_u32(vandq_u32(su, vdupq_n_u32(0x7F800000u)), vdupq_n_u32(0x7F800000u))) != 0, 0))
++        return spu__nv_u128(spu__ln_fa_slow(xa, yb, negb));
++    const uint32x4_t away = vandq_u32(vreinterpretq_u32_s32(vshrq_n_s32(vreinterpretq_s32_u32(veorq_u32(su, eu)), 31)),
++                                      vtstq_u32(eu, vdupq_n_u32(0x7FFFFFFFu)));
++    return spu__nv_u128(spu__ln_flush(vaddq_u32(su, away)));
++}
++SPU__NV_INLINE u128 spu_fa_lean(u128 a, u128 b) { return spu__ln_fa(a, b, 0); }
++SPU__NV_INLINE u128 spu_fs_lean(u128 a, u128 b) { return spu__ln_fa(a, b, 0x80000000u); }
++SPU__NV_INLINE u128 spu_fm_lean(u128 a, u128 b) {
++    const uint32x4_t xa = vld1q_u32(a._u32), yb = vld1q_u32(b._u32);
++    const uint32x4_t x = spu__ln_flush(xa), y = spu__ln_flush(yb);
++    const float64x2_t lo = vmulq_f64(spu__nv_lo(x), spu__nv_lo(y)), hi = vmulq_f64(spu__nv_hi(x), spu__nv_hi(y));
++    if (__builtin_expect(!spu__ln_all(spu__ln_range(lo, hi)), 0)) return spu__nv_u128(spu__ln_fm_slow(xa, yb));
++    return spu__nv_u128(spu__ln_narrow(vreinterpretq_u64_f64(lo), vreinterpretq_u64_f64(hi)));
++}
++/* s one double ulp toward zero where the exact sum s + e lies inside s */
++SPU__NV_INLINE uint64x2_t spu__ln_toward0(float64x2_t s, float64x2_t e) {
++    return vaddq_u64(vreinterpretq_u64_f64(s), vcltzq_f64(vmulq_f64(e, s)));
++}
++SPU__NV_INLINE u128 spu__ln_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc) {
++    const uint32x4_t xa = vld1q_u32(a._u32), yb = vld1q_u32(b._u32), zc = vld1q_u32(c._u32);
++    const uint32x4_t x = veorq_u32(spu__ln_flush(xa), vdupq_n_u32(negp)), y = spu__ln_flush(yb);
++    const uint32x4_t z = veorq_u32(spu__ln_flush(zc), vdupq_n_u32(negc));
++    const float64x2_t plo = vmulq_f64(spu__nv_lo(x), spu__nv_lo(y)), phi = vmulq_f64(spu__nv_hi(x), spu__nv_hi(y));
++    const float64x2_t zlo = spu__nv_lo(z), zhi = spu__nv_hi(z);
++    const float64x2_t slo = vaddq_f64(plo, zlo), shi = vaddq_f64(phi, zhi);
++    if (__builtin_expect(!spu__ln_all(spu__ln_range(slo, shi)), 0))
++        return spu__nv_u128(spu__ln_fma_slow(xa, yb, zc, negp, negc));
++    const float64x2_t blo = vsubq_f64(slo, plo), bhi = vsubq_f64(shi, phi);
++    const float64x2_t elo = vaddq_f64(vsubq_f64(plo, vsubq_f64(slo, blo)), vsubq_f64(zlo, blo));
++    const float64x2_t ehi = vaddq_f64(vsubq_f64(phi, vsubq_f64(shi, bhi)), vsubq_f64(zhi, bhi));
++    return spu__nv_u128(spu__ln_narrow(spu__ln_toward0(slo, elo), spu__ln_toward0(shi, ehi)));
++}
++SPU__NV_INLINE u128 spu_fma_lean(u128 a, u128 b, u128 c)  { return spu__ln_fma(a, b, c, 0, 0); }
++SPU__NV_INLINE u128 spu_fms_lean(u128 a, u128 b, u128 c)  { return spu__ln_fma(a, b, c, 0, 0x80000000u); }
++SPU__NV_INLINE u128 spu_fnms_lean(u128 a, u128 b, u128 c) { return spu__ln_fma(a, b, c, 0x80000000u, 0); }
++SPU__NV_INLINE int32x4_t spu__ln_key(uint32x4_t x) {
++    const uint32x4_t f = spu__ln_flush(x);
++    return vreinterpretq_s32_u32(veorq_u32(f, vshrq_n_u32(vreinterpretq_u32_s32(vshrq_n_s32(vreinterpretq_s32_u32(f), 31)), 1)));
++}
++SPU__NV_INLINE uint32x4_t spu__ln_mag(uint32x4_t x) { return vandq_u32(spu__ln_flush(x), vdupq_n_u32(0x7FFFFFFFu)); }
++SPU__NV_INLINE u128 spu_fcgt_lean(u128 a, u128 b)  { return spu__nv_u128(vcgtq_s32(spu__ln_key(vld1q_u32(a._u32)), spu__ln_key(vld1q_u32(b._u32)))); }
++SPU__NV_INLINE u128 spu_fceq_lean(u128 a, u128 b)  { return spu__nv_u128(vceqq_u32(spu__ln_flush(vld1q_u32(a._u32)), spu__ln_flush(vld1q_u32(b._u32)))); }
++SPU__NV_INLINE u128 spu_fcmgt_lean(u128 a, u128 b) { return spu__nv_u128(vcgtq_u32(spu__ln_mag(vld1q_u32(a._u32)), spu__ln_mag(vld1q_u32(b._u32)))); }
++SPU__NV_INLINE u128 spu_fcmeq_lean(u128 a, u128 b) { return spu__nv_u128(vceqq_u32(spu__ln_mag(vld1q_u32(a._u32)), spu__ln_mag(vld1q_u32(b._u32)))); }
++#else
++#define spu_fa_lean    spu_fa
++#define spu_fs_lean    spu_fs
++#define spu_fm_lean    spu_fm
++#define spu_fma_lean   spu_fma
++#define spu_fms_lean   spu_fms
++#define spu_fnms_lean  spu_fnms
++#define spu_fceq_lean  spu_fceq
++#define spu_fcgt_lean  spu_fcgt
++#define spu_fcmeq_lean spu_fcmeq
++#define spu_fcmgt_lean spu_fcmgt
++#endif
++
+ /* cflts / cfltu: value * 2^(173 - i8), truncated toward zero, saturating to the integer range.
+  * csflt / cuflt: integer / 2^(155 - i8) as an extended-range single (truncated). The ISA leaves
+  * scales outside 0..127 undefined; these compute the same formula for them. */
+diff --git a/runtime/spu/tests/test_spu_float_lean.c b/runtime/spu/tests/test_spu_float_lean.c
+new file mode 100644
+index 0000000..887a03b
+--- /dev/null
++++ b/runtime/spu/tests/test_spu_float_lean.c
+@@ -0,0 +1,103 @@
++/* The lean single-precision forms (spu_*_lean, what the lifter emits) must be bit-identical to
++ * the exact lanes (spu_*_ref, spu_fcgt...) for every input: random words, ordinary floats, the
++ * normal/extended-range and underflow boundaries, zeros and denormals, cancellations, exponent
++ * gaps around 29, fma sums on and next to 24-bit boundaries, mixed per lane. Build on arm64:
++ *   cc -O2 -fno-strict-aliasing -fwrapv -I.. -I../../../include test_spu_float_lean.c -o t && ./t [N] */
++#include "../spu_helpers.h"
++#include <stdio.h>
++#include <stdlib.h>
++
++static uint64_t s_rng = 0x9E3779B97F4A7C15ull;
++static uint32_t rnd32(void)
++{
++    s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17;
++    return (uint32_t)(s_rng >> 16);
++}
++static uint32_t rnd_float(void)
++{
++    uint32_t sign = (rnd32() & 1u) << 31, man = rnd32() & 0x7FFFFFu, e;
++    switch (rnd32() % 14) {
++    case 0: e = 0; break;                                            /* zero / denormal */
++    case 1: e = 1 + rnd32() % 4; break;                              /* bottom of the normal range */
++    case 2: e = 248 + rnd32() % 8; break;                            /* top, into extended range */
++    case 3: return rnd32();                                          /* anything */
++    case 4: return sign;                                             /* +-0 */
++    case 5: man &= ~((1u << (rnd32() % 24)) - 1); e = 110 + rnd32() % 36; break;   /* short significands */
++    case 6: man = (rnd32() & 1) ? 0x7FFFFF : 0; e = 120 + rnd32() % 16; break;
++    case 7: e = 1 + rnd32() % 40; break;                             /* underflow territory */
++    case 8: e = 200 + rnd32() % 55; break;                           /* overflow territory */
++    default: e = 110 + rnd32() % 36; break;                          /* ordinary */
++    }
++    return sign | (e << 23) | man;
++}
++static uint32_t near_word(uint32_t o)
++{
++    switch (rnd32() % 6) {
++    case 0: return o;
++    case 1: return o ^ 0x80000000u;
++    case 2: return o + (rnd32() % 3) - 1;
++    case 3: return o & 0x807FFFFFu;                                  /* same significand, exponent 0 */
++    default: return rnd_float();
++    }
++}
++static long s_bad;
++static void check(const char* op, u128 got, u128 ref, u128 a, u128 b, u128 c)
++{
++    if (!memcmp(&got, &ref, 16)) return;
++    if (s_bad++ < 12)
++        printf("MISMATCH %s a=%08X %08X %08X %08X b=%08X %08X %08X %08X c=%08X %08X %08X %08X\n"
++               "  got=%08X %08X %08X %08X ref=%08X %08X %08X %08X\n", op,
++               a._u32[0], a._u32[1], a._u32[2], a._u32[3], b._u32[0], b._u32[1], b._u32[2], b._u32[3],
++               c._u32[0], c._u32[1], c._u32[2], c._u32[3], got._u32[0], got._u32[1], got._u32[2], got._u32[3],
++               ref._u32[0], ref._u32[1], ref._u32[2], ref._u32[3]);
++}
++static void all_ops(u128 a, u128 b, u128 c)
++{
++    check("fa", spu_fa_lean(a, b), spu_fa_ref(a, b), a, b, c);
++    check("fs", spu_fs_lean(a, b), spu_fs_ref(a, b), a, b, c);
++    check("fm", spu_fm_lean(a, b), spu_fm_ref(a, b), a, b, c);
++    check("fma", spu_fma_lean(a, b, c), spu_fma_ref(a, b, c), a, b, c);
++    check("fms", spu_fms_lean(a, b, c), spu_fms_ref(a, b, c), a, b, c);
++    check("fnms", spu_fnms_lean(a, b, c), spu_fnms_ref(a, b, c), a, b, c);
++    check("fceq", spu_fceq_lean(a, b), spu_fceq(a, b), a, b, c);
++    check("fcgt", spu_fcgt_lean(a, b), spu_fcgt(a, b), a, b, c);
++    check("fcmeq", spu_fcmeq_lean(a, b), spu_fcmeq(a, b), a, b, c);
++    check("fcmgt", spu_fcmgt_lean(a, b), spu_fcmgt(a, b), a, b, c);
++}
++static u128 w4(uint32_t x, uint32_t y, uint32_t z, uint32_t w) { u128 r; r._u32[0] = x; r._u32[1] = y; r._u32[2] = z; r._u32[3] = w; return r; }
++
++int main(int argc, char** argv)
++{
++#if !defined(__ARM_NEON)
++    puts("test_spu_float_lean: no NEON, the lean forms are the plain ones");
++    return 0;
++#else
++    /* directed: (1 - 2^-24) * 2^-126 = 2^-126 - 2^-150 truncates below Smin (+0); round-to-nearest
++     * narrowing would give 2^-126. Overflow into and past the extended range, x + tiny, x - tiny. */
++    all_ops(w4(0x3F7FFFFFu, 0xBF7FFFFFu, 0x7F7FFFFFu, 0x7FFFFFFFu), w4(0x00800000u, 0x00800000u, 0x40000000u, 0x3F800000u),
++            w4(0x00000001u, 0x80800000u, 0x7F7FFFFFu, 0x80000001u));
++    all_ops(w4(0x3F800000u, 0x3F800000u, 0x00800000u, 0x7F800000u), w4(0x2F800000u, 0xAF800000u, 0x80000000u, 0x7F800000u),
++            w4(0xBF800000u, 0x3F800000u, 0x00800000u, 0xFF800000u));
++    const long N = argc > 1 ? atol(argv[1]) : 4000000;
++    for (long it = 0; it < N; it++) {
++        u128 a, b, c;
++        for (int i = 0; i < 4; i++) { a._u32[i] = rnd_float(); b._u32[i] = near_word(rnd_float()); c._u32[i] = rnd_float(); }
++        switch (rnd32() % 6) {
++        case 0: for (int i = 0; i < 4; i++) b._u32[i] = (a._u32[i] ^ 0x80000000u) + (rnd32() & 0xFF) - 0x80; break; /* cancellation */
++        case 1: for (int i = 0; i < 4; i++)                                                                        /* gaps 12..35 */
++                    b._u32[i] = (a._u32[i] & 0x80000000u) | (((a._u32[i] >> 23 & 0xFF) - 12 - rnd32() % 24) & 0xFF) << 23 | (rnd32() & 0x7FFFFF);
++                break;
++        case 2: for (int i = 0; i < 4; i++) {                                                                      /* c ~ -a*b */
++                    float x, y; memcpy(&x, &a._u32[i], 4); memcpy(&y, &b._u32[i], 4);
++                    const float p = -(x * y); uint32_t u; memcpy(&u, &p, 4); c._u32[i] = u + (rnd32() % 5) - 2; }
++                break;
++        case 3: for (int i = 0; i < 4; i++) c._u32[i] = (c._u32[i] & 0xFF800000u) | (rnd32() & 1 ? 0 : 0x400000); break;
++        case 4: for (int i = 0; i < 4; i++) b._u32[i] = near_word(a._u32[i]); break;                              /* compares */
++        default: break;
++        }
++        all_ops(a, b, c);
++    }
++    printf("test_spu_float_lean: %ld vectors x 10 ops, %ld mismatches\n", N, s_bad);
++    return s_bad != 0;
++#endif
++}
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+index 91d3c48..e4bb3b3 100644
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -493,13 +493,198 @@ def compute_link_returns(insns, bounds) -> set:
+     return returns
+ 
+ 
++# ---------------------------------------------------------------------------
++# Register locals (opt-in: SPU_LIFT_REG_LOCALS=1 / --reg-locals; off by default)
++# ---------------------------------------------------------------------------
++# The per-instruction translation reads and writes the register file in memory
++# (ctx->gpr[n]). The port builds with -fno-strict-aliasing, so every LS store
++# (a uint8_t* write) and every out-of-line call -- the float helpers' cold
++# fix-ups included -- forces the compiler to keep each ctx->gpr[n] in memory:
++# one store per instruction, and the registers reloaded after any such call.
++# reg_localize() rewrites one lifted function so its SPU registers live in C
++# locals (R_<n>, which never escape, so the compiler keeps them in host vector
++# registers and hoists loop-invariant work such as a shufb control's
++# preparation): loaded once at entry (loads the compiler finds dead go away),
++# written back only where the register file can be observed -- before any
++# statement that leaves the function or calls into the runtime with ctx --
++# and re-read after such a call. Only the registers that may have changed
++# since the last write-back on some path to that point are stored (a forward
++# may-dirty dataflow over the function's labels and gotos). Statements other
++# than the plain ones keep their ctx->gpr form exactly as before and run with
++# the register file up to date, so the runtime sees what it always saw. A
++# function with a statement the pass does not recognise is left in the old form.
++# Measured on the inFAMOUS 2 walk (2026-11-05): no gain on its own -- the write-backs
++# at every exit of a loop and the extra spills of keeping ~40 registers live cost what
++# the saved per-instruction stores bought (SPU busy +2%, and the lean-float tree was
++# faster without it) -- so it is not the default; kept, bit-exact, for other titles
++# and for a later pass with liveness across functions.
++_RL_GPR = re.compile(r'ctx->gpr\[(\d+)\]')
++_RL_DEF = re.compile(r'ctx->gpr\[(\d+)\] =(?!=)')
++_RL_LABEL = re.compile(r'^(loc_[0-9A-F]+):$')
++_RL_GOTO = re.compile(r'^goto (loc_[0-9A-F]+);$')
++_RL_LINK = re.compile(r'^(ctx->gpr\[\d+\] = spu_link\([^;]*\);) (.+)$')
++_RL_EXIT_END = re.compile(r'(return;|SPU_DIRECT\([^;]*\);|SPU_RET\(ctx\);|'
++                          r'SPU_RET_REG\(ctx, \d+\);)\s*\}?$')
++
++
++def _rl_ctx_free(s: str) -> bool:
++    """s touches ctx only through ctx->gpr[n], the inline LS accessors and
++    ctx->code_base (none of which reads the register file)."""
++    t = _RL_GPR.sub('', s)
++    for k in ('spu_ls_read128(ctx,', 'spu_ls_write128(ctx,', 'ctx->code_base'):
++        t = t.replace(k, '')
++    return 'ctx' not in t and 'g_spu_' not in t and 'spu_unsupported' not in t
++
++
++def _rl_split_if(s: str):
++    """'if (<cond>) <rest>' -> (cond, rest) with balanced parentheses, else None."""
++    if not s.startswith('if ('):
++        return None
++    depth = 0
++    for i in range(3, len(s)):
++        if s[i] == '(':
++            depth += 1
++        elif s[i] == ')':
++            depth -= 1
++            if depth == 0:
++                return s[4:i], s[i + 1:].strip()
++    return None
++
++
++def reg_localize(body_lines: list) -> list:
++    """Rewrite one lifted function body to keep SPU registers in C locals.
++    Returns the new body lines, or the input unchanged when the body has a
++    statement shape the pass does not handle."""
++    items = []                      # (kind, a, b)
++    for raw in body_lines:
++        s = raw.strip()
++        m = _RL_LINK.match(s)       # `brsl` emits the link and the transfer on one line
++        parts = [m.group(1), m.group(2)] if m else [s]
++        for s in parts:
++            m = _RL_LABEL.match(s)
++            if m:
++                items.append(('label', m.group(1), None)); continue
++            m = _RL_GOTO.match(s)
++            if m:
++                items.append(('goto', m.group(1), None)); continue
++            sp = _rl_split_if(s)
++            if sp is not None and _rl_ctx_free(sp[0]) and '"' not in sp[0]:
++                cond, rest = sp
++                m = _RL_GOTO.match(rest)
++                if m:
++                    items.append(('cgoto', cond, m.group(1))); continue
++                if (rest.startswith('{') and rest.endswith('}') and 'goto' not in rest
++                        and _RL_EXIT_END.search(rest[1:-1].strip())):
++                    items.append(('cexit', cond, rest)); continue
++            if 'goto' in s or s.endswith(':'):
++                return body_lines   # a transfer the pass does not model: old form
++            if 'if (' not in s and _RL_EXIT_END.search(s):
++                items.append(('exit', s, None)); continue
++            if (not s.startswith('if') and '{' not in s and 'return' not in s
++                    and _rl_ctx_free(s)):
++                d = 0
++                for r in _RL_DEF.findall(s):
++                    d |= 1 << int(r)
++                items.append(('pure', s, d)); continue
++            items.append(('barrier', s, None))
++
++    labels = {a: i for i, (k, a, _) in enumerate(items) if k == 'label'}
++    for k, a, b in items:
++        t = a if k == 'goto' else b if k == 'cgoto' else None
++        if t is not None and t not in labels:
++            return body_lines
++    used = set()
++    for k, a, b in items:
++        if k in ('pure', 'cgoto', 'cexit'):
++            used.update(int(r) for r in _RL_GPR.findall(a))
++    if not used:
++        return body_lines
++
++    # may-dirty dataflow: registers whose local may be newer than ctx->gpr
++    n = len(items)
++    din = [None] * (n + 1)          # n = falling off the end of the function
++    din[0] = 0
++    changed = True
++    while changed:
++        changed = False
++        for i, (k, a, b) in enumerate(items):
++            if din[i] is None:
++                continue
++            out = din[i] | b if k == 'pure' else 0 if k == 'barrier' else din[i]
++            succ = []
++            if k in ('label', 'pure', 'cgoto', 'cexit', 'barrier'):
++                succ.append(i + 1)
++            if k == 'goto':
++                succ.append(labels[a])
++            elif k == 'cgoto':
++                succ.append(labels[b])
++            for j in succ:
++                nv = out if din[j] is None else din[j] | out
++                if nv != din[j]:
++                    din[j] = nv
++                    changed = True
++
++    def loc(s):
++        return _RL_GPR.sub(lambda m: f"R_{m.group(1)}", s)
++
++    def flush(mask):
++        return [f"ctx->gpr[{r}] = R_{r};" for r in range(128) if mask >> r & 1]
++
++    regs = sorted(used)
++    reload = [" ".join(f"R_{r} = ctx->gpr[{r}];" for r in regs)]
++    out = ["u128 " + ", ".join(f"R_{r} = ctx->gpr[{r}]" for r in regs) + ";"]
++    pending = False                 # locals behind ctx->gpr (after a runtime call)
++    for i, (k, a, b) in enumerate(items):
++        d = din[i] or 0
++        if k == 'exit':
++            out += flush(d) + [a]
++            pending = False
++            continue
++        if pending and k != 'barrier':
++            out += reload
++            pending = False
++        if k == 'label':
++            out.append(f"{a}:")
++        elif k == 'goto':
++            out.append(f"goto {a};")
++        elif k == 'cgoto':
++            out.append(f"if ({loc(a)}) goto {b};")
++        elif k == 'cexit':
++            out.append(f"if ({loc(a)}) {{ " + " ".join(flush(d)) + (" " if d else "") + b + " }")
++        elif k == 'pure':
++            out.append(loc(a))
++        else:                       # barrier: the old statement, register file current
++            out += flush(d) + [a]
++            pending = True
++    if din[n]:
++        out += flush(din[n])        # falling off the end returns to the caller
++    return out
++
++
++def _reg_locals_default() -> bool:
++    return os.environ.get("SPU_LIFT_REG_LOCALS", "0") == "1"
++
++
++# Single-precision ops lifted to the lean helpers (spu_helpers.h, spu_*_lean: bit-identical,
++# about half the instructions); SPU_LIFT_LEAN_FLOAT=0 / --no-lean-float = the plain helpers.
++_LEAN_FLOAT = ("fa", "fs", "fm", "fma", "fms", "fnms", "fceq", "fcgt", "fcmeq", "fcmgt")
++
++
++def _lean_float_default() -> bool:
++    return os.environ.get("SPU_LIFT_LEAN_FLOAT", "1") != "0"
++
+ 
+ # lv2 stop-and-signal syscalls that resume at the next instruction (the same
+ # set as find_spu_functions.LV2_RESUMING_STOPS, which decides function extents).
+ LV2_RESUMING_STOPS = {0x100, 0x110, 0x111}
+ 
+ class SPULifter:
+-    def __init__(self, trace: bool = False, prefix: str = "", reloc: bool = False):
++    def __init__(self, trace: bool = False, prefix: str = "", reloc: bool = False,
++                 reg_locals: bool = None, lean_float: bool = None):
++        # Register locals (reg_localize): only with SPU_LIFT_REG_LOCALS=1 or
++        # --reg-locals; never with --trace (its hooks read ctx->gpr).
++        self.reg_locals = (_reg_locals_default() if reg_locals is None else reg_locals) and not trace
++        self.lean_float = _lean_float_default() if lean_float is None else lean_float
+         # --relocatable: the image is lifted at LS 0 and runs wherever it is
+         # loaded; every LS address derived from its own position adds
+         # ctx->code_base (spu_overlay_register_region_reloc).
+@@ -767,7 +952,8 @@ class SPULifter:
+             "cwx": "spu_cwx", "cdx": "spu_cdx",
+         }
+         if mn in rr_bin:
+-            return f"{g(rt())} = {rr_bin[mn]}({g(ra())}, {g(rb())});"
++            fn = rr_bin[mn] + ("_lean" if self.lean_float and mn in _LEAN_FLOAT else "")
++            return f"{g(rt())} = {fn}({g(ra())}, {g(rb())});"
+ 
+         # ---- unary (register) ----
+         rr_un = {
+@@ -845,7 +1031,8 @@ class SPULifter:
+             return f"{g(rt())} = spu_shufb({g(ra())}, {g(rb())}, {g(rc)});"
+         if mn in ("fma", "fms", "fnms", "mpya"):
+             rc = _reg(ops[3])
+-            return f"{g(rt())} = spu_{mn}({g(ra())}, {g(rb())}, {g(rc)});"
++            fn = f"spu_{mn}" + ("_lean" if self.lean_float and mn in _LEAN_FLOAT else "")
++            return f"{g(rt())} = {fn}({g(ra())}, {g(rb())}, {g(rc)});"
+         # sfx: extended subtract — RT is also a source (carry-in = low bit of old RT).
+         if mn == "sfx":
+             return f"{g(rt())} = spu_sfx({g(ra())}, {g(rb())}, {g(rt())});"
+@@ -1105,7 +1292,8 @@ class SPULifter:
+         weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
+         for f in self.functions:
+             lines.append(f"void {weak}{f.name}(spu_context* ctx) {{")
+-            for b in f.body_lines:
++            body = reg_localize(f.body_lines) if self.reg_locals else f.body_lines
++            for b in body:
+                 lines.append(b if b.endswith(":") else f"    {b}")
+             lines.append("}")
+             lines.append("")
+@@ -1171,6 +1359,12 @@ def main() -> None:
+     p.add_argument("--relocatable", action="store_true",
+                    help="lift at --base 0 for code that runs at any LS address: every "
+                         "address derived from its own position adds ctx->code_base")
++    p.add_argument("--reg-locals", action="store_true",
++                   help="keep SPU registers in C locals within each lifted function "
++                        "(reg_localize, opt-in); SPU_LIFT_REG_LOCALS=1 does the same")
++    p.add_argument("--no-lean-float", action="store_true",
++                   help="lift fa/fs/fm/fma/fms/fnms/fceq/fcgt/fcmeq/fcmgt to the plain "
++                        "helpers instead of spu_*_lean; SPU_LIFT_LEAN_FLOAT=0 does the same")
+     p.add_argument("--trace", action="store_true",
+                    help="Emit spu_trace_pc/spu_trace_rt around each instruction "
+                         "for §3 diff-vs-RPCS3 validation. Output goes to stderr "
+@@ -1335,7 +1529,9 @@ def main() -> None:
+ 
+     insns = disassemble_spu(data, base)
+ 
+-    lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix, reloc=args.relocatable)
++    lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix, reloc=args.relocatable,
++                       reg_locals=True if args.reg_locals else None,
++                       lean_float=False if args.no_lean_float else None)
+     lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
+     if lifter.bi_r0_jump:
+         print(f"  {len(lifter.bi_r0_jump)} `bi $r0` computed-jump site(s) "
+diff --git a/tools/test_spu_reg_locals.py b/tools/test_spu_reg_locals.py
+new file mode 100644
+index 0000000..a0686e3
+--- /dev/null
++++ b/tools/test_spu_reg_locals.py
+@@ -0,0 +1,151 @@
++#!/usr/bin/env python3
++"""spu_lifter.reg_localize: SPU registers in C locals must behave exactly like ctx->gpr[].
++
++Structural checks on the rewritten text (write-backs only before exits and runtime calls,
++re-reads after them, functions with an unknown transfer left alone, the environment
++switch), then a semantic check: a synthetic lifted function with a loop, LS loads/stores,
++conditional exits, a runtime call and a nested call is compiled in both forms against a
++small stub runtime and run on random register files / local stores; the log of every
++runtime call (with the register file at that moment), the exit and the final state must
++match. The real lifted tree is compared the same way by the port's equivalence harness.
++"""
++import os
++import random
++import shutil
++import subprocess
++import sys
++import tempfile
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import spu_lifter  # noqa: E402
++from spu_lifter import reg_localize  # noqa: E402
++
++BODY = [
++    "loc_00000100:",
++    "ctx->gpr[5] = spu_ls_read128(ctx, ctx->gpr[3]._u32[0] + 0x0);",
++    "/* nop */;",
++    "ctx->gpr[6] = spu_a(ctx->gpr[5], ctx->gpr[6]);",
++    "spu_ls_write128(ctx, ctx->gpr[3]._u32[0] + 0x10, ctx->gpr[6]);",
++    "ctx->gpr[3] = spu_ai(ctx->gpr[3], 32);",
++    "if (ctx->gpr[6]._u32[0] == 7) { SPU_DIRECT(ctx, 0x200, f_200); }",
++    "ctx->gpr[4] = spu_ai(ctx->gpr[4], -1);",
++    "if ((int32_t)ctx->gpr[4]._u32[0] == (int32_t)(-9)) { ctx->status = 9; return; }",
++    "if (ctx->gpr[4]._u32[1] & 1) goto loc_00000140;",
++    "spu_wrch(ctx, 7, ctx->gpr[4]);",
++    "ctx->gpr[7] = spu_rdch(ctx, 3);",
++    "loc_00000140:",
++    "ctx->gpr[8] = spu_a(ctx->gpr[7], ctx->gpr[5]);",
++    "ctx->gpr[0] = spu_link(0x150); { ctx->host_depth++; f_callee(ctx); ctx->host_depth--; }",
++    "if (ctx->gpr[4]._u32[0] != 0) goto loc_00000100;",
++    "ctx->gpr[9] = spu_ai(ctx->gpr[8], 1);",
++    "ctx->gpr[0] = spu_link(0x160); goto loc_00000164;",
++    "loc_00000164:",
++    "ctx->gpr[10] = spu_a(ctx->gpr[9], ctx->gpr[0]);",
++]
++
++PRELUDE = r"""
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++typedef union { uint32_t _u32[4]; uint64_t _u64[2]; } u128;
++typedef struct { u128 gpr[128]; uint8_t ls[65536]; uint32_t pc, status, host_depth; } spu_context;
++static uint64_t H;
++static void mix(uint64_t v) { H = (H ^ v) * 0x100000001B3ull; }
++static void mixctx(spu_context* c) { for (int i = 0; i < 128; i++) { mix(c->gpr[i]._u64[0]); mix(c->gpr[i]._u64[1]); } }
++static u128 spu_ls_read128(spu_context* c, uint32_t a) { u128 r; memcpy(&r, c->ls + (a & 0xFFF0u), 16); return r; }
++static void spu_ls_write128(spu_context* c, uint32_t a, u128 v) { memcpy(c->ls + (a & 0xFFF0u), &v, 16); }
++static u128 spu_a(u128 a, u128 b) { for (int i = 0; i < 4; i++) a._u32[i] += b._u32[i]; return a; }
++static u128 spu_ai(u128 a, int32_t k) { for (int i = 0; i < 4; i++) a._u32[i] += (uint32_t)k; return a; }
++static u128 spu_link(uint32_t a) { u128 r = { { a, 0, 0, 0 } }; return r; }
++static void spu_wrch(spu_context* c, int ch, u128 v) { mix(ch); mix(v._u64[0]); mixctx(c); }
++static u128 spu_rdch(spu_context* c, int ch) { mix(ch); mixctx(c); u128 r = { { (uint32_t)H, 1, 2, 3 } }; return r; }
++static void f_callee(spu_context* c) { mixctx(c); c->gpr[7]._u32[0] ^= 0x55u; c->gpr[3]._u32[2] += 1; }
++#define SPU_DIRECT(ctx, PC, FN) do { (ctx)->pc = (PC); mixctx(ctx); return; } while (0)
++"""
++
++MAIN = r"""
++int main(void) {
++    static spu_context c;
++    uint64_t s = 88172645463325252ull;
++    for (int t = 0; t < 2000; t++) {
++        for (int i = 0; i < 128; i++) for (int k = 0; k < 4; k++) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; c.gpr[i]._u32[k] = (uint32_t)s % 23u; }
++        for (int i = 0; i < 65536; i += 4) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; uint32_t w = (uint32_t)s % 5u; memcpy(c.ls + i, &w, 4); }
++        c.gpr[3]._u32[0] = (uint32_t)(s % 4096u) * 16u; c.status = 0; c.pc = 0;
++        H = 0xCBF29CE484222325ull;
++        f(&c);
++        mixctx(&c); mix(c.pc); mix(c.status);
++        for (int i = 0; i < 65536; i += 8) { uint64_t w; memcpy(&w, c.ls + i, 8); mix(w); }
++        printf("%016llx\n", (unsigned long long)H);
++    }
++    return 0;
++}
++"""
++
++
++def emit(body):
++    return "void f(spu_context* ctx) {\n" + "\n".join(
++        b if b.endswith(":") else "    " + b for b in body) + "\n}\n"
++
++
++def structural():
++    out = reg_localize(BODY)
++    assert out[0].startswith("u128 R_"), out[0]
++    text = "\n".join(out)
++    # plain statements use locals; the loop has no ctx->gpr store on its fall-through path
++    assert "R_6 = spu_a(R_5, R_6);" in text
++    assert "spu_ls_write128(ctx, R_3._u32[0] + 0x10, R_6);" in text
++    # the conditional exit writes back inside its branch only
++    line = next(o for o in out if o.startswith("if (R_6._u32[0] == 7)"))
++    assert "ctx->gpr[6] = R_6;" in line and "SPU_DIRECT" in line, line
++    # the runtime call runs on the register file, then the locals are re-read
++    i = out.index("spu_wrch(ctx, 7, ctx->gpr[4]);")
++    assert "ctx->gpr[4] = R_4;" in out[:i], "write-back before the runtime call"
++    assert out[i + 1] == "ctx->gpr[7] = spu_rdch(ctx, 3);", "consecutive calls share one write-back"
++    assert out[i + 2].startswith("R_"), "re-read after the calls"
++    # link + goto on one line is split into a plain def and the goto
++    assert "R_0 = spu_link(0x160);" in out and "goto loc_00000164;" in out
++    # a goto into nowhere / an unknown transfer: the function stays in the old form
++    assert reg_localize(["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);", "goto loc_00000999;"]) == \
++        ["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);", "goto loc_00000999;"]
++    odd = ["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);", "{ x = 1; goto loc_00000100; }", "loc_00000100:"]
++    assert reg_localize(odd) == odd
++    # falling off the end writes back
++    tail = reg_localize(["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);"])
++    assert tail[-1] == "ctx->gpr[3] = R_3;", tail
++    # the switch: an SPULifter with reg_locals off, or with --trace, emits the old form
++    os.environ.pop("SPU_LIFT_REG_LOCALS", None)
++    assert not spu_lifter.SPULifter().reg_locals          # opt-in
++    os.environ["SPU_LIFT_REG_LOCALS"] = "1"
++    assert spu_lifter.SPULifter().reg_locals and not spu_lifter.SPULifter(trace=True).reg_locals
++    del os.environ["SPU_LIFT_REG_LOCALS"]
++    assert spu_lifter.SPULifter(reg_locals=True).reg_locals
++    print("PASS: reg_localize structure")
++
++
++def semantic():
++    cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("clang") or shutil.which("gcc")
++    if not cc:
++        print("SKIP: no C compiler for the semantic check")
++        return
++    with tempfile.TemporaryDirectory() as tmp:
++        res = []
++        for name, body in (("old", BODY), ("new", reg_localize(BODY))):
++            src = os.path.join(tmp, name + ".c")
++            with open(src, "w") as f:
++                f.write(PRELUDE + emit(body) + MAIN)
++            exe = os.path.join(tmp, name)
++            subprocess.run([cc, "-O2", "-fno-strict-aliasing", "-w", src, "-o", exe], check=True)
++            try:   # a lost write-back can leave the loop counter stuck
++                res.append(subprocess.run([exe], check=True, capture_output=True, text=True,
++                                          timeout=60).stdout)
++            except subprocess.TimeoutExpired:
++                raise AssertionError(f"{name} form did not finish")
++        assert res[0] == res[1], "register-locals form diverged from ctx->gpr form"
++        assert len(set(res[0].split())) > 100, "test inputs do not exercise the paths"
++    print("PASS: reg_localize semantics (2000 random states)")
++
++
++if __name__ == "__main__":
++    random.seed(1)
++    structural()
++    semantic()
