@@ -502,10 +502,10 @@ index 0000000..3bb1978
 +#endif
 diff --git a/include/ps3emu/ps3_toggles.h b/include/ps3emu/ps3_toggles.h
 new file mode 100644
-index 0000000..e81c2be
+index 0000000..2b7a821
 --- /dev/null
 +++ b/include/ps3emu/ps3_toggles.h
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,281 @@
 +/*
 + * ps3_toggles -- performance and debug knobs that change while the game runs.
 + *
@@ -594,6 +594,7 @@ index 0000000..e81c2be
 +    PS3T_ENG_CLAMP_CULL_FLIP,/* rsx_draw_engine.c: flip clamped draws (diagnostic)*/
 +    PS3T_ENG_SHADOW_D24,     /* rsx_draw_engine.c: shadow compare precision (diagnostic) */
 +    PS3T_ENG_SHADE_BACKFACE, /* rsx_draw_engine.c: back-facing world = sun-shadowed */
++    PS3T_GCM_STALL_GAP,      /* cellGcmSys.c: park/acquire bounds skip stalls (ms) */
 +    PS3T_COUNT
 +};
 +
@@ -650,6 +651,7 @@ index 0000000..e81c2be
 +        { "PS3RECOMP_ENG_CLAMP_CULL_FLIP", PS3_TK_ATOI, 0 },
 +        { "PS3RECOMP_ENG_SHADOW_D24",   PS3_TK_ATOI, 0 },
 +        { "PS3RECOMP_ENG_SHADE_BACKFACE", PS3_TK_NOT0, 1 },
++        { "GCM_STALL_GAP_MS",           PS3_TK_ATOI, 100 },
 +    };
 +    return &d[id];
 +}
@@ -6069,10 +6071,10 @@ index 0000000..f8ee047
 +    puts("PS3_GAMEDATA_ROOT moves the save root and the listing follows it");
 +}
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..4fae098 100644
+index 73b7e71..6dd467d 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -9,13 +9,16 @@
+@@ -9,13 +9,17 @@
   */
  
  #include "rsx_live_draw.h"
@@ -6086,10 +6088,11 @@ index 73b7e71..4fae098 100644
  #include "rsx_commands.h"                    /* rsx_state, rsx_process_command_buffer */
  #include "../../include/ps3emu/guest_call.h" /* g_ps3_guest_caller for direct handler dispatch */
 +#include "../../include/ps3emu/ps3_ftrace.h"  /* PS3_FTRACE timeline */
++#include "../../include/ps3emu/ps3_toggles.h" /* GCM_STALL_GAP_MS, live */
  
  /* Guest EA of the GCM context (begin/end/current/callback) the title writes its
   * command stream into; recorded by cellGcmSetupContext, drained by the RSX. */
-@@ -29,6 +32,7 @@ static u32 s_gcm_context_ea = 0;
+@@ -29,6 +33,7 @@ static u32 s_gcm_context_ea = 0;
  #include <windows.h>
  #else
  #include <time.h>
@@ -6097,7 +6100,7 @@ index 73b7e71..4fae098 100644
  #endif
  
  /* ---------------------------------------------------------------------------
-@@ -71,6 +75,23 @@ static u64 get_timestamp_ns(void)
+@@ -71,6 +76,23 @@ static u64 get_timestamp_ns(void)
  static int  s_gcm_initialized = 0;
  static u32  s_flip_mode   = CELL_GCM_DISPLAY_VSYNC;
  static u32  s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
@@ -6121,7 +6124,7 @@ index 73b7e71..4fae098 100644
  
  /* Count of guest flip requests (SetFlipCommand / SetPrepareFlip). The present
   * loop uses this as the frame boundary: presenting only when a flip arrived
-@@ -199,7 +220,7 @@ static void ydkj_restore_handler_opd(u32 opd, u32 code) {
+@@ -199,7 +221,7 @@ static void ydkj_restore_handler_opd(u32 opd, u32 code) {
      extern u8* vm_base; if (!vm_base) return;
      if (vm_read32(opd) == 0) {
          u8* p = vm_base + opd; p[0]=(u8)(code>>24); p[1]=(u8)(code>>16); p[2]=(u8)(code>>8); p[3]=(u8)code;
@@ -6130,7 +6133,7 @@ index 73b7e71..4fae098 100644
      }
  }
  static void gcm_update_handler_mask(void)
-@@ -587,7 +608,11 @@ void cellGcmSetWaitFlip(void)
+@@ -587,7 +609,11 @@ void cellGcmSetWaitFlip(void)
  #endif  /* elsewhere: runtime/platform/win32_compat.h */
      for (int i = 0; i < 64 && s_flip_status == CELL_GCM_FLIP_STATUS_WAITING; i++)
          Sleep(1);
@@ -6143,7 +6146,7 @@ index 73b7e71..4fae098 100644
  }
  
  /* NID: 0xDF6476BD. The same wait without libgcm's command-buffer space check;
-@@ -599,9 +624,12 @@ void cellGcmSetWaitFlipUnsafe(void) { cellGcmSetWaitFlip(); }
+@@ -599,9 +625,12 @@ void cellGcmSetWaitFlipUnsafe(void) { cellGcmSetWaitFlip(); }
  void cellGcmResetFlipStatus(void)
  {
      { static int n = 0;
@@ -6157,7 +6160,7 @@ index 73b7e71..4fae098 100644
  }
  
  /* NID: 0xE315A0B2 */
-@@ -615,7 +643,7 @@ u32 cellGcmGetFlipStatus(void)
+@@ -615,7 +644,7 @@ u32 cellGcmGetFlipStatus(void)
       * every wait-for-flip loop exit on its first poll, so titles ran
       * completely unpaced (wave: 95 fps with a fixed-dt simulation). */
      { static int n = 0;
@@ -6166,7 +6169,7 @@ index 73b7e71..4fae098 100644
            fprintf(stderr, "[FLIP] GetFlipStatus -> %u (0=DONE 1=WAITING)%c",
                    s_flip_status, 10); }
      return s_flip_status;
-@@ -701,7 +729,17 @@ void ppu_gcm_pump(void)
+@@ -701,7 +730,17 @@ void ppu_gcm_pump(void)
                             0, 0, 0, 0, 0, 0, 0);
      }
      if (p & 2) {
@@ -6185,7 +6188,7 @@ index 73b7e71..4fae098 100644
          if (s_flip_handler_opd && g_ps3_guest_caller) {
              ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
              g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0, 0, 0, 0, 0);
-@@ -732,8 +770,11 @@ void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
+@@ -732,8 +771,11 @@ void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
   * the callback IS the flip interrupt -- no flip, no callback. */
  void cellGcmTickFlip(void)
  {
@@ -6199,7 +6202,7 @@ index 73b7e71..4fae098 100644
  }
  
  /* Drain the game's GCM FIFO into the RSX backend. Called from the present thread
-@@ -773,15 +814,124 @@ unsigned long long ps3_ms_now(void)
+@@ -773,15 +815,161 @@ unsigned long long ps3_ms_now(void)
  #ifdef _WIN32
      return (unsigned long long)GetTickCount64();
  #else
@@ -6286,6 +6289,43 @@ index 73b7e71..4fae098 100644
 +    return ms;
 +}
 +#define GCM_PARK_GRACE_MS gcm_park_grace_ms()
++/* The walker's two wall-clock bounds -- the park grace above and the
++ * semaphore acquire's (GCM_SEMA_ACQUIRE_MS) -- are there for a producer that
++ * never comes. They must not fire because the whole process stood still: on a
++ * starved Mac (load 13-16, mediaanalysisd and another recomp) a game thread
++ * can be off the CPU for seconds and frames came minutes apart. Measured in
++ * wall time, a park whose patch was one store away "expired" during such a
++ * stall, the jump-park resync dropped the frame's commands with its fence,
++ * and inFAMOUS 2 hung for good at the New Marais load. So they count only
++ * time the walker saw pass in small steps: the drain re-checks a park or an
++ * acquire every pass (about 1 ms), and a gap between two checks longer than
++ * GCM_STALL_GAP_MS (default 100) means nobody ran -- that gap is not counted.
++ * GCM_STALL_GAP_MS=0 counts all wall time, as before. Live (PS3_TOGGLE_FILE). */
++static int s_stall_gap_ms = -1;
++static void gcm_stall_gap_set(int id, int v) { (void)id; __atomic_store_n(&s_stall_gap_ms, v, __ATOMIC_RELAXED); }
++static unsigned gcm_stall_gap_ms(void)
++{
++    int v = __atomic_load_n(&s_stall_gap_ms, __ATOMIC_RELAXED);
++    if (__builtin_expect(v < 0, 0)) v = ps3_toggle_watch(PS3T_GCM_STALL_GAP, gcm_stall_gap_set);
++    return v < 0 ? 0u : (unsigned)v;
++}
++/* Run time of one wait: restart it, then add each check's step. */
++typedef struct { unsigned long long last, run; } gcm_run_clock;
++static void gcm_run_clock_start(gcm_run_clock* c, unsigned long long now) { c->last = now; c->run = 0; }
++static unsigned long long gcm_run_clock_ms(gcm_run_clock* c, unsigned long long now)
++{
++    const unsigned long long step = now > c->last ? now - c->last : 0;
++    const unsigned cap = gcm_stall_gap_ms();
++    c->last = now;
++    if (!cap || step <= cap) c->run += step;
++    else {
++        static unsigned n;
++        if (n++ < 16)
++            fprintf(stderr, "[cellGcmSys] %llu ms with no drain pass (process stalled?) not counted "
++                            "against a park/acquire bound\n", step);
++    }
++    return c->run;
++}
 +/* GCM_PARK_STATS=1: every 30 s, how the parks went since the last line:
 + * stops at a new park, parks left through their patch (and the longest wait
 + * for one), parks left another way, jump-park resyncs. */
@@ -6325,7 +6365,7 @@ index 73b7e71..4fae098 100644
  /* How close `current` must get to `end` before the runtime will recycle a ring
   * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
   * title that is merely near the end from being touched. */
-@@ -857,6 +1007,37 @@ static u32 nv309e_swz(u32 x, u32 y, u32 l2w, u32 l2h)
+@@ -857,6 +1045,37 @@ static u32 nv309e_swz(u32 x, u32 y, u32 l2w, u32 l2h)
      return off;
  }
  
@@ -6363,7 +6403,7 @@ index 73b7e71..4fae098 100644
  static void nv3089_blit(void)
  {
      u32 out_w = s_nv3089.out_sz & 0xFFFF, out_h = s_nv3089.out_sz >> 16;
-@@ -864,6 +1045,15 @@ static void nv3089_blit(void)
+@@ -864,6 +1083,15 @@ static void nv3089_blit(void)
      u32 in_pitch = s_nv3089.in_fmt & 0xFFFF;
      u32 dst_pitch = s_gcm2d.pitch >> 16;
      if (!out_w || !out_h || !in_pitch || !dst_pitch) return;
@@ -6379,7 +6419,7 @@ index 73b7e71..4fae098 100644
      /* NV3089_GATE=<file>: log every blit's geometry while <file> exists, so a
       * capture covers the scene of interest instead of the first N since boot. */
      { static const char* gate = (const char*)-1; static unsigned poll; static int open_gate;
-@@ -938,10 +1128,10 @@ static void nv3089_blit(void)
+@@ -938,10 +1166,10 @@ static void nv3089_blit(void)
            const u8* sbase = vm_base + src2;
            u8* dbase = vm_base + dst2;
            for (u32 y = 0; y < out_h; y++) {
@@ -6392,7 +6432,7 @@ index 73b7e71..4fae098 100644
                    memcpy(dbase + (u64)nv309e_swz(x, y, l2w, l2h) * 4,
                           srow + (u32)(su >> 20) * 4, 4);
                }
-@@ -975,7 +1165,7 @@ static void nv3089_blit(void)
+@@ -975,7 +1203,7 @@ static void nv3089_blit(void)
                   cellGcmResolveLocated(_dl, s_gcm2d.dst_offset), dst_pitch, _dl?"LOCAL":"MAIN",
                   out_x, out_y, 10); }
          static int _w = 0;
@@ -6401,7 +6441,7 @@ index 73b7e71..4fae098 100644
          return;
      }
      int src_local = (s_nv3089.src_dma != 0xFEED0001u);
-@@ -1000,15 +1190,43 @@ static void nv3089_blit(void)
+@@ -1000,15 +1228,43 @@ static void nv3089_blit(void)
      u32 dbpp = (s_gcm2d.color_fmt == 4u /* R5G6B5 */) ? 2u
               : (s_gcm2d.color_fmt == 1u /* Y8 */)     ? 1u : 4u;
      u32 bpp = (sbpp == dbpp) ? sbpp : 4u;
@@ -6447,7 +6487,7 @@ index 73b7e71..4fae098 100644
              u32 sx = (u32)(su >> 20);
              u32 s = src + sy * in_pitch + sx * bpp;
              u32 d = dst + dy * dst_pitch + dx * bpp;
-@@ -1017,6 +1235,7 @@ static void nv3089_blit(void)
+@@ -1017,6 +1273,7 @@ static void nv3089_blit(void)
              else               vm_write8(d, vm_read8(s));
          }
      }
@@ -6455,7 +6495,7 @@ index 73b7e71..4fae098 100644
      { static int _n = 0; static int cap = -1;
        if (cap < 0) { const char* e = getenv("NV3089_DBG"); cap = e ? atoi(e) : 0; }
        if (cap && _n < cap) { _n++;
-@@ -1068,7 +1287,7 @@ static void gcm_2d_method(u32 subch, u32 method, u32 data)
+@@ -1068,7 +1325,7 @@ static void gcm_2d_method(u32 subch, u32 method, u32 data)
           * NV308A, so seeing it identifies the object bound here. */
          if (method == 0x0300) { s_nv309e.fmt = data; s_nv309e.active = 1;
                                  s_nv309e.subch = (int)subch;
@@ -6464,7 +6504,7 @@ index 73b7e71..4fae098 100644
                  printf("[NV309E] format=0x%08X (log2 %ux%u fmt=0x%X)%c", data,
                         1u << ((data >> 16) & 0xFF), 1u << ((data >> 24) & 0xFF),
                         data & 0xFFFF, 10); }
-@@ -1091,7 +1310,7 @@ static void gcm_2d_method(u32 subch, u32 method, u32 data)
+@@ -1091,7 +1348,7 @@ static void gcm_2d_method(u32 subch, u32 method, u32 data)
              int local = (s_gcm2d.dst_dma != 0xFEED0001u);
              u32 base = cellGcmResolveLocated(local, s_gcm2d.dst_offset);
              { static int _it = 0;
@@ -6473,7 +6513,7 @@ index 73b7e71..4fae098 100644
                    printf("[GCM2D] inline write dst=0x%08X (off=0x%X dma=0x%X pt=%u,%u pitch=%u) = 0x%08X\n",
                           base + py * dst_pitch + px * 4, s_gcm2d.dst_offset,
                           s_gcm2d.dst_dma, px, py, dst_pitch, data); }
-@@ -1181,7 +1400,7 @@ static volatile u32 s_ref_qhead = 0, s_ref_qtail = 0;   /* single producer+consu
+@@ -1181,7 +1438,7 @@ static volatile u32 s_ref_qhead = 0, s_ref_qtail = 0;   /* single producer+consu
  static void gcm_fifo_bad_branch(const char* kind, u32 target, u32 word)
  {
      static int n = 0;
@@ -6482,7 +6522,7 @@ index 73b7e71..4fae098 100644
          fprintf(stderr, "[cellGcmSys] FIFO %s to unmapped IO 0x%08X (word 0x%08X) "
                  "-- not taken, drain stops here\n", kind, target, word);
  }
-@@ -1294,7 +1513,7 @@ static u32 gcm_spu_block_for_put(u32 put)
+@@ -1294,7 +1551,7 @@ static u32 gcm_spu_block_for_put(u32 put)
  static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
  {
      static int n = 0;
@@ -6491,7 +6531,7 @@ index 73b7e71..4fae098 100644
          fprintf(stderr, "[cellGcmSys] FIFO resync (%s) 0x%08X -> put 0x%08X\n",
                  why, *getoff, put);
      /* If an SPU DMA'd a pushbuffer that ends just short of `put`, that is the
-@@ -1305,7 +1524,7 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+@@ -1305,7 +1562,7 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
       * by the backend as prim=0. */
      u32 land = gcm_spu_block_for_put(put);
      if (land == 0xFFFFFFFFu) land = put;
@@ -6500,7 +6540,7 @@ index 73b7e71..4fae098 100644
          fprintf(stderr, "[cellGcmSys] resync landing on SPU pushbuffer "
                  "0x%08X (put 0x%08X) instead of skipping to put\n", land, put); }
  
-@@ -1323,7 +1542,7 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+@@ -1323,7 +1580,7 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
              gcm_ref_push_at(vm_read32(dea), io);
              rescued++;
          }
@@ -6509,7 +6549,7 @@ index 73b7e71..4fae098 100644
              fprintf(stderr, "[cellGcmSys] resync rescued %u fence(s) from"
                      " 0x%08X..0x%08X\n", rescued, from, land); }
      }
-@@ -1332,8 +1551,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+@@ -1332,8 +1589,12 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
  
  static void gcm_fifo_dump_around(u32 getoff)
  {
@@ -6523,7 +6563,7 @@ index 73b7e71..4fae098 100644
      for (u32 t = 0; t < GCM_TRACE_N; t++) {
          u32 k = (s_tr_i + t) % GCM_TRACE_N;
          if (!s_tr_w[k]) continue;
-@@ -1359,7 +1582,7 @@ static void gcm_ref_push_at(u32 v, u32 getoff)
+@@ -1359,7 +1620,7 @@ static void gcm_ref_push_at(u32 v, u32 getoff)
      if (t - s_ref_qhead >= GCM_REF_QLEN) {   /* overflow: drop oldest (keeps liveness) */
          s_ref_qhead++;
          static int _o = 0;
@@ -6532,7 +6572,7 @@ index 73b7e71..4fae098 100644
      }
      s_ref_q[t % GCM_REF_QLEN] = v;
      s_ref_qtail = t + 1;
-@@ -1469,17 +1692,73 @@ void cellGcm_ref_on_poll(void)
+@@ -1469,17 +1730,95 @@ void cellGcm_ref_on_poll(void)
      ReleaseSRWLockExclusive(&s_ref_pub_lock);
      if (dry && s_gcm_kick_ev)
          SetEvent(s_gcm_kick_ev);       /* dry: ask the present thread to walk */
@@ -6559,6 +6599,28 @@ index 73b7e71..4fae098 100644
 +                      in ? "running for" : "idle,", in ? ms - in : 0ull, s_drain_why,
 +                      end ? ms - end : 0ull, cnt - last_count);
 +              last_count = cnt; }
++            /* The flip side: a title that writes its next put from the flip
++             * handler (inFAMOUS 2) waits here when a completion never reaches
++             * it. Status, request/tick sequence, undelivered handler bits. */
++#ifdef _WIN32
++            { const unsigned pend = (unsigned)s_gcm_pending;
++#else
++            { const unsigned pend = (unsigned)atomic_load(&s_gcm_pending);
++#endif
++              fprintf(stderr, "[cellGcmSys]   flip: status=%u req_seq=%u tick_seq=%u requests=%u pending=0x%X\n",
++                      s_flip_status, s_flip_req_seq, s_flip_tick_seq, s_flip_request_count, pend); }
++            /* PS3_HANG_PEEK=<ea>:<len>[,...] (hex): guest words to print with
++             * the report -- a title's own sync state, read at the stall. */
++            { const char* pk = getenv("PS3_HANG_PEEK");
++              if (pk && *pk) { char buf[512]; strncpy(buf, pk, sizeof buf - 1); buf[sizeof buf - 1] = 0;
++                  for (char* tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
++                      unsigned ea = 0, len = 4;
++                      if (sscanf(tok, "%x:%x", &ea, &len) < 1) continue;
++                      if (len > 0x100) len = 0x100;
++                      fprintf(stderr, "[cellGcmSys]   peek 0x%08X:", ea);
++                      for (unsigned o = 0; o < len; o += 4) fprintf(stderr, " %08X", vm_read32(ea + o));
++                      fputc('\n', stderr);
++                  } } }
 +            gcm_fifo_dump_around(s_fifo_getoff);
 +            /* PS3_HANG_DUMP=1 (the launcher's debug mode): where every guest
 +             * thread is at that moment, not up to a minute later. */
@@ -6606,7 +6668,7 @@ index 73b7e71..4fae098 100644
      { static unsigned _n = 0; static unsigned long long _t0 = 0;
        extern unsigned long long ps3_ms_now(void);
        _n++;
-@@ -1608,7 +1887,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1608,7 +1947,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
              static u32 last_bad; static int n;
              if (s_fifo_getoff != last_bad || n < 4) {
                  last_bad = s_fifo_getoff;
@@ -6615,7 +6677,7 @@ index 73b7e71..4fae098 100644
                      fprintf(stderr, "[cellGcmSys] FIFO get=0x%08X has no IO "
                              "mapping -- resyncing to put=0x%08X\n",
                              s_fifo_getoff, put);
-@@ -1626,6 +1905,18 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1626,6 +1965,18 @@ static void gcm_rsx_process_fifo_unlocked(void)
          s_tr_w[s_tr_i % GCM_TRACE_N] = w;
          s_tr_i++;
          u32 type = w >> 29;
@@ -6634,7 +6696,7 @@ index 73b7e71..4fae098 100644
  
          if ((w & 0xFFFF0000u) == 0xFEAD0000u) {
              /* lv1 driver flip: statically-linked libgcm cellGcmSetFlip writes
-@@ -1647,6 +1938,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1647,6 +1998,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
                if (dbg && (flips <= 8ull || (flips % 200ull) == 0))
                    fprintf(stderr, "[flipword] %llu FIFO flip words decoded%c",
                            flips, 10); }
@@ -6643,7 +6705,7 @@ index 73b7e71..4fae098 100644
              if ((w & 0xFFFFFF00u) == GCM_FLIP_MARKER) {
                  /* Queued by _cellGcmSetFlipCommand, which already did the
                   * guest-visible half of the request. */
-@@ -1690,8 +1983,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1690,8 +2043,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -6664,12 +6726,12 @@ index 73b7e71..4fae098 100644
 +                  if (put != s_fifo_getoff) {
 +                      extern unsigned long long ps3_ms_now(void);
 +                      static u32 park_put;
-+                      static unsigned long long grace_since;   /* restarts when put moves */
++                      static gcm_run_clock grace;               /* restarts when put moves */
 +                      const unsigned long long now = ps3_ms_now();
 +                      if (s_park_off != s_fifo_getoff || park_put != put) {
 +                          if (s_park_off != s_fifo_getoff) { s_park_since = now; s_ps_parks++; }
-+                          s_park_off = s_fifo_getoff; park_put = put; grace_since = now;
-+                      } else if (now - grace_since >= GCM_PARK_GRACE_MS) {
++                          s_park_off = s_fifo_getoff; park_put = put; gcm_run_clock_start(&grace, now);
++                      } else if (gcm_run_clock_ms(&grace, now) >= GCM_PARK_GRACE_MS) {
 +                          s_park_off = 0; s_park_since = 0; s_ps_resync++;
 +                          gcm_fifo_dump_around(s_fifo_getoff);
 +                          gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
@@ -6680,7 +6742,7 @@ index 73b7e71..4fae098 100644
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -1754,8 +2073,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1754,8 +2133,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
                      u32 m = (type == 0) ? method + i * 4 : method;
                      u32 v = vm_read32(dea);
                      u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
@@ -6704,7 +6766,7 @@ index 73b7e71..4fae098 100644
                      if (m == 0x64u)      s_sema_offset = v;
                      else if (m == 0x6Cu) vm_write32(la, v);
                      else if (m == 0x68u && vm_read32(la) != v) {
-@@ -1763,12 +2095,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1763,12 +2155,38 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * the hardware does. Off by default: a title whose label nothing
               * ever writes would wedge the drain permanently, and RELEASE on
               * its own is the half that unblocks a waiting guest. */
@@ -6722,10 +6784,12 @@ index 73b7e71..4fae098 100644
 +                 * acquires the label its SPU lighting writes each frame: waiting
 +                 * here is what orders the RSX's sampling after that write. */
 +                static u32 b_off, b_val; static unsigned long long b_t0;
++                static gcm_run_clock b_run;   /* time the wait ran (GCM_STALL_GAP_MS) */
 +                extern unsigned long long ps3_ms_now(void);
 +                const unsigned long long now = ps3_ms_now();
-+                if (!b_t0 || b_off != s_sema_offset || b_val != v) { b_off = s_sema_offset; b_val = v; b_t0 = now; }
-+                if (!blk_ms || now - b_t0 < blk_ms) {
++                if (!b_t0 || b_off != s_sema_offset || b_val != v) { b_off = s_sema_offset; b_val = v; b_t0 = now;
++                                                                      gcm_run_clock_start(&b_run, now); }
++                if (!blk_ms || gcm_run_clock_ms(&b_run, now) < blk_ms) {
 +                    if (PS3_FT_ON() && !s_ft_sema_t0) s_ft_sema_t0 = ps3_ft_now();
 +                    sem_blocked = 1; break;
 +                }
@@ -6745,7 +6809,7 @@ index 73b7e71..4fae098 100644
                  s_fifo_getoff += 4 + count * 4;
                  continue;
              }
-@@ -1840,7 +2196,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1840,7 +2258,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                    { static u32 vw = 1;
                      if (vw == 1) { const char* e = getenv("GCM_VAL_WATCH"); vw = e ? (u32)strtoul(e, 0, 16) : 0; }
                      if (vw && dw == vw) {
@@ -6754,7 +6818,7 @@ index 73b7e71..4fae098 100644
                              printf("[valwatch] subch=%u method=0x%04X = 0x%08X get=0x%X%c", subch, m, vw, s_fifo_getoff, 10);
                      } }
                    /* ...and surface offsets (colour 0x210/0x218/0x288/0x28C, zeta 0x214) and texture 1 offset */
-@@ -1906,7 +2262,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1906,7 +2324,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                       * tells the title every queried object is occluded. */
                      if (m == 0x1800) {
                          const u32 v = dw, idx = (v & 0xFFFFFFu) / 16u;
@@ -6763,7 +6827,7 @@ index 73b7e71..4fae098 100644
                          if (idx < CELL_GCM_MAX_REPORT_COUNT) {
                              s_report_data[idx].timestamp = get_timestamp_ns();
                              s_report_data[idx].value = (v >> 24) == 1u ? 0xFFFFu : 0u;
-@@ -1919,7 +2275,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1919,7 +2337,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
              s_fifo_getoff += 4 + count * 4;
              continue;
          }
@@ -6772,7 +6836,7 @@ index 73b7e71..4fae098 100644
              fprintf(stderr, "[FIFOUW] unknown word 0x%08X at getoff 0x%X\n", w, s_fifo_getoff); }
          s_fifo_getoff += 4;                    /* unknown word: skip */
      }
-@@ -1955,7 +2311,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1955,7 +2373,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
        if (passes && budget <= 0 && s_fifo_getoff != put) {
            if (++burned >= passes) {
                static int n = 0;
@@ -6781,7 +6845,7 @@ index 73b7e71..4fae098 100644
                    fprintf(stderr, "[cellGcmSys] FIFO walker circling (get=0x%08X, "
                            "put=0x%08X, full budget burned x%d) -- following the "
                            "write head\n", s_fifo_getoff, put, burned);
-@@ -1964,8 +2320,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1964,8 +2382,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
            }
        } else burned = 0; }
  
@@ -6805,7 +6869,7 @@ index 73b7e71..4fae098 100644
            if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
                               gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
        } else { stuck = 0; last = s_fifo_getoff; } }
-@@ -1974,6 +2344,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1974,6 +2406,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
       * per tick (gcm_ref_push/gcm_ref_publish_one above) so every SET_REFERENCE
       * value stays observable to equality-waiters. The wrap recycle path polls
       * the drained EA. */
@@ -6813,7 +6877,7 @@ index 73b7e71..4fae098 100644
      if (getenv("GCM_DRAINDBG")) {
          static int n2 = 0;
          if (n2++ % 60 == 0)
-@@ -2057,7 +2428,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2057,7 +2490,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                  s_fifo_getoff = io_begin;                          /* get */
                  put = io_begin;
                  static int n = 0;
@@ -6822,7 +6886,7 @@ index 73b7e71..4fae098 100644
                      fprintf(stderr, "[cellGcmSys] recycled the title's own ring "
                              "(ctx=0x%08X begin=0x%08X end=0x%08X) -- its callback "
                              "does not%c", ctx, begin, end, 10);
-@@ -2139,7 +2510,7 @@ void cellGcm_fifo_recycle(u32 ctx_ea)
+@@ -2139,7 +2572,7 @@ void cellGcm_fifo_recycle(u32 ctx_ea)
      while (g_gcm_fifo_drained_ea != begin && spins < 2000) { Sleep(1); spins++; }
      if (spins >= 2000) {
          static int warned = 0;
@@ -6831,7 +6895,7 @@ index 73b7e71..4fae098 100644
              printf("[cellGcmSys] fifo recycle: drain stalled (drained=0x%08X begin=0x%08X)\n",
                     g_gcm_fifo_drained_ea, begin);
      }
-@@ -2247,7 +2618,7 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -2247,7 +2680,7 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
            }
        } }
  
@@ -6840,7 +6904,7 @@ index 73b7e71..4fae098 100644
          fprintf(stderr, "[FLIP] SetFlipCommand(buf=%u) set=%d\n",
                  bufferId, bufferId < CELL_GCM_MAX_DISPLAY_BUFFER_NUM ? s_display_buffer_set[bufferId] : -1); }
      if (bufferId >= CELL_GCM_MAX_DISPLAY_BUFFER_NUM)
-@@ -2266,8 +2637,13 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -2266,8 +2699,13 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
       * until the present thread's cellGcmTickFlip marks it done (vsync). */
@@ -6854,7 +6918,7 @@ index 73b7e71..4fae098 100644
  
      /* Invoke via OPD resolution, not a raw call into guest code.
       *
-@@ -2310,9 +2686,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -2310,9 +2748,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of
@@ -6876,7 +6940,7 @@ index 73b7e71..4fae098 100644
          s_fifo_getoff >= io_begin + GCM_RECYCLE_MARGIN) {
          vm_write32(cur + 4, 0x20000000u | io_begin);   /* JUMP -> begin */
          vm_write32(ctx + 8, begin);
-@@ -2571,7 +2957,7 @@ s32 cellGcmAddressToOffset(u32 address, u32* offset)
+@@ -2571,7 +3019,7 @@ s32 cellGcmAddressToOffset(u32 address, u32* offset)
      printf("[cellGcmSys] WARNING: AddressToOffset failed for 0x%08X\n", address);
      vm_write32(off_ea, 0);
      { static int _d = -1; if (_d < 0) _d = getenv("A2O_FAILDBG") ? 1 : 0;
@@ -6885,7 +6949,7 @@ index 73b7e71..4fae098 100644
            fprintf(stderr, "[A2O] FAILED ea=0x%08X (not in local or IO space)%c",
                    address, 10); } }
      return CELL_GCM_ERROR_FAILURE;
-@@ -2818,7 +3204,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
+@@ -2818,7 +3266,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
   * walker fills it). Unregistered, every call returned a faked 0. */
  u32 cellGcmGetReport(u32 type, u32 index)
  {
@@ -6894,7 +6958,7 @@ index 73b7e71..4fae098 100644
        if (__atomic_fetch_add(&n, 1, __ATOMIC_RELAXED) < 8 || (n % 2000) == 0) printf("[cellGcmSys] GetReport(type=%u, index=%u) -> %u%c", type, index,
                            index < CELL_GCM_MAX_REPORT_COUNT ? s_report_data[index].value : 0u, 10); }
      if (index >= CELL_GCM_MAX_REPORT_COUNT) return 0;
-@@ -2960,7 +3346,7 @@ u32 cellGcmGetTiledPitchSize(u32 size)
+@@ -2960,7 +3408,7 @@ u32 cellGcmGetTiledPitchSize(u32 size)
              if (s_valid_pitches[i] >= size) { r = s_valid_pitches[i]; break; }
          }
      }
@@ -24962,10 +25026,141 @@ index 7c1089c..b081b43 100644
                              (unsigned)(return_pc & SPU_LS_MASK), pc, ctx->image_id, ctx->host_depth,
                              (int)ctx->resident_ovl); }
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index 8d96768..7b9ade2 100644
+index 8d96768..bf484ba 100644
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
-@@ -874,8 +874,42 @@ static inline uint32_t spu__cfl_lane(uint32_t x, int scale, int is_unsigned) {
+@@ -858,6 +858,130 @@ SPU__SF_V2(spu_fcmgt, spu__sf_mag(x) >  spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
+ #undef SPU__SF_V2
+ #undef SPU__SF_V3
+ 
++/* ---- single precision, lean forms (what spu_lifter.py emits by default) ----------------------
++ * spu_{fa,fs,fm,fma,fms,fnms,fceq,fcgt,fcmeq,fcmgt}_lean: bit-identical to the forms above (and to
++ * the exact lanes spu__*_lane), with about half the instructions on the common path. A profile of
++ * the New Marais walk (2026-11-05, Time Profiler with line tables) put ~40% of the SPU threads'
++ * time in the fa/fm/fma fast paths above, which test each operand's class before computing and
++ * send exponent gaps over 29 and fma results on a 24-bit boundary to the scalar fix-up.
++ * Here:
++ *  - exponent-0 operands are made +0 first (spu__ln_flush), so zeros, denormals and ordinary
++ *    singles all take the vector path; an extended-range operand (exponent 255) is Inf/NaN as an
++ *    IEEE single or double and shows up in the result's range check;
++ *  - fm: the double product is exact; |p| < 2^128 (FACGT, false for Inf/NaN) or the exact lanes;
++ *    its significand cut to 24 bits is narrowed with round-to-odd (FCVTXN): exact for a normal
++ *    single, and a value under 2^-126 stays under it (FCVTN could round 2^-126 - 2^-150 up to
++ *    2^-126); exponent-0 results -> +0;
++ *  - fa/fs: in single precision. The round-to-nearest sum s and its exact error e (TwoSum, exact
++ *    for any finite single sum under round-to-nearest, subnormals included) give the truncation:
++ *    s, or one step toward zero (the bit pattern minus 1) when e is nonzero and of the opposite
++ *    sign. No exponent-gap limit. A sum with exponent 255 (overflow, extended operands) takes the
++ *    exact lanes;
++ *  - fma/fms/fnms: the product exact in double, the sum rounded once, TwoSum's error says which
++ *    side of s the exact sum lies on; s moved one double ulp toward zero when the exact sum is
++ *    inside it (err * s < 0: |s| >= 2^-299 and |err| >= 2^-352 here, so the product cannot
++ *    underflow) truncates to the exact sum's truncation, boundary or not;
++ *  - compares: zeros made +0, then sign-magnitude as two's complement (x ^ (x >>s 31) >> 1),
++ *    one integer compare.
++ * They assume the host's default floating-point mode (round to nearest, no flush-to-zero), as the
++ * forms above do. tests/test_spu_float_lean.c checks them against the exact lanes.
++ * SPU_LIFT_LEAN_FLOAT=0 (or spu_lifter.py --no-lean-float) lifts to the forms above instead. */
++#if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++SPU__NV_INLINE uint32x4_t spu__ln_flush(uint32x4_t x) { return vandq_u32(x, vtstq_u32(x, vdupq_n_u32(0x7F800000u))); }
++SPU__NV_INLINE int spu__ln_all(uint32x4_t m) { return vminvq_u32(m) == 0xFFFFFFFFu; }
++/* |lo|, |hi| < 2^128 (false for Inf/NaN), as four lanes */
++SPU__NV_INLINE uint32x4_t spu__ln_range(float64x2_t lo, float64x2_t hi) {
++    const float64x2_t lim = vdupq_n_f64(0x1p128);
++    return vuzp1q_u32(vreinterpretq_u32_u64(vcaltq_f64(lo, lim)), vreinterpretq_u32_u64(vcaltq_f64(hi, lim)));
++}
++/* two doubles (as bits) cut to 24-bit significands, narrowed with round-to-odd, exponent-0 -> +0 */
++SPU__NV_INLINE uint32x4_t spu__ln_narrow(uint64x2_t lo, uint64x2_t hi) {
++    const uint64x2_t tm = vdupq_n_u64(~0x1FFFFFFFull);
++    const float32x2_t l = vcvtx_f32_f64(vreinterpretq_f64_u64(vandq_u64(lo, tm)));
++    return spu__ln_flush(vreinterpretq_u32_f32(vcvtx_high_f32_f64(l, vreinterpretq_f64_u64(vandq_u64(hi, tm)))));
++}
++/* The exact lanes, out of line, vectors in and out (a u128 return kept the fast path's result
++ * in general registers, see SPU__NV_LANES). */
++SPU__NV_SLOW uint32x4_t spu__ln_fa_slow(uint32x4_t a, uint32x4_t b, uint32_t negb) {
++    SPU__NV_LANES(a, x); SPU__NV_LANES(b, y);
++    for (int i = 0; i < 4; i++) x[i] = spu__fa_lane(x[i], y[i] ^ negb);
++    return vld1q_u32(x);
++}
++SPU__NV_SLOW uint32x4_t spu__ln_fm_slow(uint32x4_t a, uint32x4_t b) {
++    SPU__NV_LANES(a, x); SPU__NV_LANES(b, y);
++    for (int i = 0; i < 4; i++) x[i] = spu__fm_lane(x[i], y[i]);
++    return vld1q_u32(x);
++}
++SPU__NV_SLOW uint32x4_t spu__ln_fma_slow(uint32x4_t a, uint32x4_t b, uint32x4_t c, uint32_t negp, uint32_t negc) {
++    SPU__NV_LANES(a, x); SPU__NV_LANES(b, y); SPU__NV_LANES(c, z);
++    for (int i = 0; i < 4; i++) x[i] = spu__fma_lane(x[i], y[i], z[i], negp, negc);
++    return vld1q_u32(x);
++}
++SPU__NV_INLINE u128 spu__ln_fa(u128 a, u128 b, uint32_t negb) {
++    const uint32x4_t xa = vld1q_u32(a._u32), yb = vld1q_u32(b._u32);
++    const float32x4_t x = vreinterpretq_f32_u32(spu__ln_flush(xa));
++    const float32x4_t y = vreinterpretq_f32_u32(veorq_u32(spu__ln_flush(yb), vdupq_n_u32(negb)));
++    const float32x4_t s = vaddq_f32(x, y), bb = vsubq_f32(s, x);
++    const float32x4_t e = vaddq_f32(vsubq_f32(x, vsubq_f32(s, bb)), vsubq_f32(y, bb));
++    const uint32x4_t su = vreinterpretq_u32_f32(s), eu = vreinterpretq_u32_f32(e);
++    if (__builtin_expect(vmaxvq_u32(vceqq_u32(vandq_u32(su, vdupq_n_u32(0x7F800000u)), vdupq_n_u32(0x7F800000u))) != 0, 0))
++        return spu__nv_u128(spu__ln_fa_slow(xa, yb, negb));
++    const uint32x4_t away = vandq_u32(vreinterpretq_u32_s32(vshrq_n_s32(vreinterpretq_s32_u32(veorq_u32(su, eu)), 31)),
++                                      vtstq_u32(eu, vdupq_n_u32(0x7FFFFFFFu)));
++    return spu__nv_u128(spu__ln_flush(vaddq_u32(su, away)));
++}
++SPU__NV_INLINE u128 spu_fa_lean(u128 a, u128 b) { return spu__ln_fa(a, b, 0); }
++SPU__NV_INLINE u128 spu_fs_lean(u128 a, u128 b) { return spu__ln_fa(a, b, 0x80000000u); }
++SPU__NV_INLINE u128 spu_fm_lean(u128 a, u128 b) {
++    const uint32x4_t xa = vld1q_u32(a._u32), yb = vld1q_u32(b._u32);
++    const uint32x4_t x = spu__ln_flush(xa), y = spu__ln_flush(yb);
++    const float64x2_t lo = vmulq_f64(spu__nv_lo(x), spu__nv_lo(y)), hi = vmulq_f64(spu__nv_hi(x), spu__nv_hi(y));
++    if (__builtin_expect(!spu__ln_all(spu__ln_range(lo, hi)), 0)) return spu__nv_u128(spu__ln_fm_slow(xa, yb));
++    return spu__nv_u128(spu__ln_narrow(vreinterpretq_u64_f64(lo), vreinterpretq_u64_f64(hi)));
++}
++/* s one double ulp toward zero where the exact sum s + e lies inside s */
++SPU__NV_INLINE uint64x2_t spu__ln_toward0(float64x2_t s, float64x2_t e) {
++    return vaddq_u64(vreinterpretq_u64_f64(s), vcltzq_f64(vmulq_f64(e, s)));
++}
++SPU__NV_INLINE u128 spu__ln_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc) {
++    const uint32x4_t xa = vld1q_u32(a._u32), yb = vld1q_u32(b._u32), zc = vld1q_u32(c._u32);
++    const uint32x4_t x = veorq_u32(spu__ln_flush(xa), vdupq_n_u32(negp)), y = spu__ln_flush(yb);
++    const uint32x4_t z = veorq_u32(spu__ln_flush(zc), vdupq_n_u32(negc));
++    const float64x2_t plo = vmulq_f64(spu__nv_lo(x), spu__nv_lo(y)), phi = vmulq_f64(spu__nv_hi(x), spu__nv_hi(y));
++    const float64x2_t zlo = spu__nv_lo(z), zhi = spu__nv_hi(z);
++    const float64x2_t slo = vaddq_f64(plo, zlo), shi = vaddq_f64(phi, zhi);
++    if (__builtin_expect(!spu__ln_all(spu__ln_range(slo, shi)), 0))
++        return spu__nv_u128(spu__ln_fma_slow(xa, yb, zc, negp, negc));
++    const float64x2_t blo = vsubq_f64(slo, plo), bhi = vsubq_f64(shi, phi);
++    const float64x2_t elo = vaddq_f64(vsubq_f64(plo, vsubq_f64(slo, blo)), vsubq_f64(zlo, blo));
++    const float64x2_t ehi = vaddq_f64(vsubq_f64(phi, vsubq_f64(shi, bhi)), vsubq_f64(zhi, bhi));
++    return spu__nv_u128(spu__ln_narrow(spu__ln_toward0(slo, elo), spu__ln_toward0(shi, ehi)));
++}
++SPU__NV_INLINE u128 spu_fma_lean(u128 a, u128 b, u128 c)  { return spu__ln_fma(a, b, c, 0, 0); }
++SPU__NV_INLINE u128 spu_fms_lean(u128 a, u128 b, u128 c)  { return spu__ln_fma(a, b, c, 0, 0x80000000u); }
++SPU__NV_INLINE u128 spu_fnms_lean(u128 a, u128 b, u128 c) { return spu__ln_fma(a, b, c, 0x80000000u, 0); }
++SPU__NV_INLINE int32x4_t spu__ln_key(uint32x4_t x) {
++    const uint32x4_t f = spu__ln_flush(x);
++    return vreinterpretq_s32_u32(veorq_u32(f, vshrq_n_u32(vreinterpretq_u32_s32(vshrq_n_s32(vreinterpretq_s32_u32(f), 31)), 1)));
++}
++SPU__NV_INLINE uint32x4_t spu__ln_mag(uint32x4_t x) { return vandq_u32(spu__ln_flush(x), vdupq_n_u32(0x7FFFFFFFu)); }
++SPU__NV_INLINE u128 spu_fcgt_lean(u128 a, u128 b)  { return spu__nv_u128(vcgtq_s32(spu__ln_key(vld1q_u32(a._u32)), spu__ln_key(vld1q_u32(b._u32)))); }
++SPU__NV_INLINE u128 spu_fceq_lean(u128 a, u128 b)  { return spu__nv_u128(vceqq_u32(spu__ln_flush(vld1q_u32(a._u32)), spu__ln_flush(vld1q_u32(b._u32)))); }
++SPU__NV_INLINE u128 spu_fcmgt_lean(u128 a, u128 b) { return spu__nv_u128(vcgtq_u32(spu__ln_mag(vld1q_u32(a._u32)), spu__ln_mag(vld1q_u32(b._u32)))); }
++SPU__NV_INLINE u128 spu_fcmeq_lean(u128 a, u128 b) { return spu__nv_u128(vceqq_u32(spu__ln_mag(vld1q_u32(a._u32)), spu__ln_mag(vld1q_u32(b._u32)))); }
++#else
++#define spu_fa_lean    spu_fa
++#define spu_fs_lean    spu_fs
++#define spu_fm_lean    spu_fm
++#define spu_fma_lean   spu_fma
++#define spu_fms_lean   spu_fms
++#define spu_fnms_lean  spu_fnms
++#define spu_fceq_lean  spu_fceq
++#define spu_fcgt_lean  spu_fcgt
++#define spu_fcmeq_lean spu_fcmeq
++#define spu_fcmgt_lean spu_fcmgt
++#endif
++
+ /* cflts / cfltu: value * 2^(173 - i8), truncated toward zero, saturating to the integer range.
+  * csflt / cuflt: integer / 2^(155 - i8) as an extended-range single (truncated). The ISA leaves
+  * scales outside 0..127 undefined; these compute the same formula for them. */
+@@ -874,8 +998,42 @@ static inline uint32_t spu__cfl_lane(uint32_t x, int scale, int is_unsigned) {
      const uint32_t v = sh >= 0 ? m << sh : (sh <= -24 ? 0 : m >> -sh);
      return neg ? 0u - v : v;
  }
@@ -25457,6 +25652,115 @@ index 0000000..6433225
 +    }
 +    printf("%llu conversions, %llu mismatches\n", n, bad);
 +    return bad != 0;
++}
+diff --git a/runtime/spu/tests/test_spu_float_lean.c b/runtime/spu/tests/test_spu_float_lean.c
+new file mode 100644
+index 0000000..887a03b
+--- /dev/null
++++ b/runtime/spu/tests/test_spu_float_lean.c
+@@ -0,0 +1,103 @@
++/* The lean single-precision forms (spu_*_lean, what the lifter emits) must be bit-identical to
++ * the exact lanes (spu_*_ref, spu_fcgt...) for every input: random words, ordinary floats, the
++ * normal/extended-range and underflow boundaries, zeros and denormals, cancellations, exponent
++ * gaps around 29, fma sums on and next to 24-bit boundaries, mixed per lane. Build on arm64:
++ *   cc -O2 -fno-strict-aliasing -fwrapv -I.. -I../../../include test_spu_float_lean.c -o t && ./t [N] */
++#include "../spu_helpers.h"
++#include <stdio.h>
++#include <stdlib.h>
++
++static uint64_t s_rng = 0x9E3779B97F4A7C15ull;
++static uint32_t rnd32(void)
++{
++    s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17;
++    return (uint32_t)(s_rng >> 16);
++}
++static uint32_t rnd_float(void)
++{
++    uint32_t sign = (rnd32() & 1u) << 31, man = rnd32() & 0x7FFFFFu, e;
++    switch (rnd32() % 14) {
++    case 0: e = 0; break;                                            /* zero / denormal */
++    case 1: e = 1 + rnd32() % 4; break;                              /* bottom of the normal range */
++    case 2: e = 248 + rnd32() % 8; break;                            /* top, into extended range */
++    case 3: return rnd32();                                          /* anything */
++    case 4: return sign;                                             /* +-0 */
++    case 5: man &= ~((1u << (rnd32() % 24)) - 1); e = 110 + rnd32() % 36; break;   /* short significands */
++    case 6: man = (rnd32() & 1) ? 0x7FFFFF : 0; e = 120 + rnd32() % 16; break;
++    case 7: e = 1 + rnd32() % 40; break;                             /* underflow territory */
++    case 8: e = 200 + rnd32() % 55; break;                           /* overflow territory */
++    default: e = 110 + rnd32() % 36; break;                          /* ordinary */
++    }
++    return sign | (e << 23) | man;
++}
++static uint32_t near_word(uint32_t o)
++{
++    switch (rnd32() % 6) {
++    case 0: return o;
++    case 1: return o ^ 0x80000000u;
++    case 2: return o + (rnd32() % 3) - 1;
++    case 3: return o & 0x807FFFFFu;                                  /* same significand, exponent 0 */
++    default: return rnd_float();
++    }
++}
++static long s_bad;
++static void check(const char* op, u128 got, u128 ref, u128 a, u128 b, u128 c)
++{
++    if (!memcmp(&got, &ref, 16)) return;
++    if (s_bad++ < 12)
++        printf("MISMATCH %s a=%08X %08X %08X %08X b=%08X %08X %08X %08X c=%08X %08X %08X %08X\n"
++               "  got=%08X %08X %08X %08X ref=%08X %08X %08X %08X\n", op,
++               a._u32[0], a._u32[1], a._u32[2], a._u32[3], b._u32[0], b._u32[1], b._u32[2], b._u32[3],
++               c._u32[0], c._u32[1], c._u32[2], c._u32[3], got._u32[0], got._u32[1], got._u32[2], got._u32[3],
++               ref._u32[0], ref._u32[1], ref._u32[2], ref._u32[3]);
++}
++static void all_ops(u128 a, u128 b, u128 c)
++{
++    check("fa", spu_fa_lean(a, b), spu_fa_ref(a, b), a, b, c);
++    check("fs", spu_fs_lean(a, b), spu_fs_ref(a, b), a, b, c);
++    check("fm", spu_fm_lean(a, b), spu_fm_ref(a, b), a, b, c);
++    check("fma", spu_fma_lean(a, b, c), spu_fma_ref(a, b, c), a, b, c);
++    check("fms", spu_fms_lean(a, b, c), spu_fms_ref(a, b, c), a, b, c);
++    check("fnms", spu_fnms_lean(a, b, c), spu_fnms_ref(a, b, c), a, b, c);
++    check("fceq", spu_fceq_lean(a, b), spu_fceq(a, b), a, b, c);
++    check("fcgt", spu_fcgt_lean(a, b), spu_fcgt(a, b), a, b, c);
++    check("fcmeq", spu_fcmeq_lean(a, b), spu_fcmeq(a, b), a, b, c);
++    check("fcmgt", spu_fcmgt_lean(a, b), spu_fcmgt(a, b), a, b, c);
++}
++static u128 w4(uint32_t x, uint32_t y, uint32_t z, uint32_t w) { u128 r; r._u32[0] = x; r._u32[1] = y; r._u32[2] = z; r._u32[3] = w; return r; }
++
++int main(int argc, char** argv)
++{
++#if !defined(__ARM_NEON)
++    puts("test_spu_float_lean: no NEON, the lean forms are the plain ones");
++    return 0;
++#else
++    /* directed: (1 - 2^-24) * 2^-126 = 2^-126 - 2^-150 truncates below Smin (+0); round-to-nearest
++     * narrowing would give 2^-126. Overflow into and past the extended range, x + tiny, x - tiny. */
++    all_ops(w4(0x3F7FFFFFu, 0xBF7FFFFFu, 0x7F7FFFFFu, 0x7FFFFFFFu), w4(0x00800000u, 0x00800000u, 0x40000000u, 0x3F800000u),
++            w4(0x00000001u, 0x80800000u, 0x7F7FFFFFu, 0x80000001u));
++    all_ops(w4(0x3F800000u, 0x3F800000u, 0x00800000u, 0x7F800000u), w4(0x2F800000u, 0xAF800000u, 0x80000000u, 0x7F800000u),
++            w4(0xBF800000u, 0x3F800000u, 0x00800000u, 0xFF800000u));
++    const long N = argc > 1 ? atol(argv[1]) : 4000000;
++    for (long it = 0; it < N; it++) {
++        u128 a, b, c;
++        for (int i = 0; i < 4; i++) { a._u32[i] = rnd_float(); b._u32[i] = near_word(rnd_float()); c._u32[i] = rnd_float(); }
++        switch (rnd32() % 6) {
++        case 0: for (int i = 0; i < 4; i++) b._u32[i] = (a._u32[i] ^ 0x80000000u) + (rnd32() & 0xFF) - 0x80; break; /* cancellation */
++        case 1: for (int i = 0; i < 4; i++)                                                                        /* gaps 12..35 */
++                    b._u32[i] = (a._u32[i] & 0x80000000u) | (((a._u32[i] >> 23 & 0xFF) - 12 - rnd32() % 24) & 0xFF) << 23 | (rnd32() & 0x7FFFFF);
++                break;
++        case 2: for (int i = 0; i < 4; i++) {                                                                      /* c ~ -a*b */
++                    float x, y; memcpy(&x, &a._u32[i], 4); memcpy(&y, &b._u32[i], 4);
++                    const float p = -(x * y); uint32_t u; memcpy(&u, &p, 4); c._u32[i] = u + (rnd32() % 5) - 2; }
++                break;
++        case 3: for (int i = 0; i < 4; i++) c._u32[i] = (c._u32[i] & 0xFF800000u) | (rnd32() & 1 ? 0 : 0x400000); break;
++        case 4: for (int i = 0; i < 4; i++) b._u32[i] = near_word(a._u32[i]); break;                              /* compares */
++        default: break;
++        }
++        all_ops(a, b, c);
++    }
++    printf("test_spu_float_lean: %ld vectors x 10 ops, %ld mismatches\n", N, s_bad);
++    return s_bad != 0;
++#endif
 +}
 diff --git a/runtime/spu/tests/test_spu_lifted_start.c b/runtime/spu/tests/test_spu_lifted_start.c
 index cb91558..339423c 100644
@@ -101973,15 +102277,206 @@ index ab59cbe..cf8907c 100644
                  # right after another branch (fallthrough entry)
                  while k > 0 and seg[k].addr not in targets and not _ends_block(seg[k - 1]):
 diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
-index 00b771d..91d3c48 100644
+index 00b771d..e4bb3b3 100644
 --- a/tools/spu_lifter.py
 +++ b/tools/spu_lifter.py
-@@ -499,7 +499,11 @@ def compute_link_returns(insns, bounds) -> set:
+@@ -493,13 +493,202 @@ def compute_link_returns(insns, bounds) -> set:
+     return returns
+ 
+ 
++# ---------------------------------------------------------------------------
++# Register locals (opt-in: SPU_LIFT_REG_LOCALS=1 / --reg-locals; off by default)
++# ---------------------------------------------------------------------------
++# The per-instruction translation reads and writes the register file in memory
++# (ctx->gpr[n]). The port builds with -fno-strict-aliasing, so every LS store
++# (a uint8_t* write) and every out-of-line call -- the float helpers' cold
++# fix-ups included -- forces the compiler to keep each ctx->gpr[n] in memory:
++# one store per instruction, and the registers reloaded after any such call.
++# reg_localize() rewrites one lifted function so its SPU registers live in C
++# locals (R_<n>, which never escape, so the compiler keeps them in host vector
++# registers and hoists loop-invariant work such as a shufb control's
++# preparation): loaded once at entry (loads the compiler finds dead go away),
++# written back only where the register file can be observed -- before any
++# statement that leaves the function or calls into the runtime with ctx --
++# and re-read after such a call. Only the registers that may have changed
++# since the last write-back on some path to that point are stored (a forward
++# may-dirty dataflow over the function's labels and gotos). Statements other
++# than the plain ones keep their ctx->gpr form exactly as before and run with
++# the register file up to date, so the runtime sees what it always saw. A
++# function with a statement the pass does not recognise is left in the old form.
++# Measured on the inFAMOUS 2 walk (2026-11-05): no gain on its own -- the write-backs
++# at every exit of a loop and the extra spills of keeping ~40 registers live cost what
++# the saved per-instruction stores bought (SPU busy +2%, and the lean-float tree was
++# faster without it) -- so it is not the default; kept, bit-exact, for other titles
++# and for a later pass with liveness across functions.
++_RL_GPR = re.compile(r'ctx->gpr\[(\d+)\]')
++_RL_DEF = re.compile(r'ctx->gpr\[(\d+)\] =(?!=)')
++_RL_LABEL = re.compile(r'^(loc_[0-9A-F]+):$')
++_RL_GOTO = re.compile(r'^goto (loc_[0-9A-F]+);$')
++_RL_LINK = re.compile(r'^(ctx->gpr\[\d+\] = spu_link\([^;]*\);) (.+)$')
++_RL_EXIT_END = re.compile(r'(return;|SPU_DIRECT\([^;]*\);|SPU_RET\(ctx\);|'
++                          r'SPU_RET_REG\(ctx, \d+\);)\s*\}?$')
++
++
++def _rl_ctx_free(s: str) -> bool:
++    """s touches ctx only through ctx->gpr[n], the inline LS accessors and
++    ctx->code_base (none of which reads the register file)."""
++    t = _RL_GPR.sub('', s)
++    for k in ('spu_ls_read128(ctx,', 'spu_ls_write128(ctx,', 'ctx->code_base'):
++        t = t.replace(k, '')
++    return 'ctx' not in t and 'g_spu_' not in t and 'spu_unsupported' not in t
++
++
++def _rl_split_if(s: str):
++    """'if (<cond>) <rest>' -> (cond, rest) with balanced parentheses, else None."""
++    if not s.startswith('if ('):
++        return None
++    depth = 0
++    for i in range(3, len(s)):
++        if s[i] == '(':
++            depth += 1
++        elif s[i] == ')':
++            depth -= 1
++            if depth == 0:
++                return s[4:i], s[i + 1:].strip()
++    return None
++
++
++def reg_localize(body_lines: list) -> list:
++    """Rewrite one lifted function body to keep SPU registers in C locals.
++    Returns the new body lines, or the input unchanged when the body has a
++    statement shape the pass does not handle."""
++    items = []                      # (kind, a, b)
++    for raw in body_lines:
++        s = raw.strip()
++        m = _RL_LINK.match(s)       # `brsl` emits the link and the transfer on one line
++        parts = [m.group(1), m.group(2)] if m else [s]
++        for s in parts:
++            m = _RL_LABEL.match(s)
++            if m:
++                items.append(('label', m.group(1), None)); continue
++            m = _RL_GOTO.match(s)
++            if m:
++                items.append(('goto', m.group(1), None)); continue
++            sp = _rl_split_if(s)
++            if sp is not None and _rl_ctx_free(sp[0]) and '"' not in sp[0]:
++                cond, rest = sp
++                m = _RL_GOTO.match(rest)
++                if m:
++                    items.append(('cgoto', cond, m.group(1))); continue
++                if (rest.startswith('{') and rest.endswith('}') and 'goto' not in rest
++                        and _RL_EXIT_END.search(rest[1:-1].strip())):
++                    items.append(('cexit', cond, rest)); continue
++            if 'goto' in s or s.endswith(':'):
++                return body_lines   # a transfer the pass does not model: old form
++            if 'if (' not in s and _RL_EXIT_END.search(s):
++                items.append(('exit', s, None)); continue
++            if (not s.startswith('if') and '{' not in s and 'return' not in s
++                    and _rl_ctx_free(s)):
++                d = 0
++                for r in _RL_DEF.findall(s):
++                    d |= 1 << int(r)
++                items.append(('pure', s, d)); continue
++            items.append(('barrier', s, None))
++
++    labels = {a: i for i, (k, a, _) in enumerate(items) if k == 'label'}
++    for k, a, b in items:
++        t = a if k == 'goto' else b if k == 'cgoto' else None
++        if t is not None and t not in labels:
++            return body_lines
++    used = set()
++    for k, a, b in items:
++        if k in ('pure', 'cgoto', 'cexit'):
++            used.update(int(r) for r in _RL_GPR.findall(a))
++    if not used:
++        return body_lines
++
++    # may-dirty dataflow: registers whose local may be newer than ctx->gpr
++    n = len(items)
++    din = [None] * (n + 1)          # n = falling off the end of the function
++    din[0] = 0
++    changed = True
++    while changed:
++        changed = False
++        for i, (k, a, b) in enumerate(items):
++            if din[i] is None:
++                continue
++            out = din[i] | b if k == 'pure' else 0 if k == 'barrier' else din[i]
++            succ = []
++            if k in ('label', 'pure', 'cgoto', 'cexit', 'barrier'):
++                succ.append(i + 1)
++            if k == 'goto':
++                succ.append(labels[a])
++            elif k == 'cgoto':
++                succ.append(labels[b])
++            for j in succ:
++                nv = out if din[j] is None else din[j] | out
++                if nv != din[j]:
++                    din[j] = nv
++                    changed = True
++
++    def loc(s):
++        return _RL_GPR.sub(lambda m: f"R_{m.group(1)}", s)
++
++    def flush(mask):
++        return [f"ctx->gpr[{r}] = R_{r};" for r in range(128) if mask >> r & 1]
++
++    regs = sorted(used)
++    reload = [" ".join(f"R_{r} = ctx->gpr[{r}];" for r in regs)]
++    out = ["u128 " + ", ".join(f"R_{r} = ctx->gpr[{r}]" for r in regs) + ";"]
++    pending = False                 # locals behind ctx->gpr (after a runtime call)
++    for i, (k, a, b) in enumerate(items):
++        d = din[i] or 0
++        if k == 'exit':
++            out += flush(d) + [a]
++            pending = False
++            continue
++        if pending and k != 'barrier':
++            out += reload
++            pending = False
++        if k == 'label':
++            out.append(f"{a}:")
++        elif k == 'goto':
++            out.append(f"goto {a};")
++        elif k == 'cgoto':
++            out.append(f"if ({loc(a)}) goto {b};")
++        elif k == 'cexit':
++            out.append(f"if ({loc(a)}) {{ " + " ".join(flush(d)) + (" " if d else "") + b + " }")
++        elif k == 'pure':
++            out.append(loc(a))
++        else:                       # barrier: the old statement, register file current
++            out += flush(d) + [a]
++            pending = True
++    if din[n]:
++        out += flush(din[n])        # falling off the end returns to the caller
++    return out
++
++
++def _reg_locals_default() -> bool:
++    return os.environ.get("SPU_LIFT_REG_LOCALS", "0") == "1"
++
++
++# Single-precision ops lifted to the lean helpers (spu_helpers.h, spu_*_lean: bit-identical,
++# about half the instructions); SPU_LIFT_LEAN_FLOAT=0 / --no-lean-float = the plain helpers.
++_LEAN_FLOAT = ("fa", "fs", "fm", "fma", "fms", "fnms", "fceq", "fcgt", "fcmeq", "fcmgt")
++
++
++def _lean_float_default() -> bool:
++    return os.environ.get("SPU_LIFT_LEAN_FLOAT", "1") != "0"
++
+ 
+ # lv2 stop-and-signal syscalls that resume at the next instruction (the same
+ # set as find_spu_functions.LV2_RESUMING_STOPS, which decides function extents).
  LV2_RESUMING_STOPS = {0x100, 0x110, 0x111}
  
  class SPULifter:
 -    def __init__(self, trace: bool = False, prefix: str = ""):
-+    def __init__(self, trace: bool = False, prefix: str = "", reloc: bool = False):
++    def __init__(self, trace: bool = False, prefix: str = "", reloc: bool = False,
++                 reg_locals: bool = None, lean_float: bool = None):
++        # Register locals (reg_localize): only with SPU_LIFT_REG_LOCALS=1 or
++        # --reg-locals; never with --trace (its hooks read ctx->gpr).
++        self.reg_locals = (_reg_locals_default() if reg_locals is None else reg_locals) and not trace
++        self.lean_float = _lean_float_default() if lean_float is None else lean_float
 +        # --relocatable: the image is lifted at LS 0 and runs wherever it is
 +        # loaded; every LS address derived from its own position adds
 +        # ctx->code_base (spu_overlay_register_region_reloc).
@@ -101989,7 +102484,7 @@ index 00b771d..91d3c48 100644
          self.functions: list[LiftedFunction] = []
          self.call_targets: set[int] = set()
          self.branch_targets: set[int] = set()
-@@ -572,8 +576,7 @@ class SPULifter:
+@@ -572,8 +761,7 @@ class SPULifter:
                           and (last_insn.raw & 0x3FFF) in LV2_RESUMING_STOPS))
                  and end in getattr(self, "func_starts", set())):
              func.body_lines.append(
@@ -101999,7 +102494,7 @@ index 00b771d..91d3c48 100644
  
          # Infinite no-op self-loop (the SPU `br .` halt idiom): a function whose
          # whole body is nops + an unconditional branch back into itself does
-@@ -596,6 +599,16 @@ class SPULifter:
+@@ -596,6 +784,16 @@ class SPULifter:
          self.functions.append(func)
          return func
  
@@ -102016,7 +102511,27 @@ index 00b771d..91d3c48 100644
      @staticmethod
      def _branch_target(insn: SPUInstruction):
          """The literal target of a direct branch, or None if it has none.
-@@ -856,8 +869,12 @@ class SPULifter:
+@@ -754,7 +952,8 @@ class SPULifter:
+             "cwx": "spu_cwx", "cdx": "spu_cdx",
+         }
+         if mn in rr_bin:
+-            return f"{g(rt())} = {rr_bin[mn]}({g(ra())}, {g(rb())});"
++            fn = rr_bin[mn] + ("_lean" if self.lean_float and mn in _LEAN_FLOAT else "")
++            return f"{g(rt())} = {fn}({g(ra())}, {g(rb())});"
+ 
+         # ---- unary (register) ----
+         rr_un = {
+@@ -832,7 +1031,8 @@ class SPULifter:
+             return f"{g(rt())} = spu_shufb({g(ra())}, {g(rb())}, {g(rc)});"
+         if mn in ("fma", "fms", "fnms", "mpya"):
+             rc = _reg(ops[3])
+-            return f"{g(rt())} = spu_{mn}({g(ra())}, {g(rb())}, {g(rc)});"
++            fn = f"spu_{mn}" + ("_lean" if self.lean_float and mn in _LEAN_FLOAT else "")
++            return f"{g(rt())} = {fn}({g(ra())}, {g(rb())}, {g(rc)});"
+         # sfx: extended subtract — RT is also a source (carry-in = low bit of old RT).
+         if mn == "sfx":
+             return f"{g(rt())} = spu_sfx({g(ra())}, {g(rb())}, {g(rt())});"
+@@ -856,8 +1056,12 @@ class SPULifter:
              if disp is not None:
                  return f"spu_ls_write128(ctx, {g(base)}._u32[0] + {disp}, {g(rt())});"
          if mn in ("lqa", "lqr"):
@@ -102029,7 +102544,7 @@ index 00b771d..91d3c48 100644
              return f"spu_ls_write128(ctx, {_imm(ops[1])}, {g(rt())});"
          if mn == "lqx":
              return f"{g(rt())} = spu_ls_read128(ctx, {g(ra())}._u32[0] + {g(rb())}._u32[0]);"
-@@ -878,6 +895,9 @@ class SPULifter:
+@@ -878,6 +1082,9 @@ class SPULifter:
          # ---- branches ----
          if mn in ("br", "bra"):
              tgt = self._branch_target(insn)
@@ -102039,7 +102554,7 @@ index 00b771d..91d3c48 100644
              # SELF-LOOP TRAP: `br .` (target == this instruction) is an infinite
              # hang on real SPU -- a deliberate trap, no forward progress. Emitting
              # `goto loc_self` busy-spins the host thread forever; stop the SPU
-@@ -892,7 +912,14 @@ class SPULifter:
+@@ -892,7 +1099,14 @@ class SPULifter:
              tgt = self._branch_target(insn)
              # Link register: preferred word only, other slots ZERO (real HW /
              # RPCS3 v128::from32r) -- splatting corrupts full-quadword link use.
@@ -102055,7 +102570,7 @@ index 00b771d..91d3c48 100644
              # SELF-LOOP TRAP: `brsl rX, .` (target == this instruction) is an
              # infinite loop on real SPU (re-sets the link each pass, never
              # advances) -- a trap, NOT a call. Emitting a host call recurses
-@@ -917,6 +944,11 @@ class SPULifter:
+@@ -917,6 +1131,11 @@ class SPULifter:
                  # `bi $r0` returns via host return) + SPU_DRAIN (drains the
                  # callee's own tail-chains so they don't grow the caller frame)
                  # + image save/restore (adopt-on-serve cannot leak upward).
@@ -102067,7 +102582,7 @@ index 00b771d..91d3c48 100644
                  return (f"{link} {{ int32_t _si = (int32_t)ctx->image_id; "
                          f"ctx->host_depth++; {self.prefix}spu_func_{tgt:08X}(ctx); "
                          f"spu_drain_call(ctx, 0x{addr + 4:X}); ctx->host_depth--; spu_img_restore(ctx, _si); }}")
-@@ -932,8 +964,8 @@ class SPULifter:
+@@ -932,8 +1151,8 @@ class SPULifter:
              self.branch_targets.add(tgt)
              # Cross-function conditional branch = conditional tail: hand the
              # target to the trampoline and unwind (enclosing SPU_DRAIN re-enters).
@@ -102078,7 +102593,7 @@ index 00b771d..91d3c48 100644
          # Interrupt enable/disable bits on the bi family (bie/bid, irete/iretd,
          # bisle(d)...): bit 0x40000 = E (enable), 0x80000 = D (disable), taking
          # effect when the branch is TAKEN. The WWS jobmanager's poll loop runs
-@@ -980,17 +1012,19 @@ class SPULifter:
+@@ -980,17 +1199,19 @@ class SPULifter:
              # SPU_DRAIN + image save/restore) so the callee's tail-chains drain
              # here and its `bi $r0` returns via host return.
              # read the target BEFORE writing the link: rt may be the same register as ra
@@ -102103,7 +102618,7 @@ index 00b771d..91d3c48 100644
                      f"if ((ctx->event_status & ctx->event_mask) != 0) {{ "
                      f"{_ied}ctx->pc = _tg; "
                      f"g_spu_trampoline_fn = spu_indirect_branch; return; }} }}")
-@@ -1044,8 +1078,9 @@ class SPULifter:
+@@ -1044,8 +1265,9 @@ class SPULifter:
          self.branch_targets.add(tgt)
          # Cross-function unconditional tail: hand the target to the trampoline
          # and unwind so the enclosing SPU_DRAIN re-enters (no host-stack growth).
@@ -102115,7 +102630,17 @@ index 00b771d..91d3c48 100644
  
      # ------------------------------------------------------------------ #
      def emit_header(self) -> str:
-@@ -1089,7 +1124,7 @@ class SPULifter:
+@@ -1070,7 +1292,8 @@ class SPULifter:
+         weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
+         for f in self.functions:
+             lines.append(f"void {weak}{f.name}(spu_context* ctx) {{")
+-            for b in f.body_lines:
++            body = reg_localize(f.body_lines) if self.reg_locals else f.body_lines
++            for b in body:
+                 lines.append(b if b.endswith(":") else f"    {b}")
+             lines.append("}")
+             lines.append("")
+@@ -1089,7 +1312,7 @@ class SPULifter:
              lines.append(" * branches that escape a function's range). */")
              for t in externs:
                  lines.append(f"void {self.prefix}spu_func_{t:08X}(spu_context* ctx) {{")
@@ -102124,22 +102649,30 @@ index 00b771d..91d3c48 100644
                               f"g_spu_trampoline_fn = spu_indirect_branch; return;")
                  lines.append("}")
              lines.append("")
-@@ -1133,6 +1168,9 @@ def main() -> None:
+@@ -1133,6 +1356,15 @@ def main() -> None:
                          "targets + STT_FUNC symbols). When set, .text is "
                          "read from this ELF and the positional <input> arg "
                          "is ignored.")
 +    p.add_argument("--relocatable", action="store_true",
 +                   help="lift at --base 0 for code that runs at any LS address: every "
 +                        "address derived from its own position adds ctx->code_base")
++    p.add_argument("--reg-locals", action="store_true",
++                   help="keep SPU registers in C locals within each lifted function "
++                        "(reg_localize, opt-in); SPU_LIFT_REG_LOCALS=1 does the same")
++    p.add_argument("--no-lean-float", action="store_true",
++                   help="lift fa/fs/fm/fma/fms/fnms/fceq/fcgt/fcmeq/fcmgt to the plain "
++                        "helpers instead of spu_*_lean; SPU_LIFT_LEAN_FLOAT=0 does the same")
      p.add_argument("--trace", action="store_true",
                     help="Emit spu_trace_pc/spu_trace_rt around each instruction "
                          "for §3 diff-vs-RPCS3 validation. Output goes to stderr "
-@@ -1297,7 +1335,7 @@ def main() -> None:
+@@ -1297,7 +1529,9 @@ def main() -> None:
  
      insns = disassemble_spu(data, base)
  
 -    lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix)
-+    lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix, reloc=args.relocatable)
++    lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix, reloc=args.relocatable,
++                       reg_locals=True if args.reg_locals else None,
++                       lean_float=False if args.no_lean_float else None)
      lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
      if lifter.bi_r0_jump:
          print(f"  {len(lifter.bi_r0_jump)} `bi $r0` computed-jump site(s) "
@@ -102398,3 +102931,160 @@ index 0000000..9f11861
 +    r = subprocess.run([str(exe)], timeout=10)
 +    print('PASS' if r.returncode == 0 else 'FAIL')
 +    raise SystemExit(r.returncode)
+diff --git a/tools/test_spu_reg_locals.py b/tools/test_spu_reg_locals.py
+new file mode 100644
+index 0000000..a0686e3
+--- /dev/null
++++ b/tools/test_spu_reg_locals.py
+@@ -0,0 +1,151 @@
++#!/usr/bin/env python3
++"""spu_lifter.reg_localize: SPU registers in C locals must behave exactly like ctx->gpr[].
++
++Structural checks on the rewritten text (write-backs only before exits and runtime calls,
++re-reads after them, functions with an unknown transfer left alone, the environment
++switch), then a semantic check: a synthetic lifted function with a loop, LS loads/stores,
++conditional exits, a runtime call and a nested call is compiled in both forms against a
++small stub runtime and run on random register files / local stores; the log of every
++runtime call (with the register file at that moment), the exit and the final state must
++match. The real lifted tree is compared the same way by the port's equivalence harness.
++"""
++import os
++import random
++import shutil
++import subprocess
++import sys
++import tempfile
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import spu_lifter  # noqa: E402
++from spu_lifter import reg_localize  # noqa: E402
++
++BODY = [
++    "loc_00000100:",
++    "ctx->gpr[5] = spu_ls_read128(ctx, ctx->gpr[3]._u32[0] + 0x0);",
++    "/* nop */;",
++    "ctx->gpr[6] = spu_a(ctx->gpr[5], ctx->gpr[6]);",
++    "spu_ls_write128(ctx, ctx->gpr[3]._u32[0] + 0x10, ctx->gpr[6]);",
++    "ctx->gpr[3] = spu_ai(ctx->gpr[3], 32);",
++    "if (ctx->gpr[6]._u32[0] == 7) { SPU_DIRECT(ctx, 0x200, f_200); }",
++    "ctx->gpr[4] = spu_ai(ctx->gpr[4], -1);",
++    "if ((int32_t)ctx->gpr[4]._u32[0] == (int32_t)(-9)) { ctx->status = 9; return; }",
++    "if (ctx->gpr[4]._u32[1] & 1) goto loc_00000140;",
++    "spu_wrch(ctx, 7, ctx->gpr[4]);",
++    "ctx->gpr[7] = spu_rdch(ctx, 3);",
++    "loc_00000140:",
++    "ctx->gpr[8] = spu_a(ctx->gpr[7], ctx->gpr[5]);",
++    "ctx->gpr[0] = spu_link(0x150); { ctx->host_depth++; f_callee(ctx); ctx->host_depth--; }",
++    "if (ctx->gpr[4]._u32[0] != 0) goto loc_00000100;",
++    "ctx->gpr[9] = spu_ai(ctx->gpr[8], 1);",
++    "ctx->gpr[0] = spu_link(0x160); goto loc_00000164;",
++    "loc_00000164:",
++    "ctx->gpr[10] = spu_a(ctx->gpr[9], ctx->gpr[0]);",
++]
++
++PRELUDE = r"""
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++typedef union { uint32_t _u32[4]; uint64_t _u64[2]; } u128;
++typedef struct { u128 gpr[128]; uint8_t ls[65536]; uint32_t pc, status, host_depth; } spu_context;
++static uint64_t H;
++static void mix(uint64_t v) { H = (H ^ v) * 0x100000001B3ull; }
++static void mixctx(spu_context* c) { for (int i = 0; i < 128; i++) { mix(c->gpr[i]._u64[0]); mix(c->gpr[i]._u64[1]); } }
++static u128 spu_ls_read128(spu_context* c, uint32_t a) { u128 r; memcpy(&r, c->ls + (a & 0xFFF0u), 16); return r; }
++static void spu_ls_write128(spu_context* c, uint32_t a, u128 v) { memcpy(c->ls + (a & 0xFFF0u), &v, 16); }
++static u128 spu_a(u128 a, u128 b) { for (int i = 0; i < 4; i++) a._u32[i] += b._u32[i]; return a; }
++static u128 spu_ai(u128 a, int32_t k) { for (int i = 0; i < 4; i++) a._u32[i] += (uint32_t)k; return a; }
++static u128 spu_link(uint32_t a) { u128 r = { { a, 0, 0, 0 } }; return r; }
++static void spu_wrch(spu_context* c, int ch, u128 v) { mix(ch); mix(v._u64[0]); mixctx(c); }
++static u128 spu_rdch(spu_context* c, int ch) { mix(ch); mixctx(c); u128 r = { { (uint32_t)H, 1, 2, 3 } }; return r; }
++static void f_callee(spu_context* c) { mixctx(c); c->gpr[7]._u32[0] ^= 0x55u; c->gpr[3]._u32[2] += 1; }
++#define SPU_DIRECT(ctx, PC, FN) do { (ctx)->pc = (PC); mixctx(ctx); return; } while (0)
++"""
++
++MAIN = r"""
++int main(void) {
++    static spu_context c;
++    uint64_t s = 88172645463325252ull;
++    for (int t = 0; t < 2000; t++) {
++        for (int i = 0; i < 128; i++) for (int k = 0; k < 4; k++) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; c.gpr[i]._u32[k] = (uint32_t)s % 23u; }
++        for (int i = 0; i < 65536; i += 4) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; uint32_t w = (uint32_t)s % 5u; memcpy(c.ls + i, &w, 4); }
++        c.gpr[3]._u32[0] = (uint32_t)(s % 4096u) * 16u; c.status = 0; c.pc = 0;
++        H = 0xCBF29CE484222325ull;
++        f(&c);
++        mixctx(&c); mix(c.pc); mix(c.status);
++        for (int i = 0; i < 65536; i += 8) { uint64_t w; memcpy(&w, c.ls + i, 8); mix(w); }
++        printf("%016llx\n", (unsigned long long)H);
++    }
++    return 0;
++}
++"""
++
++
++def emit(body):
++    return "void f(spu_context* ctx) {\n" + "\n".join(
++        b if b.endswith(":") else "    " + b for b in body) + "\n}\n"
++
++
++def structural():
++    out = reg_localize(BODY)
++    assert out[0].startswith("u128 R_"), out[0]
++    text = "\n".join(out)
++    # plain statements use locals; the loop has no ctx->gpr store on its fall-through path
++    assert "R_6 = spu_a(R_5, R_6);" in text
++    assert "spu_ls_write128(ctx, R_3._u32[0] + 0x10, R_6);" in text
++    # the conditional exit writes back inside its branch only
++    line = next(o for o in out if o.startswith("if (R_6._u32[0] == 7)"))
++    assert "ctx->gpr[6] = R_6;" in line and "SPU_DIRECT" in line, line
++    # the runtime call runs on the register file, then the locals are re-read
++    i = out.index("spu_wrch(ctx, 7, ctx->gpr[4]);")
++    assert "ctx->gpr[4] = R_4;" in out[:i], "write-back before the runtime call"
++    assert out[i + 1] == "ctx->gpr[7] = spu_rdch(ctx, 3);", "consecutive calls share one write-back"
++    assert out[i + 2].startswith("R_"), "re-read after the calls"
++    # link + goto on one line is split into a plain def and the goto
++    assert "R_0 = spu_link(0x160);" in out and "goto loc_00000164;" in out
++    # a goto into nowhere / an unknown transfer: the function stays in the old form
++    assert reg_localize(["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);", "goto loc_00000999;"]) == \
++        ["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);", "goto loc_00000999;"]
++    odd = ["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);", "{ x = 1; goto loc_00000100; }", "loc_00000100:"]
++    assert reg_localize(odd) == odd
++    # falling off the end writes back
++    tail = reg_localize(["ctx->gpr[3] = spu_ai(ctx->gpr[3], 1);"])
++    assert tail[-1] == "ctx->gpr[3] = R_3;", tail
++    # the switch: an SPULifter with reg_locals off, or with --trace, emits the old form
++    os.environ.pop("SPU_LIFT_REG_LOCALS", None)
++    assert not spu_lifter.SPULifter().reg_locals          # opt-in
++    os.environ["SPU_LIFT_REG_LOCALS"] = "1"
++    assert spu_lifter.SPULifter().reg_locals and not spu_lifter.SPULifter(trace=True).reg_locals
++    del os.environ["SPU_LIFT_REG_LOCALS"]
++    assert spu_lifter.SPULifter(reg_locals=True).reg_locals
++    print("PASS: reg_localize structure")
++
++
++def semantic():
++    cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("clang") or shutil.which("gcc")
++    if not cc:
++        print("SKIP: no C compiler for the semantic check")
++        return
++    with tempfile.TemporaryDirectory() as tmp:
++        res = []
++        for name, body in (("old", BODY), ("new", reg_localize(BODY))):
++            src = os.path.join(tmp, name + ".c")
++            with open(src, "w") as f:
++                f.write(PRELUDE + emit(body) + MAIN)
++            exe = os.path.join(tmp, name)
++            subprocess.run([cc, "-O2", "-fno-strict-aliasing", "-w", src, "-o", exe], check=True)
++            try:   # a lost write-back can leave the loop counter stuck
++                res.append(subprocess.run([exe], check=True, capture_output=True, text=True,
++                                          timeout=60).stdout)
++            except subprocess.TimeoutExpired:
++                raise AssertionError(f"{name} form did not finish")
++        assert res[0] == res[1], "register-locals form diverged from ctx->gpr form"
++        assert len(set(res[0].split())) > 100, "test inputs do not exercise the paths"
++    print("PASS: reg_localize semantics (2000 random states)")
++
++
++if __name__ == "__main__":
++    random.seed(1)
++    structural()
++    semantic()
