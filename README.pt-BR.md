@@ -80,8 +80,15 @@ Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
 (a versão da PSN `NPUA80638`, por exemplo instalada no
 [RPCS3](https://rpcs3.net) com a licença `.rap`).
 
-1. Baixe o `infamous2-recomp_0.2.16_aarch64.dmg` da
-   [release v0.2.16](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16)
+> **Versão do jogo: só a 1.03.** O port é feito para o jogo com a
+> **atualização 1.03** (`APP_VER 01.03`). O jogo base (01.00) não funciona: o
+> executável e os módulos de job das SPUs são outros, e a recompilação para
+> na etapa *jobs*. Instale a atualização 1.03 no RPCS3 (*File → Install
+> Packages/Raps/Edats*, o `.pkg` da atualização); depois a lista de jogos do
+> RPCS3 mostra o jogo como 01.03.
+
+1. Baixe o `infamous2-recomp_0.2.18_aarch64.dmg` da
+   [release v0.2.18](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.18)
    (até agora toda release é pré-release; a
    [página de releases](https://github.com/erikomis/infamous2-recomp/releases) mostra se saiu uma mais nova)
    e arraste o app para Aplicativos. Ele não é notarizado: na primeira vez,
@@ -219,7 +226,8 @@ O app faz tudo isso por você; à mão, pelo terminal:
 
 - Mac com Apple Silicon (testado num M4 Pro, macOS 27).
 - Uma cópia legítima do inFAMOUS 2 instalada no [RPCS3](https://rpcs3.net),
-  com a licença (`.rap`) e o firmware do PS3 instalados nele.
+  **com a atualização 1.03** (`APP_VER 01.03`; o jogo base 01.00 não
+  funciona), a licença (`.rap`) e o firmware do PS3 instalados nele.
 - Xcode Command Line Tools e Homebrew:
 
 ```sh
