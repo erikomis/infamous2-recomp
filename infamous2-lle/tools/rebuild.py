@@ -81,6 +81,18 @@ PATCH = os.path.join(PORT_SRC, 'patches', 'ps3recomp-fork-770660a-with-upstream-
 
 TITLE_ID = 'NPUA80638'
 TESTED_APP_VER = '01.03'
+# Another APP_VER cannot work: the translated SPU job modules, the extra lift
+# entry points and the game patches belong to the 1.03 executable (a 01.00 copy
+# stopped at the jobs step, issue #8). So it is a failed check up front, not a
+# warning that lets the rebuild run into a traceback at 44%.
+# INFAMOUS2_ANY_VERSION=1 turns it back into a warning (port development only).
+VERSION_HELP = ('the port needs the game with its 1.03 update: install the inFAMOUS 2 1.03 update '
+                'in RPCS3 (File > Install Packages/Raps/Edats, the update\'s .pkg) and rebuild, '
+                'or give the update PKG after the game PKG')
+
+
+def version_level():
+    return 'warn' if os.environ.get('INFAMOUS2_ANY_VERSION') else 'fail'
 # sha256 of the decrypted EBOOT.elf (NPUA80638, APP_VER 01.03) the port is
 # built and tested against. A hash, not data: a different one only warns.
 TESTED_EBOOT_ELF_SHA256 = '3bfe08df4e2ed1201a83be3d38f13a66e900153dd4071f25a35c3c95a1717298'
@@ -501,10 +513,10 @@ class Rebuild:
                 self.sfo = sfo
                 self.sources.append(('dir', d))
                 ver = sfo.get('APP_VER', '?')
-                lvl = 'ok' if ver == TESTED_APP_VER else 'warn'
-                self.check(lvl, 'game', '%s "%s" APP_VER %s%s at %s' % (
-                    TITLE_ID, sfo.get('TITLE', ''), ver,
-                    '' if lvl == 'ok' else ' (tested: %s)' % TESTED_APP_VER, d))
+                lvl = 'ok' if ver == TESTED_APP_VER else version_level()
+                self.check(lvl, 'game', '%s "%s" APP_VER %s at %s%s' % (
+                    TITLE_ID, sfo.get('TITLE', ''), ver, d,
+                    '' if lvl == 'ok' else ': %s' % VERSION_HELP))
                 eb = os.path.join(d, 'USRDIR', 'EBOOT.BIN')
                 self.content_id = npd_content_id(eb)
             else:
@@ -962,8 +974,10 @@ class Rebuild:
         if self.sfo.get('TITLE_ID') != TITLE_ID:
             raise StepError('imported copy is %s, not %s' % (self.sfo.get('TITLE_ID'), TITLE_ID))
         if self.sfo.get('APP_VER') != TESTED_APP_VER:
-            emit('WARN', 'game', 'APP_VER %s; the port is tested with %s (install the game update)'
-                 % (self.sfo.get('APP_VER'), TESTED_APP_VER))
+            msg = 'the imported copy is APP_VER %s; %s' % (self.sfo.get('APP_VER'), VERSION_HELP)
+            if version_level() == 'fail':
+                raise StepError(msg)
+            emit('WARN', 'game', msg)
         for d in (os.path.join(self.vfs, 'dev_hdd0', 'home', '00000001', 'savedata'),
                   os.path.join(self.vfs, 'dev_hdd1')):
             os.makedirs(d, exist_ok=True)
