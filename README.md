@@ -66,7 +66,7 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 | Saves and trophies (in `~/Library/Application Support`), saves manager in the app | ✅ |
 | Brazilian Portuguese dub and subtitles (default), other languages your copy ships, DLC | ✅ |
 | The app: install, rebuild, play, settings, controls, saves, debug mode | ✅ [v0.2.16 alpha](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16) |
-| The app updates itself | 🧪 since v0.2.7 (v0.2.8 to v0.2.16 were offered through it), waiting for Erik's confirmation |
+| The app updates itself | ✅ since v0.2.7 (confirmed 2026-10-23: 0.2.7 updated itself to 0.2.9) |
 | Add to Steam (Big Picture with the controller) | 🧪 since v0.2.7, waiting for a test with Steam |
 | Whole game | ❓ nobody has gone past 1% yet |
 | Linux and Windows | ⏳ planned |

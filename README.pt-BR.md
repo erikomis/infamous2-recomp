@@ -67,7 +67,7 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 | Saves e troféus (em `~/Library/Application Support`), gerenciador de saves no app | ✅ |
 | Dublagem e legendas em português do Brasil (padrão), outros idiomas que a sua cópia traz, DLC | ✅ |
 | O app: instalar, recompilar, jogar, ajustes, controles, saves, modo de depuração | ✅ [alpha v0.2.16](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.16) |
-| O app se atualiza sozinho | 🧪 desde a v0.2.7 (da v0.2.8 à v0.2.16 foram oferecidas por ele), falta a confirmação do Erik |
+| O app se atualiza sozinho | ✅ desde a v0.2.7 (confirmado em 2026-10-23: a 0.2.7 se atualizou sozinha para a 0.2.9) |
 | Adicionar à Steam (Big Picture com o controle) | 🧪 desde a v0.2.7, falta testar com a Steam |
 | Jogo inteiro | ❓ ninguém passou ainda de 1% |
 | Linux e Windows | ⏳ planejado |
