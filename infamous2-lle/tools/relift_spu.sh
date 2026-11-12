@@ -10,7 +10,9 @@
 # spu/jobmods/ and rewrites <dest>/spu/*/ and <dest>/lle_spu/ (lle/libsre is only read),
 # so a different <dest> leaves this tree alone. Lifter switches reach every lift through
 # the environment, e.g. SPU_LIFT_REG_LOCALS=0 SPU_LIFT_LEAN_FLOAT=0 for the form before
-# 2026-11-05. Then rebuild (cmake --build build): only the SPU sources recompile.
+# 2026-11-05, SPU_LIFT_LEAN_SHUFB=0 SPU_LIFT_LEAN_LS=0 for the form before 2026-11-12, and
+# the opt-in SPU_LIFT_MERGE_CHUNKS=1 (gated chunk merge). Then rebuild (cmake --build build):
+# only the SPU sources recompile. tools/spu_equiv/run_eq.sh compares two such lifts.
 set -e
 here=$(cd "$(dirname "$0")/.." && pwd)
 tk=$(cd "${1:-$here/../ps3recomp-fork}" && pwd)
