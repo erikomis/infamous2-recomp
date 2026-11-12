@@ -161,6 +161,16 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #                               1440p or 4K instead of 720p (restart to change)
 #   PS3_ASPECT=21:9|32:9        ultrawide: a wider view (hor+), the HUD kept 16:9
 #                               in the middle (restart to change)
+#   PS3_FRAMEGEN=1              frame generation (opt-in, macOS 26+): MetalFX
+#                               makes a frame between every two the game
+#                               renders and the window shows both, ~2x the
+#                               frame rate on a 120 Hz screen for about half
+#                               a frame of extra latency. Camera motion comes
+#                               from the depth buffer and the renderer's own
+#                               camera (gpu_light.c), so it needs the GPU
+#                               light pass (the default); the HUD is kept out
+#                               of it (PS3_ASPECT_HUD_AFTER's boundary). Live:
+#                               a PS3_FRAMEGEN line in PS3_TOGGLE_FILE.
 # Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
 # PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200.
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or
