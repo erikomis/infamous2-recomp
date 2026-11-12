@@ -1,5 +1,7 @@
 # inFAMOUS 2 — static recompilation for PC (macOS)
 
+<a href="https://recomplauncher.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
 🌐 **English** · [Português (BR)](README.pt-BR.md)
 
 A native port of **inFAMOUS 2** (PS3, digital release `NPUA80638`) to
