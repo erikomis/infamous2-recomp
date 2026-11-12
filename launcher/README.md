@@ -636,6 +636,89 @@ library as a non-Steam game, to start from Big Picture with the controller
   does, their contents untouched), deletes the four images it made and the
   Steam copy of the shortcut.
 
+## RecompLauncher
+
+[RecompLauncher](https://recomplauncher.com) (a third-party launcher)
+installs recomps from their GitHub release zips. The profile it reads is
+`recomplauncher.json` at the repository's top, shipped at the top of the zip
+next to the .app:
+
+- **The copy** (`game`, a folder): the player's own `NPUA80638` folder as
+  RPCS3 installed it (`dev_hdd0/game/NPUA80638`), with the 1.03 update
+  (checked by `PARAM.SFO` and the title id). The disc release (`BCUS98125`,
+  issue #7) and PKGs are not taken there yet: PKGs go into RPCS3 first.
+- **Setup** (`prepare`): `infamous2-recomp.app/Contents/MacOS/infamous2-launcher
+  --prepare --game <copy>`, with a 2-hour limit. It runs without a window
+  and does what Advanced > Install / rebuild does: the copy checked (read
+  only: the folder or RPCS3's data folder that holds it, `PARAM.SFO`'s
+  `TITLE_ID` and `APP_VER` 01.03, `USRDIR/EBOOT.BIN`) and its licence found
+  as the Install screen finds it (`--rap <file>` names one), both remembered
+  in `launcher.json`; the Command Line Tools (their installer is opened and
+  it stops); `rebuild.py --check-json`, with the Homebrew formulae it finds
+  missing installed (`brew install`, only the port's own list); then the
+  window's own rebuild command (`rebuild_command`) into the install folder.
+  It prints `progress <0..1> <text>` lines (rebuild.py's PLAN / PROGRESS /
+  SUBPROGRESS / STEP-DONE lines with the window's weights from
+  `src/progress.ts`, never going back, with time moving a long step along)
+  and the rebuild's output as plain lines (also into `<data>/logs/setup.log`),
+  and exits 0 only when the game's build is there. One at a time
+  (`<data>/prepare.lock`); refused while this game's build or a rebuild.py of
+  this port runs (by the executable's path and the script's, not the name:
+  other ports' games are `*Recomp` too). Running it again brings an install
+  up to date (rebuild.py skips what did not change).
+- **Play** (`start`): `--play --game <copy>`. With `RECOMPLAUNCHER=1` (set by
+  RecompLauncher) the window never opens: the copy is remembered when it is
+  good (Play reads the install's own clone, so a copy moved since is only
+  reported), the window's Play runs (settings, save backup,
+  `logs/game.log`), and the launcher's process becomes run.sh, which execs
+  the game, so RecompLauncher sees the game's own exit code and its Stop
+  reaches the game. Without that variable `--play` opens the window and
+  plays once it is up, as before; `--game` there is remembered first.
+- **Settings** (`config`, `settings`): window mode and size, V-Sync,
+  resolution, aspect, upscaling, anti-aliasing, texture filtering,
+  sharpening, language, button prompts, volume, vibration and Show FPS,
+  written into `launcher.json` (the same keys and values as the window; a
+  test checks every value reads back, since a value serde refused would
+  reset the whole file).
+- **Saves and logs**: `<data>/gamedata/dev_hdd0/home/00000001/savedata`, the
+  trophies, `input.toml` and `overlay.ini`; the logs folder is `<data>/logs`
+  (`game.log`, `setup.log`).
+
+Exit codes of `--prepare` and of `--play` under RecompLauncher (`prepare.rs`,
+`Exit`; the profile's `exit_codes` say them to the player, word for word,
+which a test checks):
+
+| Code | Meaning |
+|---|---|
+| 0 | prepare: the game is built; play: a normal quit (`"ok"`) |
+| 40 | no copy given, not found, not `NPUA80638`, not APP_VER 01.03 (rebuild.py's `VERSION_HELP` case), a disc copy, a PKG or a disc image |
+| 41 | the player has to do something first: the Command Line Tools (their installer is opened), Homebrew, RPCS3 or its firmware, disk space, not a Mac |
+| 42 | a download the build makes failed (the toolkit, Python packages, Homebrew's formulae) |
+| 43 | the rebuild failed (`logs/setup.log`) |
+| 44 | another prepare, a rebuild.py of this port, or this game's build is running |
+| 45 | play: the game is not built yet |
+| 46 | the launcher failed on its own (its settings, a damaged app, an install folder that is a development checkout) |
+| 47 | the licence (`.rap`) was not found |
+
+Trying it without touching your own install: `HOME=<scratch folder>` moves
+`<data>` and RPCS3's folder there, and `INFAMOUS2_REPO=<folder>` makes the
+launcher run `<folder>/infamous2-lle/tools/rebuild.py` (a stand-in that
+prints rebuild.py's protocol is enough). A copy that is refused, `--prepare`
+with no `--game`, or a lock held on
+`<scratch>/Library/Application Support/infamous2-recomp/prepare.lock` exits
+before anything is built.
+
+**The zip**: `scripts/package-recomplauncher.sh [--app <.app>] [--version
+X.Y.Z] [--out <folder>]` stages the port and builds the release .app (or
+takes one, e.g. the release recipe's), checks its program is where the
+profile says, that it is arm64, that the bundled port's `rebuild.py` is in
+it and that `scripts/check_bundle.py` passes, and writes
+`infamous2-recomp-<version>-macos-arm64.zip` (the .app and
+`recomplauncher.json` at the top) into `launcher/release/`. It uploads
+nothing. Publishing a GitHub release with that zip attached, and getting the
+game listed on recomplauncher.com, are separate manual steps; the README's
+badge links to recomplauncher.com until then.
+
 ## The rebuild script on its own
 
 ```sh

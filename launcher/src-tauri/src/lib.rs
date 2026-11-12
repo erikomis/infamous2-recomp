@@ -8,6 +8,7 @@ mod app_icon;
 mod input_map;
 mod mods;
 mod play_shortcut;
+mod prepare;
 mod report;
 mod saves;
 mod steam;
@@ -611,12 +612,18 @@ fn kill_tree(pid: u32) {
 /// lives in <repo>/launcher), or in the app's bundled resources (port/, staged by
 /// launcher/scripts/stage_port.py).
 fn rebuild_script(app: &AppHandle) -> Option<PathBuf> {
+    rebuild_script_in(app.path().resource_dir().ok())
+}
+
+/// rebuild_script with the app's resources folder given (the headless
+/// prepare has no AppHandle: prepare::resource_dir).
+fn rebuild_script_in(resources: Option<PathBuf>) -> Option<PathBuf> {
     let mut cands = Vec::new();
     if let Some(r) = std::env::var_os("INFAMOUS2_REPO") {
         cands.push(PathBuf::from(r).join("infamous2-lle/tools/rebuild.py"));
     }
     cands.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../infamous2-lle/tools/rebuild.py"));
-    if let Ok(res) = app.path().resource_dir() {
+    if let Some(res) = resources {
         cands.push(res.join("port/infamous2-lle/tools/rebuild.py"));
     }
     cands.into_iter().find(|p| p.is_file()).map(|p| p.canonicalize().unwrap_or(p))
@@ -938,15 +945,22 @@ fn get_settings() -> Settings {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    write_settings(&settings)?;
+    sync_app_icon(&app); // "Your copy's icon in the Dock" may have changed
+    Ok(())
+}
+
+/// launcher.json, written whole through a temporary file (the window's
+/// saves, and the copy and licence the headless prepare remembers).
+fn write_settings(settings: &Settings) -> Result<(), String> {
     let p = settings_path();
     if let Some(d) = p.parent() {
         fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
     let tmp = p.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?)
+    fs::write(&tmp, serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
-    sync_app_icon(&app); // "Your copy's icon in the Dock" may have changed
     Ok(())
 }
 
@@ -1527,13 +1541,19 @@ const BREW_ALLOWED: &[&str] = &["python@3.12", "cmake", "ninja", "sdl2", "glslan
 /// what this method needs (RPCS3, or the key file and what it lacks).
 #[tauri::command]
 async fn check_prereqs(app: AppHandle, decrypt: Option<DecryptOptions>) -> Prereqs {
+    prereqs(rebuild_script(&app), &decrypt.unwrap_or_default())
+}
+
+/// What check_prereqs reports, for `script` (rebuild.py) and the decryption
+/// choices; also the headless prepare's check before the rebuild.
+fn prereqs(script: Option<PathBuf>, decrypt: &DecryptOptions) -> Prereqs {
     let mut p = Prereqs {
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
         supported: host_supported(),
         clt: clt_installed(),
         homebrew: find_brew().map(|b| b.to_string_lossy().into_owned()),
-        script: rebuild_script(&app).map(|s| s.to_string_lossy().into_owned()),
+        script: script.map(|s| s.to_string_lossy().into_owned()),
         ..Default::default()
     };
     if !p.supported {
@@ -1556,7 +1576,7 @@ async fn check_prereqs(app: AppHandle, decrypt: Option<DecryptOptions>) -> Prere
     };
     let mut cmd = Command::new(&python);
     cmd.arg(&script).arg("--check-json");
-    if let Err(e) = apply_decrypt(&mut cmd, &decrypt.unwrap_or_default()) {
+    if let Err(e) = apply_decrypt(&mut cmd, decrypt) {
         p.error = Some(e);
         return p;
     }
@@ -1633,17 +1653,7 @@ fn install_brew(app: AppHandle, state: State<'_, AppState>, packages: Vec<String
     if slot.is_some() {
         return Err("an install is already running".into());
     }
-    let mut cmd = Command::new(&brew);
-    cmd.arg("install")
-        .args(&packages)
-        .env("PATH", tool_path())
-        .env("NONINTERACTIVE", "1")
-        .env("HOMEBREW_NO_ENV_HINTS", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    own_process_group(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("{}: {e}", brew.display()))?;
+    let mut child = brew_command(&brew, &packages).spawn().map_err(|e| format!("{}: {e}", brew.display()))?;
     *slot = Some(child.id());
     drop(slot);
     let _ = app.emit("setup-line", format!("$ brew install {}", packages.join(" ")));
@@ -1666,6 +1676,22 @@ fn install_brew(app: AppHandle, state: State<'_, AppState>, packages: Vec<String
         let _ = app.emit("setup-exit", code);
     });
     Ok(())
+}
+
+/// `brew install <packages>` without questions, output piped (the window's
+/// install_brew, and the headless prepare's build tools).
+fn brew_command(brew: &Path, packages: &[String]) -> Command {
+    let mut cmd = Command::new(brew);
+    cmd.arg("install")
+        .args(packages)
+        .env("PATH", tool_path())
+        .env("NONINTERACTIVE", "1")
+        .env("HOMEBREW_NO_ENV_HINTS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    own_process_group(&mut cmd);
+    cmd
 }
 
 #[tauri::command]
@@ -1769,8 +1795,40 @@ fn start_rebuild(app: AppHandle, state: State<'_, AppState>, req: RebuildRequest
     }
     let script = rebuild_script(&app).ok_or("rebuild.py not found (set INFAMOUS2_REPO to the repository)")?;
     let python = find_python().ok_or("Python 3 not found (install the Xcode Command Line Tools)")?;
-    let mut cmd = Command::new(&python);
-    cmd.arg("-u").arg(&script);
+    let mut cmd = rebuild_command(&python, &script, &req)?;
+    let mut child = cmd.spawn().map_err(|e| format!("{}: {e}", python.display()))?;
+    *slot = Some(child.id());
+    drop(slot);
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let a1 = app.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = a1.emit("rebuild-line", line);
+        }
+    });
+    let a2 = app.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = a2.emit("rebuild-line", format!("LOG {line}"));
+        }
+    });
+    let a3 = app.clone();
+    thread::spawn(move || {
+        let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        *a3.state::<AppState>().rebuild.lock().unwrap() = None;
+        let _ = a3.emit("rebuild-exit", code);
+    });
+    Ok(())
+}
+
+/// `python -u rebuild.py` for `req`, at a lower priority, stdout and stderr
+/// piped, in its own process group: the window's Install / rebuild and the
+/// headless prepare (prepare.rs) run the same command.
+fn rebuild_command(python: &Path, script: &Path, req: &RebuildRequest) -> Result<Command, String> {
+    let mut cmd = Command::new(python);
+    cmd.arg("-u").arg(script);
     for g in &req.games {
         cmd.arg("--game").arg(g);
     }
@@ -1799,31 +1857,7 @@ fn start_rebuild(app: AppHandle, state: State<'_, AppState>, req: RebuildRequest
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     own_process_group(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("{}: {e}", python.display()))?;
-    *slot = Some(child.id());
-    drop(slot);
-
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let a1 = app.clone();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let _ = a1.emit("rebuild-line", line);
-        }
-    });
-    let a2 = app.clone();
-    thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = a2.emit("rebuild-line", format!("LOG {line}"));
-        }
-    });
-    let a3 = app.clone();
-    thread::spawn(move || {
-        let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-        *a3.state::<AppState>().rebuild.lock().unwrap() = None;
-        let _ = a3.emit("rebuild-exit", code);
-    });
-    Ok(())
+    Ok(cmd)
 }
 
 #[tauri::command]
@@ -1948,50 +1982,19 @@ fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) ->
         return Err("the game is already running".into());
     }
     let s = load_settings_file();
-    let inst = resolve_install(Path::new(&s.install_dir))?;
-    if !Path::new(&inst.executable).is_file() {
-        return Err(format!("{}: not built", inst.executable));
-    }
+    let inst = built_install(&s)?;
     let report_dir = if diagnostic.unwrap_or(false) {
         Some(report::create(&reports_dir(), &saves::stamp(now_secs()))?)
     } else {
         None
     };
-    let log_path = match &report_dir {
-        Some(d) => d.join(report::LOG),
-        None => {
-            let logs = data_root().join("logs");
-            fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
-            logs.join("game.log")
-        }
-    };
+    let log_path = game_log_file(report_dir.as_deref())?;
     let log = fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
 
-    // the saves as they are now, before the game can touch them
-    let (backup, backup_error) = match saves::backup_before_play(&save_locations(&s), s.save_backups_keep, now_secs()) {
-        Ok(b) => (b.map(|b| b.id), None),
-        Err(e) => (None, Some(e)),
-    };
-
-    // run.sh is the single source of the defaults; the settings only override.
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg(&inst.run_sh)
-        .current_dir(&inst.port_dir)
-        .env("PATH", tool_path())
-        .env_remove("HEADLESS")
-        .env_remove("PS3RECOMP_METAL_HEADLESS")
-        .stdin(Stdio::null())
-        .stdout(log)
-        .stderr(log2);
-    let mut env = launch_env(&s, &inst, &input_env());
-    game_window_icon(&s, &mut env);
-    if let Some(d) = &report_dir {
-        env.extend(report::env(d)); // after the extra variables: the report's paths win
-    }
-    for (k, v) in &env {
-        cmd.env(k, v);
-    }
+    let (backup, backup_error) = backup_saves(&s);
+    let (mut cmd, env) = game_command(&s, &inst, report_dir.as_deref());
+    cmd.stdout(log).stderr(log2);
     own_process_group(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("{}: {e}", inst.run_sh))?;
     *slot = Some(child.id());
@@ -2036,6 +2039,62 @@ fn play(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<bool>) ->
         backup_error,
         report: report_dir.map(|d| d.to_string_lossy().into_owned()),
     })
+}
+
+/// The install Play starts: install.json (or a development checkout) whose
+/// game is built. The error says what is missing.
+fn built_install(s: &Settings) -> Result<InstallInfo, String> {
+    let inst = resolve_install(Path::new(&s.install_dir))?;
+    if !Path::new(&inst.executable).is_file() {
+        return Err(format!("{}: not built", inst.executable));
+    }
+    Ok(inst)
+}
+
+/// Where a game session writes its output: logs/game.log in the data
+/// folder (a debug session's report folder has its own).
+fn game_log_file(report_dir: Option<&Path>) -> Result<PathBuf, String> {
+    match report_dir {
+        Some(d) => Ok(d.join(report::LOG)),
+        None => {
+            let logs = data_root().join("logs");
+            fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+            Ok(logs.join("game.log"))
+        }
+    }
+}
+
+/// The saves as they are now, before the game can touch them: the backup's
+/// id (none when nothing changed or backups are off), or why it failed.
+fn backup_saves(s: &Settings) -> (Option<String>, Option<String>) {
+    match saves::backup_before_play(&save_locations(s), s.save_backups_keep, now_secs()) {
+        Ok(b) => (b.map(|b| b.id), None),
+        Err(e) => (None, Some(e)),
+    }
+}
+
+/// The game's command: `/bin/sh run.sh` in the port folder, with the
+/// settings as its environment (run.sh is the single source of the
+/// defaults; the settings only override) and a debug session's variables
+/// last. Output and the process group are the caller's. Also returns the
+/// variables given, for the report's system.txt.
+fn game_command(s: &Settings, inst: &InstallInfo, report_dir: Option<&Path>) -> (Command, Vec<(String, String)>) {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg(&inst.run_sh)
+        .current_dir(&inst.port_dir)
+        .env("PATH", tool_path())
+        .env_remove("HEADLESS")
+        .env_remove("PS3RECOMP_METAL_HEADLESS")
+        .stdin(Stdio::null());
+    let mut env = launch_env(s, inst, &input_env());
+    game_window_icon(s, &mut env);
+    if let Some(d) = report_dir {
+        env.extend(report::env(d)); // after the extra variables: the report's paths win
+    }
+    for (k, v) in &env {
+        cmd.env(k, v);
+    }
+    (cmd, env)
 }
 
 fn now_ms() -> u64 {
@@ -2577,6 +2636,15 @@ async fn saves_import_zip(state: State<'_, AppState>, path: String) -> Result<sa
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Decided before any window exists: `--prepare` (the headless install)
+    // and `--play` under RecompLauncher (RECOMPLAUNCHER=1) never start the
+    // Tauri event loop; they exit with their own codes (prepare.rs).
+    let args: Vec<String> = std::env::args().collect();
+    match prepare::mode(&args, prepare::under_recomplauncher()) {
+        prepare::Mode::Prepare { game, rap } => std::process::exit(prepare::prepare_main(game.as_deref(), rap.as_deref())),
+        prepare::Mode::PlayDirect { game } => std::process::exit(prepare::play_direct(game.as_deref())),
+        prepare::Mode::Window { game } => prepare::window_game(game.as_deref()),
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
