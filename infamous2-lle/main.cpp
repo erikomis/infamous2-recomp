@@ -196,6 +196,8 @@ extern "C" void rsx_metal_backend_note_guest_frame(void);
 
 /* game_clock.c: PS3_GCLOCK_LOG (the game's own frame clock, per frame). */
 extern "C" void infamous2_gclock_frame(void);
+/* heartbeat.c: the low-health heartbeat on the controller (PS3_HEARTBEAT). */
+extern "C" void infamous2_heartbeat_frame(void);
 /* Toolkit sys_timer.c: PS3_TB_SCALE, the guest timebase's rate in percent.
  * Weak: a toolkit without the knob links, and the toggle does nothing. */
 #if defined(_MSC_VER)
@@ -207,6 +209,7 @@ extern "C" __attribute__((weak)) volatile int ps3_tb_scale_pct;
 static void present_guest_frame(void)
 {
     infamous2_gclock_frame();
+    infamous2_heartbeat_frame();
     const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
     rsx_backend_present();
     if (ft_t0) ps3_ft_span(PS3_FT_PRESENT, 0, 0, 0, ft_t0, ps3_ft_now());

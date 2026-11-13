@@ -1,0 +1,464 @@
+diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
+index ad9df1b..f47dfbc 100644
+--- a/libs/input/cellPad.c
++++ b/libs/input/cellPad.c
+@@ -242,14 +242,25 @@ static u32 pad_status_take(u32 port)
+  *                                100 boosts a weak large-motor value, capped
+  *                                at the motor's maximum
+  *   PS3_RUMBLE_LOG=1             print every request the title makes
++ *
++ * The host can add a pulse of its own (cellPad_host_pulse: a port's
++ * low-health heartbeat, say). Each motor then runs at the stronger of the two,
++ * the title's request and the pulse, so a pulse never weakens or cuts a hit;
++ * PS3_RUMBLE=0 and the strength apply to it as to the title's. A pulse level
++ * holds until the next call and lapses PAD_PULSE_HOLD_MS after the last one,
++ * so a caller that stops calling cannot leave a motor running.
+  * -------------------------------------------------------------------------*/
+ 
+ #define PAD_RUMBLE_HOLD_MS     1000   /* one SDL request lasts this long ... */
+ #define PAD_RUMBLE_RENEW_MS     400   /* ... and is renewed this often */
++#define PAD_PULSE_HOLD_MS       300   /* a host pulse nobody renews lasts this long */
+ 
+ typedef struct {
+     u16 lo, hi;        /* what the host motors were last asked for */
+     u64 sent_ms;       /* when (GetTickCount64), 0 = nothing pending */
++    u16 game_lo, game_hi;     /* the title's part of it (strength applied) */
++    u16 pulse_lo, pulse_hi;   /* the host pulse, as asked for (0-65535) */
++    u64 pulse_ms;             /* when it was last set (pad_now_ms), 0 = none */
+ } PadRumble;
+ static PadRumble s_rumble[PAD_MAX_HOST_PORTS];
+ 
+@@ -292,6 +303,29 @@ static void pad_rumble_levels(u8 small_on, u8 large, int pct, u16* lo, u16* hi)
+     *hi = (u16)(h > 65535ul ? 65535ul : h);
+ }
+ 
++/* The motors' levels from the title's request and the host pulse: the
++ * stronger of the two per motor. Drops a pulse that has lapsed. Returns 1
++ * when the levels changed (they then have to go to the controller). */
++static int pad_rumble_merge(PadRumble* r, int pct, unsigned long long now)
++{
++    unsigned long plo = 0, phi = 0;
++    if (r->pulse_ms && now - r->pulse_ms < PAD_PULSE_HOLD_MS) {
++        plo = (unsigned long)r->pulse_lo * (unsigned long)pct / 100ul;
++        phi = (unsigned long)r->pulse_hi * (unsigned long)pct / 100ul;
++        if (plo > 65535ul) plo = 65535ul;
++        if (phi > 65535ul) phi = 65535ul;
++    } else {
++        r->pulse_lo = r->pulse_hi = 0;
++        r->pulse_ms = 0;
++    }
++    const u16 lo = r->game_lo > plo ? r->game_lo : (u16)plo;
++    const u16 hi = r->game_hi > phi ? r->game_hi : (u16)phi;
++    const int changed = lo != r->lo || hi != r->hi;
++    r->lo = lo;
++    r->hi = hi;
++    return changed;
++}
++
+ /* ---------------------------------------------------------------------------
+  * XInput backend
+  * -----------------------------------------------------------------------*/
+@@ -404,6 +438,13 @@ static void pad_poll_xinput(void)
+             s_host_state[i].connected = 0;
+             continue;
+         }
++        /* A host pulse that lapsed stops here. */
++        if (pad_rumble_merge(&s_rumble[i], pad_rumble_strength(), pad_now_ms())) {
++            XINPUT_VIBRATION vib;
++            vib.wLeftMotorSpeed  = (WORD)s_rumble[i].lo;
++            vib.wRightMotorSpeed = (WORD)s_rumble[i].hi;
++            XInputSetState((DWORD)i, &vib);
++        }
+ 
+         s_host_state[i].connected = 1;
+         XINPUT_GAMEPAD* gp = &state.Gamepad;
+@@ -694,8 +735,8 @@ static int pad_adaptive_update(int p, SDL_GameController* gc, int rt)
+     PadAdaptive* a = &s_adapt[p];
+     if (!a->on) return PAD_TRIGGER_PRESS;
+     const int fire_at = pad_adaptive_fire_at();
+-    const PadRumble* r = &s_rumble[p];
+-    const unsigned level = r->lo > r->hi ? r->lo : r->hi;
++    const PadRumble* r = &s_rumble[p];   /* the title's rumble; a host pulse is not a shot */
++    const unsigned level = r->game_lo > r->game_hi ? r->game_lo : r->game_hi;
+     int right = PAD_TRIG_WEAPON;
+     if (rt > fire_at && level) {
+         int amp = 1 + (int)(level * 7u / 65535u);
+@@ -726,9 +767,10 @@ static void pad_adaptive_atexit(void)
+  *   - the player lights show the port (one lit for the first player);
+  *   - the light bar takes PS3_PAD_LIGHT=<RRGGBB> (a port sets its game's
+  *     colour; inFAMOUS 2 sets Cole's electric blue) or goes dark with "off";
+- *     unset leaves SDL's own colour. While the title runs the motors (hits,
+- *     explosions) it glows towards red with them, re-sent at most every
+- *     PAD_LIGHT_MIN_GAP_MS (PS3_PAD_LIGHT_HIT=0: a steady colour);
++ *     unset leaves SDL's own colour. While the motors run (the title's hits
++ *     and explosions, a host pulse such as a heartbeat) it glows towards red
++ *     with them, re-sent at most every PAD_LIGHT_MIN_GAP_MS
++ *     (PS3_PAD_LIGHT_HIT=0: a steady colour);
+  *   - gyro aim, PS3_PAD_GYRO=<percent> (0 off, 100 = full right-stick
+  *     deflection at 2 rad/s, about 115 degrees a second): turning and
+  *     tilting the controller adds to the right stick, only while the input
+@@ -1002,8 +1044,10 @@ static void pad_poll_sdl2(void)
+ 
+         s_host_state[i].connected = 1;
+ 
+-        /* Keep a rumble the title set going (see PAD_RUMBLE_HOLD_MS). */
+-        if (s_rumble[i].sent_ms && GetTickCount64() - s_rumble[i].sent_ms >= PAD_RUMBLE_RENEW_MS)
++        /* A host pulse that lapsed stops here; a rumble that is still wanted
++         * is kept going (see PAD_RUMBLE_HOLD_MS). */
++        if (pad_rumble_merge(&s_rumble[i], pad_rumble_strength(), pad_now_ms()) ||
++            (s_rumble[i].sent_ms && GetTickCount64() - s_rumble[i].sent_ms >= PAD_RUMBLE_RENEW_MS))
+             pad_sdl_rumble_send(i);
+ 
+         /* Every SDL input, then the PS3 controls bound to them ([controller]
+@@ -2211,6 +2255,24 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
+     return CELL_OK;
+ }
+ 
++/* The motors' new levels to port's controller. Call with the pad lock held. */
++static void pad_rumble_out(int port)
++{
++#if PAD_BACKEND_XINPUT
++    /* XInput keeps the motors at what they were last set to: no renewal. */
++    if (s_host_state[port].connected) {
++        XINPUT_VIBRATION vib;
++        vib.wLeftMotorSpeed  = (WORD)s_rumble[port].lo;
++        vib.wRightMotorSpeed = (WORD)s_rumble[port].hi;
++        XInputSetState((DWORD)port, &vib);
++    }
++#endif
++#if PAD_BACKEND_SDL2
++    pad_sdl_rumble_send(port);
++#endif
++    (void)port;
++}
++
+ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+ {
+     if (!s_pad_initialized)
+@@ -2232,25 +2294,39 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+     u16 lo, hi;
+     pad_rumble_levels(small_on, large, pad_rumble_strength(), &lo, &hi);
+     PadRumble* r = &s_rumble[port_no];
+-    const int changed = r->lo != lo || r->hi != hi;
+-    r->lo = lo;
+-    r->hi = hi;
++    if (r->game_lo == lo && r->game_hi == hi)
++        return CELL_OK;   /* the same request again: nothing to send, no lock taken */
++    pad_lock();
++    r->game_lo = lo;
++    r->game_hi = hi;
++    if (pad_rumble_merge(r, pad_rumble_strength(), pad_now_ms()))
++        pad_rumble_out((int)port_no);
++    pad_unlock();
++    return CELL_OK;
++}
+ 
+-#if PAD_BACKEND_XINPUT
+-    /* XInput keeps the motors at what they were last set to: no renewal. */
+-    if (changed && s_host_state[port_no].connected) {
+-        XINPUT_VIBRATION vib;
+-        vib.wLeftMotorSpeed  = (WORD)lo;
+-        vib.wRightMotorSpeed = (WORD)hi;
+-        XInputSetState((DWORD)port_no, &vib);
++/* A host pulse on port's motors, on top of whatever the title asks for:
++ * lo = the large (low-frequency) motor, hi = the small one, 0-65535 each
++ * before PS3_RUMBLE_STRENGTH; 0, 0 ends it. The level holds until the next
++ * call, for at most PAD_PULSE_HOLD_MS: a caller shaping a pulse calls every
++ * few milliseconds with the level of the moment, from any thread. */
++void cellPad_host_pulse(int port, unsigned lo, unsigned hi)
++{
++    if (port < 0 || port >= PAD_MAX_HOST_PORTS) return;
++    if (lo > 65535u) lo = 65535u;
++    if (hi > 65535u) hi = 65535u;
++    pad_lock();
++    PadRumble* r = &s_rumble[port];
++    r->pulse_lo = (u16)lo;
++    r->pulse_hi = (u16)hi;
++    r->pulse_ms = lo || hi ? pad_now_ms() : 0;
++    if (pad_rumble_merge(r, pad_rumble_strength(), pad_now_ms())) {
++        static int log = -1; if (log < 0) log = getenv("PS3_RUMBLE_LOG") ? 1 : 0;
++        if (log) fprintf(stderr, "[cellPad] host pulse port %d: lo %u, hi %u -> motors %u, %u\n",
++                         port, lo, hi, r->lo, r->hi);
++        pad_rumble_out(port);
+     }
+-#endif
+-
+-#if PAD_BACKEND_SDL2
+-    if (changed) { pad_lock(); pad_sdl_rumble_send((int)port_no); pad_unlock(); }
+-#endif
+-    (void)changed;
+-    return CELL_OK;
++    pad_unlock();
+ }
+ 
+ s32 cellPadClearBuf(u32 port_no)
+diff --git a/libs/input/cellPad.h b/libs/input/cellPad.h
+index 89c58ab..c5ff5cd 100644
+--- a/libs/input/cellPad.h
++++ b/libs/input/cellPad.h
+@@ -194,6 +194,14 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info);
+ /* NID: 0xBE5C3E81 */
+ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param);
+ 
++/* Host side (not a PS3 call): a pulse on the port's motors on top of the
++ * title's rumble, e.g. a port's low-health heartbeat. lo = large motor,
++ * hi = small motor, 0-65535; each motor runs at the stronger of the title's
++ * request and the pulse. The level holds until the next call and lapses
++ * 300 ms after the last one; 0, 0 ends it. PS3_RUMBLE=0 silences it and
++ * PS3_RUMBLE_STRENGTH scales it, as they do the title's rumble. */
++void cellPad_host_pulse(int port, unsigned lo, unsigned hi);
++
+ /* NID: 0x3733EA3C */
+ s32 cellPadClearBuf(u32 port_no);
+ 
+diff --git a/libs/input/tests/test_pad_pulse.c b/libs/input/tests/test_pad_pulse.c
+new file mode 100644
+index 0000000..b76a0d6
+--- /dev/null
++++ b/libs/input/tests/test_pad_pulse.c
+@@ -0,0 +1,245 @@
++/* cellPad_host_pulse: a host pulse (a port's low-health heartbeat) on top of
++ * the title's rumble. Each motor runs at the stronger of the two, so a pulse
++ * never weakens a hit and a hit never cuts a pulse; PS3_RUMBLE_STRENGTH
++ * scales the pulse and strength 0 (PS3_RUMBLE=0) silences it; a pulse nobody
++ * renews lapses on the pad poll after PAD_PULSE_HOLD_MS; the light bar glows
++ * towards red with it as it does with a hit, the adaptive trigger does not
++ * buzz with it.
++ *
++ *   cc -std=gnu17 -I include -isystem /opt/homebrew/include \
++ *      -isystem /opt/homebrew/include/SDL2 libs/input/tests/test_pad_pulse.c \
++ *      -o /tmp/test_pad_pulse && /tmp/test_pad_pulse
++ *
++ * Nothing links SDL: the test defines every SDL call the backend makes.
++ */
++#include "../cellPad.c"
++#include <assert.h>
++#include <sys/mman.h>
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++/* the guest-memory writers' SPU coherence hooks (ppu_memory.h) */
++uint64_t spu_lockline_mask_range(uint32_t ea, uint32_t len) { (void)ea; (void)len; return 0; }
++void spu_lockline_lock_mask(uint64_t mask) { (void)mask; }
++void spu_lockline_unlock_mask(uint64_t mask) { (void)mask; }
++void spu_coh_notify_write_from_ppu(uint32_t addr) { (void)addr; }
++
++
++/* ---- the fake SDL: one controller ------------------------------------------ */
++static struct {
++    int present, closed, ps5, refuse;
++    Sint16 lt, rt;
++    uint32_t buttons;            /* SDL_GameControllerButton bits */
++    int effects;                 /* SendEffect calls */
++    uint8_t last[47];            /* the last effect report */
++} s_pad = { .present = 1, .ps5 = 1 };
++
++int SDL_NumJoysticks(void) { return s_pad.present; }
++SDL_bool SDL_IsGameController(int idx) { return idx == 0 && s_pad.present ? SDL_TRUE : SDL_FALSE; }
++SDL_JoystickID SDL_JoystickGetDeviceInstanceID(int idx) { return idx == 0 ? 1 : -1; }
++SDL_JoystickGUID SDL_JoystickGetDeviceGUID(int idx) { SDL_JoystickGUID g; memset(&g, 0, sizeof g); g.data[0] = (Uint8)idx; return g; }
++const char* SDL_JoystickNameForIndex(int idx) { (void)idx; return "Fake DualSense"; }
++SDL_GameController* SDL_GameControllerOpen(int idx) { (void)idx; s_pad.closed = 0; return (SDL_GameController*)&s_pad; }
++void SDL_GameControllerClose(SDL_GameController* gc) { (void)gc; s_pad.closed = 1; }
++SDL_bool SDL_GameControllerGetAttached(SDL_GameController* gc) { (void)gc; return s_pad.present ? SDL_TRUE : SDL_FALSE; }
++const char* SDL_GameControllerName(SDL_GameController* gc) { (void)gc; return "Fake DualSense"; }
++SDL_GameControllerType SDL_GameControllerGetType(SDL_GameController* gc)
++{
++    (void)gc; return s_pad.ps5 ? SDL_CONTROLLER_TYPE_PS5 : SDL_CONTROLLER_TYPE_XBOXONE;
++}
++SDL_bool SDL_GameControllerHasRumble(SDL_GameController* gc) { (void)gc; return SDL_TRUE; }
++/* The motors, recorded: the last request and how many there were. */
++static struct { Uint16 lo, hi; Uint32 ms; int n; } s_mot;
++int SDL_GameControllerRumble(SDL_GameController* gc, Uint16 lo, Uint16 hi, Uint32 ms)
++{
++    (void)gc; s_mot.lo = lo; s_mot.hi = hi; s_mot.ms = ms; s_mot.n++; return 0;
++}
++int SDL_GameControllerSendEffect(SDL_GameController* gc, const void* data, int size)
++{
++    (void)gc;
++    assert(!s_pad.closed && size == 47);
++    if (s_pad.refuse) return -1;
++    memcpy(s_pad.last, data, 47);
++    s_pad.effects++;
++    return 0;
++}
++Uint8 SDL_GameControllerGetButton(SDL_GameController* gc, SDL_GameControllerButton b) { (void)gc; return (Uint8)(s_pad.buttons >> b & 1u); }
++Sint16 SDL_GameControllerGetAxis(SDL_GameController* gc, SDL_GameControllerAxis a)
++{
++    (void)gc;
++    return a == SDL_CONTROLLER_AXIS_TRIGGERLEFT ? s_pad.lt : a == SDL_CONTROLLER_AXIS_TRIGGERRIGHT ? s_pad.rt : 0;
++}
++void SDL_GameControllerUpdate(void) {}
++int SDL_PeepEvents(SDL_Event* ev, int n, SDL_eventaction action, Uint32 lo, Uint32 hi) { (void)ev; (void)n; (void)action; (void)lo; (void)hi; return 0; }
++Uint32 SDL_WasInit(Uint32 flags) { return flags; }
++int SDL_InitSubSystem(Uint32 flags) { (void)flags; return 0; }
++SDL_bool SDL_SetHint(const char* name, const char* value) { (void)name; (void)value; return SDL_TRUE; }
++const char* SDL_GetError(void) { return "fake"; }
++/* The extras: player lights, light bar and gyro, recorded (a DualSense has
++ * a light bar and a gyro; the "Xbox" pad of the second half has neither). */
++static struct { int player; int leds; Uint8 rgb[3]; int gyro_on; float gyro[3]; } s_x;
++void SDL_GameControllerSetPlayerIndex(SDL_GameController* gc, int i) { (void)gc; s_x.player = i + 1; }
++SDL_bool SDL_GameControllerHasLED(SDL_GameController* gc) { (void)gc; return s_pad.ps5 ? SDL_TRUE : SDL_FALSE; }
++int SDL_GameControllerSetLED(SDL_GameController* gc, Uint8 r, Uint8 g, Uint8 b)
++{
++    (void)gc;
++    assert(!s_pad.closed);
++    s_x.rgb[0] = r; s_x.rgb[1] = g; s_x.rgb[2] = b; s_x.leds++;
++    return 0;
++}
++SDL_bool SDL_GameControllerHasSensor(SDL_GameController* gc, SDL_SensorType t)
++{
++    (void)gc; return s_pad.ps5 && t == SDL_SENSOR_GYRO ? SDL_TRUE : SDL_FALSE;
++}
++int SDL_GameControllerSetSensorEnabled(SDL_GameController* gc, SDL_SensorType t, SDL_bool on)
++{
++    (void)gc; assert(t == SDL_SENSOR_GYRO); s_x.gyro_on = on; return 0;
++}
++int SDL_GameControllerGetSensorData(SDL_GameController* gc, SDL_SensorType t, float* d, int n)
++{
++    (void)gc; assert(t == SDL_SENSOR_GYRO && s_x.gyro_on);
++    for (int i = 0; i < n && i < 3; i++) d[i] = s_x.gyro[i];
++    return 0;
++}
++
++/* ---- helpers ---------------------------------------------------------------- */
++static void poll_wait(int ms)
++{
++    usleep((unsigned)ms * 1000);
++    cellPad_poll();
++}
++static void rumble(int small_on, int large)
++{
++    CellPadActParam* act = (CellPadActParam*)(vm_base + 0x3000);
++    act->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = (u8)small_on;
++    act->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = (u8)large;
++    assert(cellPadSetActDirect(0, (CellPadActParam*)(uintptr_t)0x3000) == CELL_OK);
++}
++static int light_is(unsigned rgb) { return s_x.rgb[0] == (rgb >> 16 & 0xFF) && s_x.rgb[1] == (rgb >> 8 & 0xFF) && s_x.rgb[2] == (rgb & 0xFF); }
++static int right_mode(void) { return s_pad.last[10]; }
++
++/* The merge itself, no controller. */
++static void test_merge(void)
++{
++    PadRumble r;
++    memset(&r, 0, sizeof r);
++    assert(!pad_rumble_merge(&r, 100, 1000));                 /* nothing asked: nothing changes */
++    r.pulse_lo = 30000; r.pulse_hi = 8000; r.pulse_ms = 1000;
++    assert(pad_rumble_merge(&r, 100, 1000) && r.lo == 30000 && r.hi == 8000);
++    assert(!pad_rumble_merge(&r, 100, 1100));                 /* the same level: no new request */
++    r.game_lo = 50000;                                        /* a hit on the large motor wins there */
++    assert(pad_rumble_merge(&r, 100, 1100) && r.lo == 50000 && r.hi == 8000);
++    r.game_lo = 10000;                                        /* a weak one loses to the pulse */
++    assert(pad_rumble_merge(&r, 100, 1100) && r.lo == 30000 && r.hi == 8000);
++    assert(pad_rumble_merge(&r, 50, 1100) && r.lo == 15000 && r.hi == 4000);   /* strength scales the pulse only */
++    assert(pad_rumble_merge(&r, 200, 1100) && r.lo == 60000 && r.hi == 16000);
++    r.pulse_lo = 40000;
++    assert(pad_rumble_merge(&r, 200, 1100) && r.lo == 65535);                  /* capped */
++    assert(pad_rumble_merge(&r, 0, 1100) && r.lo == 10000 && r.hi == 0);       /* vibration off: no pulse */
++    r.game_lo = 0;
++    assert(pad_rumble_merge(&r, 0, 1100) && r.lo == 0 && r.hi == 0);
++    assert(pad_rumble_merge(&r, 100, 1000 + PAD_PULSE_HOLD_MS - 1) && r.lo == 40000);
++    assert(pad_rumble_merge(&r, 100, 1000 + PAD_PULSE_HOLD_MS) && r.lo == 0 && r.hi == 0);   /* lapsed */
++    assert(r.pulse_ms == 0 && r.pulse_lo == 0 && r.pulse_hi == 0);
++    r.game_lo = 20000; r.game_hi = 65535;                     /* the title's rumble alone: as before */
++    assert(pad_rumble_merge(&r, 100, 5000) && r.lo == 20000 && r.hi == 65535);
++}
++
++int main(void)
++{
++    unsetenv("PS3_PAD_SDL"); unsetenv("PS3_INPUT_MAP"); unsetenv("PS3_INPUT_MODE");
++    unsetenv("PS3_RUMBLE"); unsetenv("PS3_RUMBLE_STRENGTH"); unsetenv("PS3_RUMBLE_LOG");
++    unsetenv("PS3_PAD_ADAPTIVE"); unsetenv("PS3_PAD_FIRE_AT"); unsetenv("PS3_PAD_LIGHT_HIT");
++    unsetenv("PS3_PAD_GYRO");
++    setenv("PS3_PAD_LIGHT", "1e78ff", 1);
++    vm_base = mmap(NULL, 0x10000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    assert(vm_base != MAP_FAILED);
++    test_merge();
++
++    assert(cellPadInit(4) == CELL_OK);
++    assert(light_is(0x1e78ff));
++    const int n0 = s_mot.n;
++
++    /* A beat: sent at once, with SDL's usual duration; repeated calls with
++     * the same level send nothing more. */
++    cellPad_host_pulse(0, 40000, 12000);
++    assert(s_mot.n == n0 + 1 && s_mot.lo == 40000 && s_mot.hi == 12000 && s_mot.ms == PAD_RUMBLE_HOLD_MS);
++    cellPad_host_pulse(0, 40000, 12000);
++    assert(s_mot.n == n0 + 1);
++    poll_wait(PAD_LIGHT_MIN_GAP_MS + 5);
++    assert(s_x.rgb[0] > 0x90 && s_x.rgb[2] < 0x70);           /* the light bar glows with it (40000/65535 to red) */
++    assert(right_mode() == 0x25);                             /* the trigger keeps its click: no buzz for a pulse */
++    s_pad.rt = 20000;                                         /* not even with the trigger held */
++    cellPad_host_pulse(0, 40000, 12000);
++    poll_wait(PAD_ADAPT_MIN_GAP_MS + 5);
++    assert(right_mode() == 0x25);
++    s_pad.rt = 0;
++    /* The beat ends: motors off at once, the light back to blue. */
++    cellPad_host_pulse(0, 0, 0);
++    assert(s_mot.n == n0 + 2 && s_mot.lo == 0 && s_mot.hi == 0 && s_mot.ms == 0);
++    poll_wait(PAD_LIGHT_MIN_GAP_MS + 5);
++    assert(light_is(0x1e78ff));
++
++    /* With the title's rumble: the stronger per motor, in both orders. */
++    rumble(0, 100);                                           /* large 100 -> 25700 */
++    assert(s_mot.lo == 25700 && s_mot.hi == 0);
++    cellPad_host_pulse(0, 40000, 12000);
++    assert(s_mot.lo == 40000 && s_mot.hi == 12000);
++    rumble(1, 200);                                           /* a hit over the beat */
++    assert(s_mot.lo == 51400 && s_mot.hi == 65535);
++    cellPad_host_pulse(0, 0, 0);                              /* the beat ends: the hit stays whole */
++    assert(s_mot.lo == 51400 && s_mot.hi == 65535);
++    cellPad_host_pulse(0, 40000, 12000);
++    rumble(0, 0);                                             /* the hit ends: the beat stays */
++    assert(s_mot.lo == 40000 && s_mot.hi == 12000);
++
++    /* Nobody renews it: the pad poll stops it after PAD_PULSE_HOLD_MS. */
++    poll_wait(PAD_PULSE_HOLD_MS / 2);
++    assert(s_mot.lo == 40000);
++    poll_wait(PAD_PULSE_HOLD_MS / 2 + 20);
++    assert(s_mot.lo == 0 && s_mot.hi == 0 && s_mot.ms == 0);
++    assert(s_rumble[0].sent_ms == 0);                         /* nothing left to renew */
++
++    /* A held level is renewed like the title's rumble (SDL's runs for 1 s). */
++    cellPad_host_pulse(0, 20000, 0);
++    const int n1 = s_mot.n;
++    for (int i = 0; i < 5; i++) { cellPad_host_pulse(0, 20000, 0); poll_wait(100); }
++    assert(s_mot.n == n1 + 1 && s_mot.lo == 20000 && s_mot.ms == PAD_RUMBLE_HOLD_MS);   /* once, past 400 ms */
++    cellPad_host_pulse(0, 0, 0);
++
++    /* Strength: half scales it, off silences it (the in-game menu's switch). */
++    cellPad_host_set_rumble_strength(50);
++    cellPad_host_pulse(0, 40000, 12000);
++    assert(s_mot.lo == 20000 && s_mot.hi == 6000);
++    cellPad_host_pulse(0, 0, 0);
++    cellPad_host_set_rumble_strength(0);
++    const int n2 = s_mot.n;
++    cellPad_host_pulse(0, 40000, 12000);
++    assert(s_mot.n == n2 && s_rumble[0].lo == 0 && s_rumble[0].hi == 0);
++    poll_wait(PAD_LIGHT_MIN_GAP_MS + 5);
++    assert(light_is(0x1e78ff));                               /* and no glow: the light follows the motors */
++    cellPad_host_pulse(0, 0, 0);
++    cellPad_host_set_rumble_strength(100);
++
++    /* A port with no host pad, and a pad that went away: harmless. */
++    cellPad_host_pulse(-1, 1000, 1000);
++    cellPad_host_pulse(PAD_MAX_HOST_PORTS, 1000, 1000);
++    cellPad_host_pulse(0, 99999, 99999);                      /* clamped */
++    assert(s_mot.lo == 65535 && s_mot.hi == 65535);
++    s_pad.present = 0;
++    poll_wait(PAD_POLL_INTERVAL_MS + 2);
++    assert(s_pad.closed);
++    cellPad_host_pulse(0, 30000, 0);                          /* kept for a pad that comes back, sent nowhere */
++    s_pad.present = 1;
++    assert(cellPadEnd() == CELL_OK);
++
++    printf("test_pad_pulse: all passed\n");
++    return 0;
++}

@@ -138,7 +138,8 @@ More in `docs/screenshots/` (English Home, not installed, each Advanced tab).
   it, the mouse options: camera on/off, sensitivity, vertical and horizontal
   inversion, dead zone, cursor capture (`PS3_MOUSE*`); then vibration on/off
   and its strength (`PS3_RUMBLE=0`, `PS3_RUMBLE_STRENGTH`), with a button that
-  rumbles the controller through the Gamepad API; last, **Button icons /
+  rumbles the controller through the Gamepad API, and the heartbeat at low
+  health (`PS3_HEARTBEAT=0` when off); last, **Button icons /
   Ícones dos botões**: the glyphs in the game's prompts, Automatic (the device
   used last), PlayStation, Xbox or Keyboard and mouse (`PS3_BUTTON_ICONS`,
   passed only when it is not Automatic, so a choice made in the in-game menu

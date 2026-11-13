@@ -1,0 +1,112 @@
+# Run 7 (2026-11-13), check build (-DPORT_HEARTBEAT_POKE=ON), PS3_HEARTBEAT_LOG=2 PS3_RUMBLE_LOG=1.
+# Save save-backup-20261015-0124 (a copy); in play from t=145.2 (w0 = 145.3).
+# PS3_HEARTBEAT_POKE=w3:130,w40:40  PAD_SCRIPT=...,w43:START,w48:START,w52:left stick right 14 s + X every 2 s
+# Every [heartbeat] line but the beats; then the beats of the first episode with the toolkit's lines.
+[heartbeat] t=145.21 health 400.0/400.0 (100%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[cellPad] PAD_SCRIPT: world clock starts at t=145.3s
+[heartbeat] t=148.45 on: health 32% (130.0/400.0), 75 bpm
+[heartbeat] t=148.45 health 130.0/400.0 (32%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=148.44 poke: hit points 400.0 -> 130.0
+[heartbeat] t=158.67 health 132.0/400.0 (33%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=158.88 health 147.2/400.0 (37%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=158.96 off: health back (153.5/400.0)
+[heartbeat] t=159.08 health 160.8/400.0 (40%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=159.28 health 175.1/400.0 (44%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=159.49 health 190.0/400.0 (48%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=159.70 health 203.1/400.0 (51%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=159.91 health 209.3/400.0 (52%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=160.12 health 216.1/400.0 (54%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=160.33 health 220.8/400.0 (55%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=160.53 health 228.1/400.0 (57%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=160.73 health 234.3/400.0 (59%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=160.94 health 240.7/400.0 (60%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=161.14 health 246.2/400.0 (62%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=161.35 health 251.8/400.0 (63%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=161.55 health 258.2/400.0 (65%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=161.75 health 264.7/400.0 (66%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=161.96 health 270.4/400.0 (68%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=162.16 health 276.7/400.0 (69%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=162.37 health 283.1/400.0 (71%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=162.58 health 289.3/400.0 (72%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=162.79 health 295.7/400.0 (74%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=162.99 health 301.2/400.0 (75%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=163.20 health 307.7/400.0 (77%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=163.41 health 313.7/400.0 (78%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=163.61 health 320.1/400.0 (80%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=163.81 health 326.4/400.0 (82%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=164.02 health 332.6/400.0 (83%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=164.23 health 338.2/400.0 (85%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=164.43 health 344.7/400.0 (86%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=164.64 health 351.2/400.0 (88%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=164.84 health 357.0/400.0 (89%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=165.05 health 362.7/400.0 (91%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=165.25 health 369.4/400.0 (92%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=165.45 health 374.4/400.0 (94%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=165.65 health 380.3/400.0 (95%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=165.85 health 386.4/400.0 (97%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=166.06 health 392.6/400.0 (98%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=166.27 health 398.7/400.0 (100%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=166.47 health 400.0/400.0 (100%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=185.42 poke: hit points 400.0 -> 40.0
+[heartbeat] t=185.42 on: health 10% (40.0/400.0), 120 bpm
+[heartbeat] t=185.42 health 40.0/400.0 (10%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=188.43 off: cutscene or menu (40.0/400.0)
+[heartbeat] t=188.43 health 40.0/400.0 (10%) hero=496FE400 hud-hidden | letterbox=0 hudhide=0 scale=0 force=0 pause=1
+[heartbeat] t=193.66 on: health 10% (40.0/400.0), 120 bpm
+[heartbeat] t=193.66 health 40.0/400.0 (10%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=200.74 health 42.4/400.0 (11%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=200.95 health 56.8/400.0 (14%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=201.15 health 72.1/400.0 (18%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=201.36 health 88.0/400.0 (22%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=201.56 health 104.0/400.0 (26%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=201.77 health 119.2/400.0 (30%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=201.97 health 134.7/400.0 (34%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=202.18 health 150.2/400.0 (38%) hero=496FE400 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=202.21 off: health back (152.3/400.0)
+[heartbeat] t=202.38 health 165.8/400.0 (41%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=202.59 health 180.9/400.0 (45%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=202.79 health 195.3/400.0 (49%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=203.00 health 205.1/400.0 (51%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=203.20 health 211.0/400.0 (53%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=203.41 health 217.4/400.0 (54%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=203.61 health 223.7/400.0 (56%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=203.81 health 229.7/400.0 (57%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=204.01 health 235.9/400.0 (59%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=204.22 health 241.7/400.0 (60%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=204.42 health 247.8/400.0 (62%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=204.63 health 253.9/400.0 (63%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=204.83 health 260.5/400.0 (65%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=205.04 health 266.1/400.0 (67%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=205.24 health 272.2/400.0 (68%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=205.44 health 278.5/400.0 (70%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=205.64 health 284.8/400.0 (71%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=205.84 health 290.7/400.0 (73%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=206.05 health 296.5/400.0 (74%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=206.26 health 302.9/400.0 (76%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=206.46 health 308.8/400.0 (77%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=206.66 health 314.7/400.0 (79%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=206.87 health 320.7/400.0 (80%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=207.07 health 327.6/400.0 (82%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=207.28 health 333.3/400.0 (83%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=207.48 health 338.2/400.0 (85%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=207.68 health 344.6/400.0 (86%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=207.89 health 350.4/400.0 (88%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=208.09 health 356.9/400.0 (89%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=208.30 health 362.3/400.0 (91%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=208.51 health 368.3/400.0 (92%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=208.71 health 371.7/400.0 (93%) hero=496FE400 | letterbox=0 hudhide=0 scale=0.982826 force=0 pause=0
+[heartbeat] t=208.92 health 376.9/400.0 (94%) hero=496FE400 | letterbox=0 hudhide=0 scale=0.91107 force=0 pause=0
+[heartbeat] t=209.12 health 380.1/400.0 (95%) hero=496FE400 | letterbox=0 hudhide=0 scale=0.848159 force=0 pause=0
+[heartbeat] t=209.33 health -1.0/400.0 (-0%) hero=496FE400 | letterbox=0 hudhide=0 scale=0.85 force=0 pause=0
+[heartbeat] t=209.57 health -1.0/400.0 (-0%) hero=496FE400 | letterbox=0 hudhide=0 scale=0.860417 force=0 pause=0
+[heartbeat] t=209.77 health -1.0/400.0 (-0%) hero=496FE400 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=211.83 health -1.0/400.0 (-0%) hero=496FE400 hud-hidden | letterbox=0 hudhide=0 scale=0 force=0 pause=0
+[heartbeat] t=211.84 health 0.0/0.0 (0%) hero=00000000 hud-hidden | letterbox=0 hudhide=0 scale=0 force=0 pause=0
+[heartbeat] t=212.60 health 400.0/400.0 (100%) hero=49A8BC60 hud-hidden | letterbox=0 hudhide=0 scale=0 force=0 pause=0
+[heartbeat] t=214.12 health 400.0/400.0 (100%) hero=49A8BC60 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+
+# The first episode's beats (130/400, 75 bpm), as the toolkit saw them:
+[cellPad] host pulse port 0: lo 0, hi 0 -> motors 0, 0
+[cellPad] host pulse port 0: lo 19239, hi 0 -> motors 19239, 0
+[heartbeat] t=148.739 dub lo=19239 hi=0 (75 bpm)
+[cellPad] host pulse port 0: lo 0, hi 0 -> motors 0, 0

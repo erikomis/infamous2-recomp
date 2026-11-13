@@ -1,0 +1,21 @@
+# Run 6 (2026-11-13), check build, PS3_HEARTBEAT_LOG=2: dying while the heartbeat is on.
+# In play from t=143.1. Hit points written to 40 at t=193.2 (before the poke marked a hit: no recovery),
+# then left stick right + X from t=197.9 takes Cole over the rail into the river.
+[heartbeat] t=193.20 poke: hit points 150.0 -> 40.0
+[heartbeat] t=193.20 on: health 10% (40.0/400.0), 120 bpm
+[heartbeat] t=193.20 health 40.0/400.0 (10%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=203.33 health 40.0/400.0 (10%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=0.995016 force=0 pause=0
+[heartbeat] t=203.53 health 40.0/400.0 (10%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=0.919203 force=0 pause=0
+[heartbeat] t=203.74 health 40.0/400.0 (10%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=209.38 health 40.0/400.0 (10%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=0.990912 force=0 pause=0
+[heartbeat] t=209.59 health 40.0/400.0 (10%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=0.920332 force=0 pause=0
+[heartbeat] t=209.80 health 40.0/400.0 (10%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=0.864119 force=0 pause=0
+[heartbeat] t=210.00 health 37.6/400.0 (9%) hero=496FE3F0 beating | letterbox=0 hudhide=0 scale=0.692968 force=0 pause=0
+[heartbeat] t=210.06 off: dead (-1.0/400.0)
+[heartbeat] t=210.21 health -1.0/400.0 (-0%) hero=496FE3F0 | letterbox=0 hudhide=0 scale=0.85 force=0 pause=0
+[heartbeat] t=210.41 health -1.0/400.0 (-0%) hero=496FE3F0 | letterbox=0 hudhide=0 scale=0.896875 force=0 pause=0
+[heartbeat] t=210.62 health -1.0/400.0 (-0%) hero=496FE3F0 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
+[heartbeat] t=212.67 health -1.0/400.0 (-0%) hero=496FE3F0 hud-hidden | letterbox=0 hudhide=0 scale=0 force=0 pause=0
+[heartbeat] t=212.68 health 0.0/0.0 (0%) hero=00000000 hud-hidden | letterbox=0 hudhide=0 scale=0 force=0 pause=0
+[heartbeat] t=213.31 health 400.0/400.0 (100%) hero=49BC9F70 hud-hidden | letterbox=0 hudhide=0 scale=0 force=0 pause=0
+[heartbeat] t=214.76 health 400.0/400.0 (100%) hero=49BC9F70 | letterbox=0 hudhide=0 scale=1 force=0 pause=0
