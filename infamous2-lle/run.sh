@@ -179,7 +179,12 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #                               a PS3_FRAMEGEN line in PS3_TOGGLE_FILE.
 # Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
 # PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200,
-# PS3_PAD_ADAPTIVE=0 (DualSense adaptive triggers off), PS3_PAD_FIRE_AT=10..90.
+# PS3_PAD_ADAPTIVE=0 (DualSense adaptive triggers off), PS3_PAD_FIRE_AT=10..90,
+# PS3_PAD_LIGHT=<RRGGBB>|off (light bar; Cole's blue 1e78ff by default),
+# PS3_PAD_LIGHT_HIT=0 (no red glow with the rumble), PS3_PAD_GYRO=0..400
+# (gyro aim in percent while aim/L1 is held; PS3_PAD_GYRO_MODE=always,
+# PS3_PAD_GYRO_INVERT_Y=1). Steam (Steam Input) keeps the triggers and the
+# light bar dark: quit it first.
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or
 # Option+Return toggles fullscreen, Cmd+Ctrl+F macOS fullscreen; a click in
 # the game captures the mouse, Esc or Cmd releases it.

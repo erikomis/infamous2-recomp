@@ -141,6 +141,16 @@ pub struct Settings {
     /// PS3_PAD_ADAPTIVE=0 when off: DualSense adaptive triggers (R2 clicks
     /// like a trigger, L2 has a light resistance). On by default.
     pub adaptive_triggers: bool,
+    /// PS3_PAD_LIGHT: the DualSense / DualShock 4 light bar, "" (the port's
+    /// default, Cole's electric blue), "off", or RRGGBB.
+    pub pad_light: String,
+    /// PS3_PAD_LIGHT_HIT=0 when off: the light bar glows red with the
+    /// game's rumble (hits, explosions).
+    pub pad_light_hit: bool,
+    /// PS3_PAD_GYRO: gyro aim in percent (0 = off).
+    pub gyro: u32,
+    /// PS3_PAD_GYRO_MODE=always: gyro aim without holding aim (L1).
+    pub gyro_always: bool,
     /// PS3_BUTTON_ICONS: the glyphs in the game's button prompts: "auto" (the
     /// controller in use), "playstation", "xbox" or "keyboard".
     pub button_icons: String,
@@ -214,6 +224,10 @@ impl Default for Settings {
             rumble: true,
             rumble_strength: 100,
             adaptive_triggers: true,
+            pad_light: String::new(),
+            pad_light_hit: true,
+            gyro: 0,
+            gyro_always: false,
             button_icons: "auto".into(),
             show_fps: false,
             extra_env: String::new(),
@@ -818,6 +832,21 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if !s.adaptive_triggers {
         set("PS3_PAD_ADAPTIVE", "0".into());
+    }
+    // The light bar: the port's blue is its own default (main.cpp), so only
+    // another colour or "off" is passed; anything else is not a colour.
+    let light = s.pad_light.trim().trim_start_matches('#').to_ascii_lowercase();
+    if light == "off" || (light.len() == 6 && light.chars().all(|c| c.is_ascii_hexdigit()) && light != "1e78ff") {
+        set("PS3_PAD_LIGHT", light);
+    }
+    if !s.pad_light_hit {
+        set("PS3_PAD_LIGHT_HIT", "0".into());
+    }
+    if s.gyro > 0 {
+        set("PS3_PAD_GYRO", s.gyro.min(400).to_string());
+        if s.gyro_always {
+            set("PS3_PAD_GYRO_MODE", "always".into());
+        }
     }
     if !s.rumble {
         set("PS3_RUMBLE", "0".into());
@@ -2883,7 +2912,8 @@ mod tests {
         let mut s = Settings::default();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         for k in ["PS3_DISPLAY", "PS3_VSYNC", "PS3_AUDIO_VOLUME", "PS3_AUDIO_DEVICE", "PS3_RUMBLE", "PS3_RUMBLE_STRENGTH",
-                  "PS3_BUTTON_ICONS", "PS3_FRAMEGEN", "PS3_PAD_ADAPTIVE"] {
+                  "PS3_BUTTON_ICONS", "PS3_FRAMEGEN", "PS3_PAD_ADAPTIVE", "PS3_PAD_LIGHT", "PS3_PAD_LIGHT_HIT",
+                  "PS3_PAD_GYRO", "PS3_PAD_GYRO_MODE"] {
             assert!(!env.contains_key(k), "{k} is a default and must stay out");
         }
         s.display = "DELL U2720Q".into();
@@ -2902,12 +2932,35 @@ mod tests {
         assert_eq!(env.get("PS3_AUDIO_DEVICE").map(String::as_str), Some("Erik's AirPods"));
         assert_eq!(env.get("PS3_RUMBLE_STRENGTH").map(String::as_str), Some("150"));
         assert!(!env.contains_key("PS3_RUMBLE"));
+        s.gyro_always = true; // gyro off: "always" is moot
+        s.pad_light = "1E78FF".into(); // the port's own blue: left to main.cpp
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert!(!env.contains_key("PS3_PAD_GYRO") && !env.contains_key("PS3_PAD_GYRO_MODE") && !env.contains_key("PS3_PAD_LIGHT"));
+        s.pad_light = "#FF0000".into();
+        s.pad_light_hit = false;
+        s.gyro = 160;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_PAD_LIGHT").map(String::as_str), Some("ff0000"));
+        assert_eq!(env.get("PS3_PAD_LIGHT_HIT").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_PAD_GYRO").map(String::as_str), Some("160"));
+        assert_eq!(env.get("PS3_PAD_GYRO_MODE").map(String::as_str), Some("always"));
+        s.gyro = 900;
+        s.gyro_always = false;
+        s.pad_light = "zz0000".into(); // not a colour: nothing passed
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_PAD_GYRO").map(String::as_str), Some("400"));
+        assert!(!env.contains_key("PS3_PAD_GYRO_MODE") && !env.contains_key("PS3_PAD_LIGHT"));
+        s.pad_light = "off".into();
+        s.gyro = 0;
+        s.pad_light_hit = true;
         s.rumble = false;
         s.adaptive_triggers = false;
         s.audio_volume = 0;
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3_RUMBLE").map(String::as_str), Some("0"));
         assert_eq!(env.get("PS3_PAD_ADAPTIVE").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_PAD_LIGHT").map(String::as_str), Some("off"));
+        assert!(!env.contains_key("PS3_PAD_LIGHT_HIT") && !env.contains_key("PS3_PAD_GYRO"));
         assert!(!env.contains_key("PS3_RUMBLE_STRENGTH")); // off: the strength is moot
         assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("0"));
         assert!(!env.contains_key("PS3RECOMP_METAL_FPS"));
