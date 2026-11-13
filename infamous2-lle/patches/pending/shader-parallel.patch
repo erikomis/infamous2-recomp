@@ -1,0 +1,468 @@
+diff --git a/include/ps3emu/ps3_ftrace.h b/include/ps3emu/ps3_ftrace.h
+index 6c93d7a..403b8fe 100644
+--- a/include/ps3emu/ps3_ftrace.h
++++ b/include/ps3emu/ps3_ftrace.h
+@@ -65,7 +65,9 @@ enum ps3_ft_kind {
+     PS3_FT_COMPILE     = 16, /* RSX thread built a shader or pipeline on first use: who = 0 the
+                               * engine's whole pipeline miss (decompile + backend), 1 vertex /
+                               * 2 fragment function (HLSL -> MSL -> Metal library), 3 Metal
+-                              * pipeline state, 4 the HLSL -> MSL translation alone (inside 1/2);
++                              * pipeline state, 4 the HLSL -> MSL translation alone (inside 1/2),
++                              * 5 PS3_SHADER_PARALLEL: the encoding thread waited for pool builds
++                              * (b = the pipeline, 0 all); 1-4 then run on the pool's threads too;
+                               * a = 1 built / 0 failed */
+     PS3_FT_TEXUP       = 17, /* RSX thread decoded + uploaded a guest texture: a = source KB,
+                               * b = 0 new, 1 content changed; | 2 when it evicted another */
+diff --git a/include/ps3emu/ps3_toggles.h b/include/ps3emu/ps3_toggles.h
+index f1403fa..1b2655d 100644
+--- a/include/ps3emu/ps3_toggles.h
++++ b/include/ps3emu/ps3_toggles.h
+@@ -96,6 +96,7 @@ enum ps3_toggle_id {
+     PS3T_METAL_LEAN_ENCODE,  /* rsx_metal_backend.m: unretained texture binds     */
+     PS3T_ENG_TEXREG_ONCE,    /* rsx_draw_engine.c: texture units decoded once a draw */
+     PS3T_METAL_ENCODE_THREAD,/* rsx_metal_backend.m: presents encoded on a thread  */
++    PS3T_SHADER_PARALLEL,    /* rsx_metal_backend.m: pipeline misses on a pool     */
+     PS3T_COUNT
+ };
+ 
+@@ -162,6 +163,7 @@ static inline const ps3_toggle_def* ps3_toggle_def_of(int id)
+         { "PS3RECOMP_METAL_LEAN_ENCODE", PS3_TK_NOT0, 1 },
+         { "PS3RECOMP_ENG_TEXREG_ONCE",  PS3_TK_NOT0, 1 },
+         { "PS3RECOMP_METAL_ENCODE_THREAD", PS3_TK_ATOI, 0 },
++        { "PS3_SHADER_PARALLEL",        PS3_TK_NOT0, 1 },
+     };
+     return &d[id];
+ }
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+index c6199f9..85aae4a 100644
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -71,6 +71,7 @@
+ int rsx_metal_capture_available(void) { const char* d = getenv("PS3RECOMP_METAL_SURF_DUMP"); return d && *d; }
+ void rsx_metal_request_capture(void) { __atomic_store_n(&s_capture_req, 1, __ATOMIC_RELEASE); }
+ #include <pthread.h>
++#include <sys/sysctl.h>
+ #include "metal_frame_rate.h"
+ #include "rsx_commands.h"
+ #include "rsx_metal_backend.h"
+@@ -2940,6 +2941,8 @@ static void release_surfaces(void)
+     MTLCullMode cull;
+     MTLWinding  winding;
+     int ready;       /* pso is final (set last; PS3_SHADER_ASYNC builds it on a queue) */
++    int building;    /* PS3_SHADER_PARALLEL: a pool job still owns pso/ready (cleared
++                      * after them, under s_par_mu); ready stays 0 when it failed */
+     char desc[144];  /* PS3RECOMP_METAL_PASS_LOG summary of the fixed-function state */
+ } EngPipeline;
+ static EngPipeline s_eng_pipe[ENG_MAX_PIPES];
+@@ -2947,10 +2950,17 @@ static void release_surfaces(void)
+ 
+ /* Compiled MSL functions, keyed on the HLSL the decompilers emitted: one
+  * program is translated and compiled once however many pipeline variants
+- * reference it. */
+-typedef struct { u64 hash; id<MTLFunction> fn; } EngFunc;
++ * reference it. The table is shared by the PS3_SHADER_PARALLEL workers: it
++ * is read and written under s_func_mu, and an entry being built (`busy`)
++ * makes a second thread that wants the same program wait for it rather than
++ * translate it again. */
++typedef struct { u64 hash; id<MTLFunction> fn; int busy; } EngFunc;
+ static EngFunc s_eng_func[ENG_MAX_FUNCS];
+ static u32 s_eng_func_count;
++static pthread_mutex_t s_func_mu = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t  s_func_cv = PTHREAD_COND_INITIALIZER;
++static id<MTLFunction> eng_function(const char* hlsl, int stage, const char* what);
++static void eng_par_wait(u32 slot);   /* PS3_SHADER_PARALLEL: a pipeline's pool build */
+ /* PS3_SHADER_ASYNC (below, with the shader cache): the build queue, builds
+  * still queued, and draws skipped because their pipeline was not ready. */
+ static dispatch_queue_t s_sc_queue;
+@@ -3727,6 +3737,7 @@ static void eng_shutdown(void* user)
+     (void)user;
+     eng_enc_join();   /* PS3RECOMP_METAL_ENCODE_THREAD: a present may still be encoding */
+     if (s_sc_queue) dispatch_sync(s_sc_queue, ^{});   /* PS3_SHADER_ASYNC builds in flight */
++    eng_par_wait(~0u);                                   /* PS3_SHADER_PARALLEL builds in flight */
+     for (u32 i = 0; i < s_eng_obj_count; i++) s_eng_obj[i] = nil;
+     for (u32 i = 0; i < s_eng_pipe_count; i++) {
+         s_eng_pipe[i].pso = nil;
+@@ -4349,45 +4360,261 @@ static int sc_async(void)
+     return s_sc_async;
+ }
+ 
++/* PS3_SHADER_PARALLEL (default on; 0 = the serial path, live through
++ * PS3_TOGGLE_FILE): a pipeline miss returns its handle at once and its
++ * shaders are translated (glslang + spirv-cross, ~8 ms each), compiled and the
++ * pipeline state built on a pool of worker threads, so the misses of one frame
++ * overlap each other and the rest of the FIFO drain instead of running one
++ * after another on the RSX thread (in New Marais, 39 shaders new to the cache
++ * made a 331 ms frame; 2026-11-12, 3 workers: ~100 ms). Nothing is skipped:
++ * before a submission's draws are encoded (a flush, a present, on whichever
++ * thread encodes) every pipeline they use is waited for, and the waiting
++ * thread runs queued builds itself meanwhile. A build that fails leaves the pipeline not ready and its draws
++ * are dropped, as the serial path drops a pipeline it could not build.
++ * Workers: PS3_SHADER_WORKERS=<n>, default the performance cores minus five
++ * (five SPU threads, the PPU and the RSX thread are the game's busy ones),
++ * at least 2. PS3_SHADER_ASYNC=1 keeps its own serial queue and skips. */
++typedef struct EngParJob {
++    struct EngParJob* next;
++    u32   slot;
++    char* vs;            /* split VS HLSL (malloc) */
++    char* ps;            /* PS HLSL (malloc) */
++    void* pd;            /* MTLRenderPipelineDescriptor, CFBridgingRetain'd */
++} EngParJob;
++static pthread_mutex_t s_par_mu = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t  s_par_work = PTHREAD_COND_INITIALIZER;   /* a job was queued */
++static pthread_cond_t  s_par_done = PTHREAD_COND_INITIALIZER;   /* a job finished */
++static EngParJob *s_par_head, *s_par_tail;
++static volatile u32 s_par_inflight;     /* queued + running */
++static u32 s_par_workers;               /* threads started (0 = none yet) */
++static u32 s_par_jobs, s_par_waits;     /* stats: jobs submitted, encode waits */
++static double s_par_wait_ms;
++static int s_par_on = -1;               /* PS3T_SHADER_PARALLEL */
++static void eng_par_set(int id, int v) { (void)id; __atomic_store_n(&s_par_on, v != 0, __ATOMIC_RELAXED); }
++
++static void eng_par_run(EngParJob* j)
++{
++    @autoreleasepool {
++        MTLRenderPipelineDescriptor* pd = (MTLRenderPipelineDescriptor*)CFBridgingRelease(j->pd);
++        id<MTLFunction> v = eng_function(j->vs, RSX_SHADER_STAGE_VERTEX, "vp");
++        id<MTLFunction> f = v ? eng_function(j->ps, RSX_SHADER_STAGE_FRAGMENT, "fp") : nil;
++        id<MTLRenderPipelineState> built = nil;
++        if (v && f) {
++            pd.vertexFunction = v; pd.fragmentFunction = f;
++            NSError* e = nil;
++            const uint64_t t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++            built = [s_dev newRenderPipelineStateWithDescriptor:pd error:&e];
++            if (t0) ps3_ft_span(PS3_FT_COMPILE, 3, built != nil, 0, t0, ps3_ft_now());
++            if (!built) fprintf(stderr, "[rsx engine/metal] pipeline state failed: %s\n",
++                                [[e localizedDescription] UTF8String]);
++        }
++        if (!built) fprintf(stderr, "[rsx engine/metal] pipeline p=%u could not be built; its draws are dropped\n",
++                            j->slot + 1);
++        s_eng_pipe[j->slot].pso = built;
++        __atomic_store_n(&s_eng_pipe[j->slot].ready, built ? 1 : 0, __ATOMIC_RELEASE);
++    }
++    free(j->vs); free(j->ps);
++    const u32 slot = j->slot;
++    if (j->next != j) free(j);   /* next == j: a job on the caller's stack */
++    pthread_mutex_lock(&s_par_mu);
++    __atomic_store_n(&s_eng_pipe[slot].building, 0, __ATOMIC_RELEASE);
++    s_par_inflight--;
++    pthread_cond_broadcast(&s_par_done);
++    pthread_mutex_unlock(&s_par_mu);
++}
++
++/* Under s_par_mu: the queued job for `slot` (any slot when slot == ~0u: the
++ * oldest), unlinked, or NULL. */
++static EngParJob* eng_par_take_locked(u32 slot)
++{
++    EngParJob *prev = NULL, *j = s_par_head;
++    while (j && slot != ~0u && j->slot != slot) { prev = j; j = j->next; }
++    if (!j) return NULL;
++    if (prev) prev->next = j->next; else s_par_head = j->next;
++    if (s_par_tail == j) s_par_tail = prev;
++    j->next = NULL;
++    return j;
++}
++
++static void* eng_par_worker(void* arg)
++{
++    (void)arg;
++    pthread_setname_np("ps3recomp.shaders");
++    pthread_mutex_lock(&s_par_mu);
++    for (;;) {
++        EngParJob* j;
++        while (!(j = eng_par_take_locked(~0u))) pthread_cond_wait(&s_par_work, &s_par_mu);
++        pthread_mutex_unlock(&s_par_mu);
++        eng_par_run(j);
++        pthread_mutex_lock(&s_par_mu);
++    }
++    return NULL;
++}
++
++/* PS3_SHADER_PARALLEL is on (and PS3_SHADER_ASYNC off): the pool exists. */
++static int eng_par_ready(void)
++{
++    if (__builtin_expect(__atomic_load_n(&s_par_on, __ATOMIC_RELAXED) < 0, 0))
++        ps3_toggle_watch(PS3T_SHADER_PARALLEL, eng_par_set);
++    if (!__atomic_load_n(&s_par_on, __ATOMIC_RELAXED) || sc_async()) return 0;
++    if (s_par_workers) return 1;
++    /* The translator's own once-only state (glslang's process init, its
++     * knob reads) is set up here, on this thread, before any worker runs. */
++    { static const char warm[] = "float4 main() : SV_Target { return float4(0, 0, 0, 1); }\n";
++      char* out = (char*)malloc(64 * 1024); char log[256];
++      if (out) { (void)rsx_hlsl_to_msl(warm, RSX_SHADER_STAGE_FRAGMENT, out, 64 * 1024, log, sizeof log); free(out); } }
++    (void)sc_on();
++    int n = 0;
++    const char* e = getenv("PS3_SHADER_WORKERS");
++    if (e && atoi(e) > 0) n = atoi(e);
++    else {
++        int pc = 0; size_t sz = sizeof pc;
++        if (sysctlbyname("hw.perflevel0.physicalcpu", &pc, &sz, NULL, 0) != 0 || pc <= 0) pc = 4;
++        n = pc - 5;
++        if (n < 2) n = 2;
++    }
++    if (n > 16) n = 16;
++    pthread_attr_t at;
++    pthread_attr_init(&at);
++    pthread_attr_set_qos_class_np(&at, QOS_CLASS_USER_INITIATED, 0);
++    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
++    pthread_attr_setstacksize(&at, 8u << 20);   /* glslang recurses on deep expressions */
++    for (int i = 0; i < n; i++) {
++        pthread_t t;
++        if (pthread_create(&t, &at, eng_par_worker, NULL) == 0) s_par_workers++;
++    }
++    pthread_attr_destroy(&at);
++    if (!s_par_workers) { __atomic_store_n(&s_par_on, 0, __ATOMIC_RELAXED); return 0; }
++    fprintf(stderr, "[shader cache] PS3_SHADER_PARALLEL: new pipelines build on %u worker thread(s)"
++                    " and are waited for before their draws are encoded\n", s_par_workers);
++    return 1;
++}
++
++static void eng_par_submit(u32 slot, char* vs, char* ps, MTLRenderPipelineDescriptor* pd)
++{
++    EngParJob* j = (EngParJob*)calloc(1, sizeof *j);
++    if (!j) {   /* no memory for a job: build it here, as the serial path would */
++        EngParJob local = { NULL, slot, vs, ps, (void*)CFBridgingRetain(pd) };
++        local.next = &local;
++        pthread_mutex_lock(&s_par_mu); s_par_inflight++; pthread_mutex_unlock(&s_par_mu);
++        eng_par_run(&local);
++        return;
++    }
++    j->slot = slot; j->vs = vs; j->ps = ps; j->pd = (void*)CFBridgingRetain(pd);
++    pthread_mutex_lock(&s_par_mu);
++    if (s_par_tail) s_par_tail->next = j; else s_par_head = j;
++    s_par_tail = j;
++    s_par_inflight++;
++    s_par_jobs++;
++    pthread_cond_signal(&s_par_work);
++    pthread_mutex_unlock(&s_par_mu);
++}
++
++/* Wait until pipeline `slot` is built, or every queued/running build when
++ * slot == ~0u, running queued builds on this thread meanwhile (the one asked
++ * for first, else the oldest). */
++static void eng_par_wait(u32 slot)
++{
++    if (slot != ~0u ? !__atomic_load_n(&s_eng_pipe[slot].building, __ATOMIC_ACQUIRE)
++                    : !__atomic_load_n(&s_par_inflight, __ATOMIC_ACQUIRE)) return;
++    const uint64_t t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++    const double w0 = (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
++    pthread_mutex_lock(&s_par_mu);
++    while (slot != ~0u ? s_eng_pipe[slot].building : s_par_inflight != 0) {
++        EngParJob* j = slot != ~0u ? eng_par_take_locked(slot) : NULL;
++        if (!j) j = eng_par_take_locked(~0u);
++        if (j) {
++            pthread_mutex_unlock(&s_par_mu);
++            eng_par_run(j);
++            pthread_mutex_lock(&s_par_mu);
++            continue;
++        }
++        pthread_cond_wait(&s_par_done, &s_par_mu);
++    }
++    s_par_waits++;
++    s_par_wait_ms += ((double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - w0) / 1e6;
++    pthread_mutex_unlock(&s_par_mu);
++    if (t0) ps3_ft_span(PS3_FT_COMPILE, 5, 1, slot != ~0u ? slot + 1 : 0, t0, ps3_ft_now());
++}
++
++/* Before a submission is encoded: every pipeline its draws use is built. */
++static void eng_par_wait_records(const EngRecord* recs, u32 n)
++{
++    if (!__atomic_load_n(&s_par_inflight, __ATOMIC_ACQUIRE)) return;
++    for (u32 i = 0; i < n; i++) {
++        const u32 p = recs[i].pipeline;
++        if (recs[i].kind == ENG_REC_DRAW && p && p <= s_eng_pipe_count &&
++            __atomic_load_n(&s_eng_pipe[p - 1].building, __ATOMIC_ACQUIRE))
++            eng_par_wait(p - 1);
++    }
++}
++
+ /* ---- pipelines ----------------------------------------------------------- */
+ 
+ static id<MTLFunction> eng_function(const char* hlsl, int stage,
+                                     const char* what)
+ {
+     const u64 hash = fnv1a64(hlsl, (u32)strlen(hlsl), 1469598103934665603ull);
+-    for (u32 i = 0; i < s_eng_func_count; i++)
+-        if (s_eng_func[i].hash == hash) return s_eng_func[i].fn;
+-    if (s_eng_func_count >= ENG_MAX_FUNCS) return nil;
+-
++    u32 at;
++    pthread_mutex_lock(&s_func_mu);
++    for (;;) {
++        u32 i = 0;
++        while (i < s_eng_func_count && s_eng_func[i].hash != hash) i++;
++        if (i == s_eng_func_count) break;
++        if (!s_eng_func[i].busy) {          /* built (or failed: nil) */
++            id<MTLFunction> fn = s_eng_func[i].fn;
++            pthread_mutex_unlock(&s_func_mu);
++            return fn;
++        }
++        /* Another thread is building this program: wait for its result. The
++         * builder never waits on anything itself, so this cannot deadlock. */
++        pthread_cond_wait(&s_func_cv, &s_func_mu);
++    }
++    if (s_eng_func_count >= ENG_MAX_FUNCS) { pthread_mutex_unlock(&s_func_mu); return nil; }
++    at = s_eng_func_count++;
++    s_eng_func[at].hash = hash;
++    s_eng_func[at].fn   = nil;
++    s_eng_func[at].busy = 1;
++    pthread_mutex_unlock(&s_func_mu);
++
++    /* Per call, not the shared s_msl/s_log: several of these run at once. */
++    char* msl = (char*)malloc(sizeof s_msl);
++    char* log = (char*)malloc(sizeof s_log);
+     id<MTLFunction> fn = nil;
+-    const uint64_t ft_c0 = PS3_FT_ON() ? ps3_ft_now() : 0;
+-    char name[64];
+-    snprintf(name, sizeof name, "%s_%016llx.hlsl", what, (unsigned long long)hash);
+-    dump_shader(name, hlsl);
+-    /* PS3_SHADER_CACHE: the translation from an earlier run. */
+-    const u64 sc_key = sc_on() ? fnv1a64(&stage, sizeof stage, fnv1a64(hlsl, (u32)strlen(hlsl), s_sc_salt)) : 0;
+-    int msl_rc;
+-    if (sc_key && sc_msl_get(sc_key, s_msl, sizeof s_msl)) {
+-        msl_rc = 0; s_sc_hits++;
+-    } else {
+-        msl_rc = rsx_hlsl_to_msl(hlsl, stage, s_msl, sizeof s_msl, s_log, sizeof s_log);
+-        if (sc_key && msl_rc == 0) { sc_msl_put(sc_key, s_msl); s_sc_miss++; }
+-    }
+-    if (ft_c0) ps3_ft_span(PS3_FT_COMPILE, 4, msl_rc == 0, 0, ft_c0, ps3_ft_now());
+-    if (msl_rc != 0) {
+-        fprintf(stderr, "[rsx engine/metal] %s %016llx: %s\n", what,
+-                (unsigned long long)hash, s_log);
+-    } else {
+-        snprintf(name, sizeof name, "%s_%016llx.msl", what, (unsigned long long)hash);
+-        dump_shader(name, s_msl);
+-        snprintf(name, sizeof name, "%s %016llx", what, (unsigned long long)hash);
+-        fn = compile_guest_function(s_msl, name);
+-    }
+-    if (ft_c0) ps3_ft_span(PS3_FT_COMPILE, stage == RSX_SHADER_STAGE_VERTEX ? 1u : 2u,
+-                           fn != nil, 0, ft_c0, ps3_ft_now());
+-    s_eng_func[s_eng_func_count].hash = hash;
+-    s_eng_func[s_eng_func_count].fn   = fn;
+-    s_eng_func_count++;
++    if (msl && log) {
++        const uint64_t ft_c0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++        char name[64];
++        snprintf(name, sizeof name, "%s_%016llx.hlsl", what, (unsigned long long)hash);
++        dump_shader(name, hlsl);
++        /* PS3_SHADER_CACHE: the translation from an earlier run. */
++        const u64 sc_key = sc_on() ? fnv1a64(&stage, sizeof stage, fnv1a64(hlsl, (u32)strlen(hlsl), s_sc_salt)) : 0;
++        int msl_rc;
++        log[0] = 0;
++        if (sc_key && sc_msl_get(sc_key, msl, sizeof s_msl)) {
++            msl_rc = 0; __atomic_add_fetch(&s_sc_hits, 1, __ATOMIC_RELAXED);
++        } else {
++            msl_rc = rsx_hlsl_to_msl(hlsl, stage, msl, sizeof s_msl, log, sizeof s_log);
++            if (sc_key && msl_rc == 0) { sc_msl_put(sc_key, msl); __atomic_add_fetch(&s_sc_miss, 1, __ATOMIC_RELAXED); }
++        }
++        if (ft_c0) ps3_ft_span(PS3_FT_COMPILE, 4, msl_rc == 0, 0, ft_c0, ps3_ft_now());
++        if (msl_rc != 0) {
++            fprintf(stderr, "[rsx engine/metal] %s %016llx: %s\n", what,
++                    (unsigned long long)hash, log);
++        } else {
++            snprintf(name, sizeof name, "%s_%016llx.msl", what, (unsigned long long)hash);
++            dump_shader(name, msl);
++            snprintf(name, sizeof name, "%s %016llx", what, (unsigned long long)hash);
++            fn = compile_guest_function(msl, name);
++        }
++        if (ft_c0) ps3_ft_span(PS3_FT_COMPILE, stage == RSX_SHADER_STAGE_VERTEX ? 1u : 2u,
++                               fn != nil, 0, ft_c0, ps3_ft_now());
++    }
++    free(msl); free(log);
++    pthread_mutex_lock(&s_func_mu);
++    s_eng_func[at].fn   = fn;
++    s_eng_func[at].busy = 0;
++    pthread_cond_broadcast(&s_func_cv);
++    pthread_mutex_unlock(&s_func_mu);
+     return fn;
+ }
+ 
+@@ -4454,11 +4681,16 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+                     "epilogue is bound separately)\n");
+         return 0;
+     }
+-    /* PS3_SHADER_ASYNC: the functions and the state are built on the queue. */
++    /* PS3_SHADER_ASYNC: the functions and the state are built on the queue.
++     * PS3_SHADER_PARALLEL: on the worker pool, waited for before encoding. A
++     * framebuffer-fetch program stays serial: the draw engine falls back to
++     * the copies when its pipeline does not build, and it has to know now. */
+     const int async = sc_async();
++    const int par = !async && !strstr(ps_hlsl, "SubpassInput<") && eng_par_ready();
++    const int defer = async || par;
+     id<MTLFunction> vs = nil, fs = nil;
+     char* ps_copy = NULL;
+-    if (!async) {
++    if (!defer) {
+         vs = eng_function(vs_split, RSX_SHADER_STAGE_VERTEX, "vp");
+         free(vs_split); vs_split = NULL;
+         if (!vs) return 0;
+@@ -4543,7 +4775,7 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+     }
+ 
+     id<MTLRenderPipelineState> pso = nil;
+-    if (!async) {
++    if (!defer) {
+         NSError* err = nil;
+         const uint64_t ft_p0 = PS3_FT_ON() ? ps3_ft_now() : 0;
+         pso = [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
+@@ -4590,7 +4822,8 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+     const u32 slot = s_eng_pipe_count++;
+     s_eng_pipe[slot].pso = pso;
+     s_eng_pipe[slot].ds  = ds;
+-    __atomic_store_n(&s_eng_pipe[slot].ready, async ? 0 : 1, __ATOMIC_RELEASE);
++    __atomic_store_n(&s_eng_pipe[slot].ready, defer ? 0 : 1, __ATOMIC_RELEASE);
++    __atomic_store_n(&s_eng_pipe[slot].building, par, __ATOMIC_RELEASE);
+     /* CULL_FACE FRONT=0x0404 BACK=0x0405 FRONT_AND_BACK=0x0408 (front here,
+      * as in the D3D12 engine); FRONT_FACE CW=0x0900 CCW=0x0901. */
+     s_eng_pipe[slot].cull = MTLCullModeNone;
+@@ -4634,6 +4867,7 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+             __atomic_sub_fetch(&s_sc_async_pending, 1, __ATOMIC_RELAXED);
+         });
+     }
++    if (par) eng_par_submit(slot, vs_split, ps_copy, pd);
+     return slot + 1;
+ }
+ 
+@@ -4642,6 +4876,7 @@ static void eng_pipeline_release(void* user, u32 pipeline)
+     (void)user;
+     eng_enc_join();   /* PS3RECOMP_METAL_ENCODE_THREAD: a present may still be encoding */
+     if (pipeline && pipeline <= s_eng_pipe_count) {
++        eng_par_wait(pipeline - 1);   /* PS3_SHADER_PARALLEL: its build owns pso */
+         s_eng_pipe[pipeline - 1].pso = nil;
+         s_eng_pipe[pipeline - 1].ds  = nil;
+     }
+@@ -5157,6 +5392,9 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+           while (e && *e && nskip < 16) { skip[nskip++] = (u32)strtoul(e, (char**)&e, 10); if (*e == ',') e++; else break; } }
+       for (int k = 0; k < nskip; k++) if (skip[k] == r->pipeline) return; }
+     const EngPipeline* p = &s_eng_pipe[r->pipeline - 1];
++    /* PS3_SHADER_PARALLEL: eng_par_wait_records waited for it already; this
++     * only catches a record that slipped past that. */
++    if (__builtin_expect(__atomic_load_n(&p->building, __ATOMIC_ACQUIRE), 0)) eng_par_wait(r->pipeline - 1);
+     if (!__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE)) { s_sc_async_skipped++; return; }
+     if (!p->pso) return;
+     EngBound* b = &s_eng_bound;
+@@ -5399,6 +5637,7 @@ static int eng_encode_clear(id<MTLCommandBuffer> cb, const EngRecord* r)
+ static u32 s_ft_passes, s_ft_resolves, s_ft_copies;   /* PS3_FTRACE: per command buffer */
+ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+ {
++    eng_par_wait_records(s_enc_rec, s_enc_count);   /* PS3_SHADER_PARALLEL: no draw is skipped */
+     u32 i = 0;
+     s_ft_passes = s_ft_resolves = s_ft_copies = 0;
+     while (i < s_enc_count) {
+@@ -6122,6 +6361,17 @@ static int eng_encode_commit_body(id<MTLTexture> present_dst, const EngRecord* r
+                             s_sc_async_skipped - last_skipped,
+                             __atomic_load_n(&s_sc_async_pending, __ATOMIC_RELAXED));
+                     last_skipped = s_sc_async_skipped; } }
++            /* PS3_SHADER_PARALLEL: builds handed to the pool, and how long
++             * encoding waited for them. */
++            if (s_par_workers) { static u32 n, last_jobs;
++                if (++n % 1800 == 0 && s_par_jobs != last_jobs) {
++                    pthread_mutex_lock(&s_par_mu);
++                    fprintf(stderr, "[shader cache] parallel: %u pipeline build(s) so far on %u worker(s);"
++                                    " encoding waited %u time(s), %.0f ms in all; %u draw(s) dropped"
++                                    " (a pipeline that did not build)\n",
++                            s_par_jobs, s_par_workers, s_par_waits, s_par_wait_ms, s_sc_async_skipped);
++                    last_jobs = s_par_jobs;
++                    pthread_mutex_unlock(&s_par_mu); } }
+         } else {
+             const u64 ft_w0 = PS3_FT_ON() ? eng_pt_now() : 0;
+             [cb commit];

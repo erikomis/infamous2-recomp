@@ -184,9 +184,13 @@ enquanto só compila no macOS); os instaladores ainda não são assinados.
 - Um travamento raro no carregamento da cidade: apareceu em 2 de 9
   execuções sem janela num Mac muito carregado, com e sem a correção das
   sombras da v0.2.12. Avise se acontecer com você.
-- Na primeira vez que o jogo mostra um efeito novo, o shader dele é traduzido
-  na thread de renderização, o que pode travar até ~2 s. Com janela eles
-  ficam em cache, então cada um acontece uma vez só; `PS3_SHADER_ASYNC=1`
+- Na primeira vez que o jogo mostra um efeito novo, os shaders dele precisam
+  ser montados, e isso trava o jogo. Agora os shaders novos de um frame são
+  montados em paralelo em algumas threads auxiliares, e nada é desenhado sem
+  eles (`PS3_SHADER_PARALLEL=0` volta à montagem de um por vez): em New
+  Marais o pior frame desses caiu de ~340 ms para ~100 ms com o cache de
+  shaders cheio e de ~3 s para ~1 s com ele vazio. Com janela as traduções
+  ficam em cache, então cada uma é paga uma vez só; `PS3_SHADER_ASYNC=1`
   compila em segundo plano (alguns objetos aparecem um instante depois).
 - Corrigido na v0.2.5: fachadas viradas para longe do sol (e as costas e os
   lados do Cole) ficavam pretas, e as sombras do sol faltavam no jogo todo. Os
