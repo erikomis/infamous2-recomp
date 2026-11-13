@@ -128,6 +128,9 @@ pub struct Settings {
     pub display: String,
     /// PS3_VSYNC=0 when off.
     pub vsync: bool,
+    /// PS3_FRAMEGEN=1: MetalFX frame interpolation (macOS 26+), a frame made
+    /// between every two the game renders. Off by default.
+    pub frame_gen: bool,
     /// PS3_AUDIO_VOLUME: master volume, 0-100.
     pub audio_volume: u32,
     /// PS3_AUDIO_DEVICE: output device name; empty = the system default.
@@ -202,6 +205,7 @@ impl Default for Settings {
             game_icon: false,
             display: String::new(),
             vsync: true,
+            frame_gen: false,
             audio_volume: 100,
             audio_device: String::new(),
             rumble: true,
@@ -798,6 +802,9 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if !s.vsync {
         set("PS3_VSYNC", "0".into());
+    }
+    if s.frame_gen {
+        set("PS3_FRAMEGEN", "1".into());
     }
     if s.audio_volume < 100 {
         set("PS3_AUDIO_VOLUME", s.audio_volume.to_string());
@@ -2869,11 +2876,12 @@ mod tests {
         let mut s = Settings::default();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         for k in ["PS3_DISPLAY", "PS3_VSYNC", "PS3_AUDIO_VOLUME", "PS3_AUDIO_DEVICE", "PS3_RUMBLE", "PS3_RUMBLE_STRENGTH",
-                  "PS3_BUTTON_ICONS"] {
+                  "PS3_BUTTON_ICONS", "PS3_FRAMEGEN"] {
             assert!(!env.contains_key(k), "{k} is a default and must stay out");
         }
         s.display = "DELL U2720Q".into();
         s.vsync = false;
+        s.frame_gen = true;
         s.audio_volume = 40;
         s.audio_device = " Erik's AirPods ".into();
         s.rumble_strength = 150;
@@ -2882,6 +2890,7 @@ mod tests {
         assert_eq!(env.get("PS3_BUTTON_ICONS").map(String::as_str), Some("xbox"));
         assert_eq!(env.get("PS3_DISPLAY").map(String::as_str), Some("DELL U2720Q"));
         assert_eq!(env.get("PS3_VSYNC").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_FRAMEGEN").map(String::as_str), Some("1"));
         assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("40"));
         assert_eq!(env.get("PS3_AUDIO_DEVICE").map(String::as_str), Some("Erik's AirPods"));
         assert_eq!(env.get("PS3_RUMBLE_STRENGTH").map(String::as_str), Some("150"));

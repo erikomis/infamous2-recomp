@@ -53,6 +53,7 @@ interface Settings {
   gameIcon: boolean;
   display: string;
   vsync: boolean;
+  frameGen: boolean;
   audioVolume: number;
   audioDevice: string;
   rumble: boolean;
@@ -429,6 +430,7 @@ function bindSettings() {
   bindCheck("game-icon", "gameIcon");
   bindCheck("vsync", "vsync");
   bindCheck("q-vsync", "vsync");
+  bindCheck("frame-gen", "frameGen");
   bindCheck("rumble-on", "rumble");
   bindCheck("show-fps", "showFps");
   bindCheck("q-fps", "showFps");
@@ -573,6 +575,7 @@ function bindSettings() {
       gameIcon: false,
       display: "",
       vsync: true,
+      frameGen: false,
       audioVolume: 100,
       audioDevice: "",
       rumble: true,
