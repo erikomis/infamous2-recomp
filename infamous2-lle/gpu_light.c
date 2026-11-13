@@ -17,6 +17,7 @@
  * 0x9CB0. Worked out from the lifted job; the GPU shader reproduces its output
  * on a captured frame (ROADMAP, "SPU lighting on the GPU").
  */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +45,97 @@ static uint32_t ls_u32(const spu_context* ctx, uint32_t a)
 
 static spu_fn s_spu_tile;   /* the job's own routine, when PS3RECOMP_ENG_GPU_LIGHT_SPU=1 keeps it */
 
+/* ---- The camera's world position, for frame generation (PS3_FRAMEGEN) ------
+ * The job's matrix gives positions relative to the camera; to tell where a
+ * pixel was a frame earlier the engine also needs how far the camera itself
+ * moved (rsx_draw_engine_framegen_camera takes both). The renderer keeps the camera of the
+ * frame it draws, and of the one before, in two blocks it writes in turn:
+ *
+ *   0x00A948A4          frame counter L (the frame the newest block is for)
+ *   0x00A948B0 (odd L)  +0x00 near, far, tan x, tan y   +0x20 forward xyz
+ *   0x00A94910 (even L) +0x30 left xyz   +0x40 up xyz   +0x50 position xyz (cm)
+ *   0x00A93988          the light job's frame counter J
+ *
+ * The light job of frame J lights the picture of renderer frame J + 1, and by
+ * the time it runs the main thread has sometimes written frame J + 2 already
+ * (95 of 900 taps while walking and turning in New Marais), so the block is
+ * the one of J + 1's parity, valid while L is J + 1 or J + 2. Found by
+ * dumping this area at 900 consecutive taps: with that rule the block's
+ * forward and left axes are the matrix's own centre ray and x axis to 2e-5
+ * in 814 of them, and in the other 86 they differ by under 0.7 degrees of
+ * pitch only (a camera effect applied after the copy). The "camera" at
+ * 0x00A93410 has the same rotation but is a point ~2.5 m from the eye and a
+ * frame ahead half the time. A block that does not look like this frame's
+ * camera (another EBOOT build, a cut in progress) hands nothing over and the
+ * frame goes without interpolation. */
+extern uint8_t* vm_base;
+
+static float gm_f32(uint32_t ea)
+{
+    const uint8_t* p = vm_base + ea;
+    const uint32_t w = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+    float f; memcpy(&f, &w, 4); return f;
+}
+static uint32_t gm_u32(uint32_t ea)
+{
+    const uint8_t* p = vm_base + ea;
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+static float ls_f32(const spu_context* ctx, uint32_t a)
+{
+    const uint32_t w = ls_u32(ctx, a);
+    float f; memcpy(&f, &w, 4); return f;
+}
+
+#define CAM_FRAME_COUNTER 0x00A948A4u
+#define CAM_BLOCK_ODD     0x00A948B0u
+#define CAM_BLOCK_EVEN    0x00A94910u
+#define LIGHT_JOB_COUNTER 0x00A93988u
+
+/* 1 - cos of the angle between the block's forward axis and the matrix's
+ * centre ray (frame block +0x10: rows r0..r3), 2 when the block is no camera. */
+static float cam_block_off(const spu_context* ctx, uint32_t frame, uint32_t blk)
+{
+    float f[3], c[3], lf = 0, lc = 0, dot = 0;
+    for (int k = 0; k < 3; k++) {
+        f[k] = gm_f32(blk + 0x20 + 4u * (uint32_t)k);
+        c[k] = 0.5f * ls_f32(ctx, frame + 0x10 + 4u * (uint32_t)k) + 0.5f * ls_f32(ctx, frame + 0x20 + 4u * (uint32_t)k)
+             + ls_f32(ctx, frame + 0x40 + 4u * (uint32_t)k);
+        lf += f[k] * f[k]; lc += c[k] * c[k]; dot += f[k] * c[k];
+    }
+    if (!(lf > 0.98f && lf < 1.02f) || !(lc > 0.0f)) return 2.0f;
+    return 1.0f - dot / sqrtf(lf * lc);
+}
+
+static void light_tap_camera(const spu_context* ctx, uint32_t frame)
+{
+    if (!vm_base) return;
+    const uint32_t J = gm_u32(LIGHT_JOB_COUNTER), L = gm_u32(CAM_FRAME_COUNTER);
+    const uint32_t newest = (L & 1u) ? CAM_BLOCK_ODD : CAM_BLOCK_EVEN;
+    const uint32_t older  = (L & 1u) ? CAM_BLOCK_EVEN : CAM_BLOCK_ODD;
+    uint32_t blk = (L - J == 2u) ? older : newest;
+    float off = cam_block_off(ctx, frame, blk);
+    if (L - J != 1u && L - J != 2u) {       /* the counters are not what they were: go by the rotation */
+        const float o2 = cam_block_off(ctx, frame, older);
+        if (o2 < off) { off = o2; blk = older; }
+    }
+    double eye[3];
+    for (int k = 0; k < 3; k++) eye[k] = (double)gm_f32(blk + 0x50 + 4u * (uint32_t)k);
+    /* Within 3 degrees of the picture's own view, and not rewritten while it
+     * was read (the block of this parity is next written for frame L + 2). */
+    const int ok = off < 0.00137f && gm_u32(CAM_FRAME_COUNTER) - L < 2u &&
+                   isfinite(eye[0]) && isfinite(eye[1]) && isfinite(eye[2]);
+    if (ok) {
+        float m[16];
+        for (uint32_t i = 0; i < 16; i++) m[i] = ls_f32(ctx, frame + 0x10 + 4u * i);
+        rsx_draw_engine_framegen_camera(m, eye[0], eye[1], eye[2]);
+    }
+    else { static unsigned n;
+           if (__atomic_add_fetch(&n, 1, __ATOMIC_RELAXED) == 300)
+               fprintf(stderr, "[framegen] the renderer's camera copy does not match the picture (300 frames):"
+                               " no camera motion for PS3_FRAMEGEN\n"); }
+}
+
 /* The frame's constants and light list, as the job holds them in its LS. */
 void light_tap_constants(spu_context* ctx)
 {
@@ -51,8 +143,10 @@ void light_tap_constants(spu_context* ctx)
     const uint32_t lights = ls_u32(ctx, 0x9CB0) & 0x3FFF0u;
     uint32_t count = ls_u32(ctx, frame + 0x90);
     if (count > RSX_GPU_LIGHT_MAX) count = RSX_GPU_LIGHT_MAX;
-    if (frame + 0x100 <= 0x40000u && lights + count * 0x30u <= 0x40000u)
+    if (frame + 0x100 <= 0x40000u && lights + count * 0x30u <= 0x40000u) {
+        light_tap_camera(ctx, frame);
         rsx_draw_engine_gpu_light_data(ctx->ls + frame, ctx->ls + lights, count);
+    }
 }
 
 static void light_tile_gpu(spu_context* ctx)
