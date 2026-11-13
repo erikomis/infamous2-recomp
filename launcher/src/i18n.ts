@@ -328,6 +328,9 @@ const en = {
   "settings.aspect": "Aspect ratio",
   "settings.aspectHint": "Widens the picture for ultrawide screens (PS3_ASPECT): the game sees more to the sides at the same vertical view (hor+), and the HUD stays 16:9 in the middle. Use fullscreen or a window of the same shape; the game renders a wider image, which costs GPU time.",
   "settings.aspectNative": "16:9 (original)",
+  "settings.frameGen": "Frame generation (MetalFX, experimental)",
+  "settings.frameGenHint":
+    "macOS 26 or newer. MetalFX makes a frame between every two the game renders, so camera moves look about twice as smooth on a 120 Hz screen, for a little more input latency. Fast moving limbs can smear a little; menus, cutscenes and videos are left alone. On a 60 Hz screen, turn vsync off as well.",
   "settings.showFps": "Show the frame rate (fps)",
   "settings.showFpsHint":
     "The game window's title shows the fps on screen and the game's own frame rate, with frame times, once per second (also in the game log).",
@@ -952,6 +955,9 @@ const ptBR: Partial<Record<Key, string>> = {
   "settings.aspect": "Proporção da tela",
   "settings.aspectHint": "Alarga a imagem para telas ultrawide (PS3_ASPECT): o jogo mostra mais dos lados com a mesma visão vertical (hor+), e o HUD fica em 16:9 no meio. Use tela cheia ou uma janela no mesmo formato; o jogo desenha uma imagem mais larga, o que custa tempo de GPU.",
   "settings.aspectNative": "16:9 (original)",
+  "settings.frameGen": "Geração de quadros (MetalFX, experimental)",
+  "settings.frameGenHint":
+    "macOS 26 ou mais novo. O MetalFX cria um quadro entre cada dois que o jogo desenha, e os movimentos de câmera ficam cerca de duas vezes mais fluidos numa tela de 120 Hz, com um pouco mais de atraso no controle. Braços e pernas em movimento rápido podem borrar um pouco; menus, cutscenes e vídeos ficam como estão. Numa tela de 60 Hz, desligue também a sincronização vertical.",
   "settings.showFps": "Mostrar a taxa de quadros (fps)",
   "settings.showFpsHint":
     "O título da janela do jogo mostra o fps na tela e a taxa de quadros do próprio jogo, com os tempos de quadro, uma vez por segundo (também no log do jogo).",
