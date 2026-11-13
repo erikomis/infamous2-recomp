@@ -165,6 +165,12 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #   PS3_LUT_PRESET=warm|cool|film|vivid  a built-in colour grade
 #   PS3_RES_SCALE=1.5|2|3       internal resolution: the game renders at 1080p,
 #                               1440p or 4K instead of 720p (restart to change)
+#   PS3_DOWNSCALE=0             no supersampling: by default a picture larger
+#                               than the window's pixels (PS3_RES_SCALE 2.5 or
+#                               more in a Retina window, 1.5 on a 1x screen) is
+#                               reduced to them with a Lanczos filter, every
+#                               rendered pixel counted, instead of the layer
+#                               sampling it down
 #   PS3_ASPECT=21:9|32:9        ultrawide: a wider view (hor+), the HUD kept 16:9
 #                               in the middle (restart to change)
 #   PS3_FRAMEGEN=1              frame generation (opt-in, macOS 26+): MetalFX
