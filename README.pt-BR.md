@@ -89,10 +89,9 @@ Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
 > Packages/Raps/Edats*, o `.pkg` da atualização); depois a lista de jogos do
 > RPCS3 mostra o jogo como 01.03.
 
-1. Baixe o `infamous2-recomp_0.2.18_aarch64.dmg` da
-   [release v0.2.18](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.18)
-   (até agora toda release é pré-release; a
-   [página de releases](https://github.com/erikomis/infamous2-recomp/releases) mostra se saiu uma mais nova)
+1. Baixe o `infamous2-recomp_0.2.20_aarch64.dmg` da
+   [release v0.2.20](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.20)
+   (a [página de releases](https://github.com/erikomis/infamous2-recomp/releases) mostra se saiu uma mais nova)
    e arraste o app para Aplicativos. Ele não é notarizado: na primeira vez,
    botão direito > Abrir (ou Ajustes do Sistema > Privacidade e Segurança >
    Abrir Mesmo Assim).

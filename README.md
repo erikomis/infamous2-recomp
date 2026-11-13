@@ -88,10 +88,9 @@ its `.rap` licence).
 > Packages/Raps/Edats*, the update's `.pkg`); RPCS3's game list then shows
 > the game as 01.03.
 
-1. Download `infamous2-recomp_0.2.18_aarch64.dmg` from the
-   [v0.2.18 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.18)
-   (every release so far is a pre-release; the
-   [releases page](https://github.com/erikomis/infamous2-recomp/releases) lists any newer one)
+1. Download `infamous2-recomp_0.2.20_aarch64.dmg` from the
+   [v0.2.20 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.20)
+   (the [releases page](https://github.com/erikomis/infamous2-recomp/releases) lists any newer one)
    and drag the app to Applications. It is not notarized: the first time,
    right-click > Open (or System Settings > Privacy & Security > Open Anyway).
 2. The app lists what your Mac still needs (Xcode Command Line Tools, a few
