@@ -139,7 +139,10 @@ Controles e Avançado.
   shader/textura, travadas da GPU, falhas das SPUs, áudio atrasando, arquivos
   que não abrem, quedas de fps) e mantém um índice da sessão com os horários;
   aperte **F12** no jogo (ou **Capturar este quadro** no app) quando algo
-  parecer errado. Depois,
+  parecer errado: ele salva os render targets do quadro e uma captura de tela
+  do quadro seguinte exatamente como a janela mostra
+  (`surf/screen_<data>-<hora>.png`, depois do supersampling, da nitidez, dos
+  efeitos de cor e do menu F1). Depois,
   **Analisar** roda `infamous2-lle/tools/log_triage.py` na sessão e lista os
   principais problemas (também em `triage.md` na pasta da sessão, para um
   desenvolvedor ou um agente percorrer), e **Criar .zip** junta tudo para uma
