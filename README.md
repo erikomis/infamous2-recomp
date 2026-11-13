@@ -133,7 +133,10 @@ Advanced.
   what goes wrong (missing functions, shader/texture failures, GPU stalls,
   SPU faults, audio falling behind, files it cannot open, frame-rate drops)
   and keeps a timed index of the session; press **F12** in the game (or
-  **Capture this frame** in the app) when something looks wrong. Afterwards **Analyse** runs
+  **Capture this frame** in the app) when something looks wrong: it saves the
+  frame's render targets and a screenshot of the next frame exactly as the
+  window shows it (`surf/screen_<date>-<time>.png`, after supersampling,
+  sharpening, colour effects and the F1 menu). Afterwards **Analyse** runs
   `infamous2-lle/tools/log_triage.py` on the session and lists the top
   issues (also in `triage.md` in the session folder, for a developer or an
   agent to go through), and **Create .zip** packs it all for an issue.
