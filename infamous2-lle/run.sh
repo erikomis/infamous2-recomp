@@ -179,6 +179,9 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #                               a PS3_FRAMEGEN line in PS3_TOGGLE_FILE.
 # Sound and controller (README "Playing"): PS3_AUDIO_VOLUME=0..100,
 # PS3_AUDIO_DEVICE=<output name>, PS3_RUMBLE=0, PS3_RUMBLE_STRENGTH=0..200,
+# PS3_HEARTBEAT=0 (no heartbeat on the motors while Cole is below 35% health;
+# heartbeat.c: PS3_HEARTBEAT_AT=5..90 the percentage, PS3_HEARTBEAT_STRENGTH=
+# 0..200, PS3_HEARTBEAT_LOG=1 prints his health and the beats),
 # PS3_PAD_ADAPTIVE=0 (DualSense adaptive triggers off), PS3_PAD_FIRE_AT=10..90,
 # PS3_PAD_LIGHT=<RRGGBB>|off (light bar; Cole's blue 1e78ff by default),
 # PS3_PAD_LIGHT_HIT=0 (no red glow with the rumble), PS3_PAD_GYRO=0..400
