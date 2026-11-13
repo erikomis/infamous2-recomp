@@ -178,10 +178,14 @@ builds only on macOS so far); the installers are not signed yet.
 - A rare hang during the city load: seen in 2 of 9 headless runs on a
   heavily loaded Mac, with and without the v0.2.12 shadow fix. Report it if
   it happens to you.
-- The first time the game shows a new effect, its shader is translated on
-  the render thread, which can stall up to ~2 s. Windowed play caches them,
-  so each one happens once; `PS3_SHADER_ASYNC=1` builds them in the
-  background instead (some objects appear a moment late).
+- The first time the game shows a new effect, its shaders have to be built,
+  which stalls the game. A frame's new shaders now build in parallel on a
+  few worker threads and nothing is drawn without them
+  (`PS3_SHADER_PARALLEL=0` restores the old one-at-a-time build): in New
+  Marais the worst such frame went from ~340 ms to ~100 ms with a filled
+  shader cache and from ~3 s to ~1 s with an empty one. Windowed play caches
+  the translations, so each one is paid once; `PS3_SHADER_ASYNC=1` builds
+  them in the background instead (some objects appear a moment late).
 - Fixed in v0.2.5: facades turned away from the sun (and Cole's back and
   sides) went black, and sun shadows were missing everywhere. The sun shadow
   maps were read from an empty colour buffer at the same address as their
