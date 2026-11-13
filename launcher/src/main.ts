@@ -58,6 +58,7 @@ interface Settings {
   audioDevice: string;
   rumble: boolean;
   rumbleStrength: number;
+  heartbeat: boolean;
   adaptiveTriggers: boolean;
   padLight: string;
   padLightHit: boolean;
@@ -437,6 +438,7 @@ function bindSettings() {
   bindCheck("q-vsync", "vsync");
   bindCheck("frame-gen", "frameGen");
   bindCheck("rumble-on", "rumble");
+  bindCheck("heartbeat", "heartbeat");
   bindCheck("adaptive-triggers", "adaptiveTriggers");
   bindSelect("pad-light", "padLight");
   bindCheck("pad-light-hit", "padLightHit");
@@ -590,6 +592,7 @@ function bindSettings() {
       audioDevice: "",
       rumble: true,
       rumbleStrength: 100,
+      heartbeat: true,
       adaptiveTriggers: true,
       padLight: "",
       padLightHit: true,
@@ -713,6 +716,7 @@ function syncDependent() {
   for (const id of ["mouse-sens", "mouse-invert", "mouse-invert-x", "mouse-dz", "mouse-capture"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
   $<HTMLInputElement>("rumble-strength").disabled = !settings.rumble;
   $<HTMLButtonElement>("rumble-test").disabled = !settings.rumble;
+  $<HTMLInputElement>("heartbeat").disabled = !settings.rumble;
   $<HTMLInputElement>("pad-light-hit").disabled = settings.padLight === "off";
   $<HTMLInputElement>("gyro-always").disabled = !settings.gyro;
 }
