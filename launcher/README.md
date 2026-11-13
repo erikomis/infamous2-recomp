@@ -274,7 +274,9 @@ did not ask for, the launcher waits up to 20 s for macOS's crash report
 
 - **Capture this frame** (while that game runs) touches the trigger: at its
   next present the game removes it and writes every render target to
-  `surf/f<n>_h<handle>.ppm` and that frame's pass log to the log. The
+  `surf/f<n>_h<handle>.ppm` and that frame's pass log to the log, and saves
+  the next frame as the window shows it (after supersampling, sharpening,
+  colour effects and the F1 menu) as `surf/screen_<date>-<time>.png`. The
   launcher also keeps the latest `frame.ppm` as `shots/shot<n>.ppm` and
   notes the capture in `captures.txt` and `events.tsv`, with the present
   count of the last frame dump in the log (`captured frame N`, to the
@@ -742,8 +744,8 @@ python3 infamous2-lle/tools/rebuild.py --dry-run \
 - Building and playing on Windows and Linux: the app installs there but the
   game's renderer and window are macOS-only so far.
 - In debug mode F12 in the game captures the frame (as "Capture this frame"
-  does); a controller combo for it and a plain PNG screenshot key are not
-  done. Old report folders are not cleaned up yet.
+  does, screenshot included); a controller combo for it and a screenshot key
+  outside debug mode are not done. Old report folders are not cleaned up yet.
 - Homebrew itself is not installed by the app (it needs the administrator
   password in Terminal); the app shows the command.
 - From the God of War III PC launcher, not done yet: mods, a GUI scale

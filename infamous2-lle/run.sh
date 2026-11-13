@@ -170,7 +170,10 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 #                               more in a Retina window, 1.5 on a 1x screen) is
 #                               reduced to them with a Lanczos filter, every
 #                               rendered pixel counted, instead of the layer
-#                               sampling it down
+#                               sampling it down. It turns itself off (one log
+#                               line) after 3 supersampled frames in a row fail
+#                               on the GPU; any present that fails is logged
+#                               ("a present failed on the GPU")
 #   PS3_ASPECT=21:9|32:9        ultrawide: a wider view (hor+), the HUD kept 16:9
 #                               in the middle (restart to change)
 #   PS3_FRAMEGEN=1              frame generation (opt-in, macOS 26+): MetalFX
