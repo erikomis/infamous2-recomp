@@ -78,6 +78,12 @@ fi
 # so each is paid once instead of once a session; a rebuild of the port starts
 # a fresh one. Windowed runs only (a headless A/B must not depend on what an
 # earlier run left behind); PS3_SHADER_CACHE= (empty) turns it off.
+# A frame's new pipelines are built on a pool of worker threads, in parallel
+# with each other and with the rest of the frame, and waited for before their
+# draws are encoded, so nothing is skipped (PS3_SHADER_PARALLEL, default on;
+# =0 the old one-after-another build on the render thread; also live through
+# PS3_TOGGLE_FILE; PS3_SHADER_WORKERS=<n> sets the pool size, default the
+# performance cores minus five, at least 2).
 # PS3_SHADER_ASYNC=1 (opt-in) also builds new pipelines in the background:
 # no hitch on a first sight, but those draws are skipped until ready.
 if [ -z "$HEADLESS" ] && [ -z "${PS3_SHADER_CACHE+set}" ]; then
