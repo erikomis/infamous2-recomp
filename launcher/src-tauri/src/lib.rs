@@ -138,6 +138,9 @@ pub struct Settings {
     /// PS3_RUMBLE=0 when off; PS3_RUMBLE_STRENGTH in percent (0-200).
     pub rumble: bool,
     pub rumble_strength: u32,
+    /// PS3_HEARTBEAT=0 when off: the controller beats like a heart while
+    /// Cole is badly hurt (the port's heartbeat.c). On by default.
+    pub heartbeat: bool,
     /// PS3_PAD_ADAPTIVE=0 when off: DualSense adaptive triggers (R2 clicks
     /// like a trigger, L2 has a light resistance). On by default.
     pub adaptive_triggers: bool,
@@ -223,6 +226,7 @@ impl Default for Settings {
             audio_device: String::new(),
             rumble: true,
             rumble_strength: 100,
+            heartbeat: true,
             adaptive_triggers: true,
             pad_light: String::new(),
             pad_light_hit: true,
@@ -852,6 +856,11 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
         set("PS3_RUMBLE", "0".into());
     } else if s.rumble_strength != 100 {
         set("PS3_RUMBLE_STRENGTH", s.rumble_strength.min(200).to_string());
+    }
+    // The low-health heartbeat is the port's default; with vibration off it
+    // is silent anyway (PS3_RUMBLE=0), so only its own switch is passed.
+    if !s.heartbeat {
+        set("PS3_HEARTBEAT", "0".into());
     }
     // Auto is the game's own default: left out, so a choice made in the
     // in-game menu (overlay.ini) is not overridden.
@@ -2913,7 +2922,7 @@ mod tests {
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         for k in ["PS3_DISPLAY", "PS3_VSYNC", "PS3_AUDIO_VOLUME", "PS3_AUDIO_DEVICE", "PS3_RUMBLE", "PS3_RUMBLE_STRENGTH",
                   "PS3_BUTTON_ICONS", "PS3_FRAMEGEN", "PS3_PAD_ADAPTIVE", "PS3_PAD_LIGHT", "PS3_PAD_LIGHT_HIT",
-                  "PS3_PAD_GYRO", "PS3_PAD_GYRO_MODE"] {
+                  "PS3_PAD_GYRO", "PS3_PAD_GYRO_MODE", "PS3_HEARTBEAT"] {
             assert!(!env.contains_key(k), "{k} is a default and must stay out");
         }
         s.display = "DELL U2720Q".into();
@@ -2932,6 +2941,12 @@ mod tests {
         assert_eq!(env.get("PS3_AUDIO_DEVICE").map(String::as_str), Some("Erik's AirPods"));
         assert_eq!(env.get("PS3_RUMBLE_STRENGTH").map(String::as_str), Some("150"));
         assert!(!env.contains_key("PS3_RUMBLE"));
+        assert!(!env.contains_key("PS3_HEARTBEAT")); // on: the port's default
+        s.heartbeat = false;
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert_eq!(env.get("PS3_HEARTBEAT").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_RUMBLE_STRENGTH").map(String::as_str), Some("150")); // the rumble itself stays
+        s.heartbeat = true;
         s.gyro_always = true; // gyro off: "always" is moot
         s.pad_light = "1E78FF".into(); // the port's own blue: left to main.cpp
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
@@ -2958,6 +2973,7 @@ mod tests {
         s.audio_volume = 0;
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3_RUMBLE").map(String::as_str), Some("0"));
+        assert!(!env.contains_key("PS3_HEARTBEAT")); // vibration off silences it; its switch is kept
         assert_eq!(env.get("PS3_PAD_ADAPTIVE").map(String::as_str), Some("0"));
         assert_eq!(env.get("PS3_PAD_LIGHT").map(String::as_str), Some("off"));
         assert!(!env.contains_key("PS3_PAD_LIGHT_HIT") && !env.contains_key("PS3_PAD_GYRO"));
