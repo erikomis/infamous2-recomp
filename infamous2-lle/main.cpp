@@ -426,6 +426,13 @@ int main(int argc, char** argv)
         printf("usage: %s <PPU ELF>\n", argv[0]);
         return 2;
     }
+    /* The DualSense / DualShock 4 light bar in Cole's electric blue unless the
+     * player (the launcher, run.sh) chose another colour or "off". */
+#ifdef _WIN32
+    if (!getenv("PS3_PAD_LIGHT")) _putenv_s("PS3_PAD_LIGHT", "1e78ff");
+#else
+    setenv("PS3_PAD_LIGHT", "1e78ff", 0);
+#endif
     /* PS3RECOMP_ENG_GPU_LIGHT: the SPU light job's pixel work moves to the GPU. */
     infamous2_gpu_light_install();
     infamous2_gpu_ssao_install();
