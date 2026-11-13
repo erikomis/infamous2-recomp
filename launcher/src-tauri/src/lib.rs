@@ -138,6 +138,9 @@ pub struct Settings {
     /// PS3_RUMBLE=0 when off; PS3_RUMBLE_STRENGTH in percent (0-200).
     pub rumble: bool,
     pub rumble_strength: u32,
+    /// PS3_PAD_ADAPTIVE=0 when off: DualSense adaptive triggers (R2 clicks
+    /// like a trigger, L2 has a light resistance). On by default.
+    pub adaptive_triggers: bool,
     /// PS3_BUTTON_ICONS: the glyphs in the game's button prompts: "auto" (the
     /// controller in use), "playstation", "xbox" or "keyboard".
     pub button_icons: String,
@@ -210,6 +213,7 @@ impl Default for Settings {
             audio_device: String::new(),
             rumble: true,
             rumble_strength: 100,
+            adaptive_triggers: true,
             button_icons: "auto".into(),
             show_fps: false,
             extra_env: String::new(),
@@ -811,6 +815,9 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     }
     if !s.audio_device.trim().is_empty() {
         set("PS3_AUDIO_DEVICE", s.audio_device.trim().to_string());
+    }
+    if !s.adaptive_triggers {
+        set("PS3_PAD_ADAPTIVE", "0".into());
     }
     if !s.rumble {
         set("PS3_RUMBLE", "0".into());
@@ -2876,7 +2883,7 @@ mod tests {
         let mut s = Settings::default();
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         for k in ["PS3_DISPLAY", "PS3_VSYNC", "PS3_AUDIO_VOLUME", "PS3_AUDIO_DEVICE", "PS3_RUMBLE", "PS3_RUMBLE_STRENGTH",
-                  "PS3_BUTTON_ICONS", "PS3_FRAMEGEN"] {
+                  "PS3_BUTTON_ICONS", "PS3_FRAMEGEN", "PS3_PAD_ADAPTIVE"] {
             assert!(!env.contains_key(k), "{k} is a default and must stay out");
         }
         s.display = "DELL U2720Q".into();
@@ -2896,9 +2903,11 @@ mod tests {
         assert_eq!(env.get("PS3_RUMBLE_STRENGTH").map(String::as_str), Some("150"));
         assert!(!env.contains_key("PS3_RUMBLE"));
         s.rumble = false;
+        s.adaptive_triggers = false;
         s.audio_volume = 0;
         let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
         assert_eq!(env.get("PS3_RUMBLE").map(String::as_str), Some("0"));
+        assert_eq!(env.get("PS3_PAD_ADAPTIVE").map(String::as_str), Some("0"));
         assert!(!env.contains_key("PS3_RUMBLE_STRENGTH")); // off: the strength is moot
         assert_eq!(env.get("PS3_AUDIO_VOLUME").map(String::as_str), Some("0"));
         assert!(!env.contains_key("PS3RECOMP_METAL_FPS"));

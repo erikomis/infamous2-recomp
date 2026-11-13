@@ -58,6 +58,7 @@ interface Settings {
   audioDevice: string;
   rumble: boolean;
   rumbleStrength: number;
+  adaptiveTriggers: boolean;
   buttonIcons: string;
   showFps: boolean;
   extraEnv: string;
@@ -432,6 +433,7 @@ function bindSettings() {
   bindCheck("q-vsync", "vsync");
   bindCheck("frame-gen", "frameGen");
   bindCheck("rumble-on", "rumble");
+  bindCheck("adaptive-triggers", "adaptiveTriggers");
   bindCheck("show-fps", "showFps");
   bindCheck("q-fps", "showFps");
   for (const [id, key] of [["screen", "display"], ["audio-device", "audioDevice"]] as const) {
@@ -580,6 +582,7 @@ function bindSettings() {
       audioDevice: "",
       rumble: true,
       rumbleStrength: 100,
+      adaptiveTriggers: true,
       buttonIcons: "auto",
       showFps: false,
       extraEnv: "",
