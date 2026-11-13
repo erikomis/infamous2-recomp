@@ -202,6 +202,7 @@ add_executable(${PROJECT_NAME}
     gpu_ssao.c
     edge_watch.c
     game_clock.c
+    heartbeat.c
     game_patches.cpp
     ssao_gpu.c
     ${LLE_SOURCES}
@@ -210,6 +211,14 @@ add_executable(${PROJECT_NAME}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+
+# heartbeat.c's check build: PS3_HEARTBEAT_POKE writes Cole's hit points at
+# given times, to watch the heartbeat (and the game's own low-health picture)
+# come and go in a scripted run. Never on in a build that is played.
+option(PORT_HEARTBEAT_POKE "heartbeat.c: compile the PS3_HEARTBEAT_POKE test knob" OFF)
+if(PORT_HEARTBEAT_POKE)
+    set_source_files_properties(heartbeat.c PROPERTIES COMPILE_DEFINITIONS HEARTBEAT_POKE)
+endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include
 # directory (and their flags) to those TUs alone: adding it to the whole target
