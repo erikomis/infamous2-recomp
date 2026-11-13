@@ -59,6 +59,10 @@ interface Settings {
   rumble: boolean;
   rumbleStrength: number;
   adaptiveTriggers: boolean;
+  padLight: string;
+  padLightHit: boolean;
+  gyro: number;
+  gyroAlways: boolean;
   buttonIcons: string;
   showFps: boolean;
   extraEnv: string;
@@ -434,6 +438,10 @@ function bindSettings() {
   bindCheck("frame-gen", "frameGen");
   bindCheck("rumble-on", "rumble");
   bindCheck("adaptive-triggers", "adaptiveTriggers");
+  bindSelect("pad-light", "padLight");
+  bindCheck("pad-light-hit", "padLightHit");
+  bindSelect("gyro", "gyro");
+  bindCheck("gyro-always", "gyroAlways");
   bindCheck("show-fps", "showFps");
   bindCheck("q-fps", "showFps");
   for (const [id, key] of [["screen", "display"], ["audio-device", "audioDevice"]] as const) {
@@ -583,6 +591,10 @@ function bindSettings() {
       rumble: true,
       rumbleStrength: 100,
       adaptiveTriggers: true,
+      padLight: "",
+      padLightHit: true,
+      gyro: 0,
+      gyroAlways: false,
       buttonIcons: "auto",
       showFps: false,
       extraEnv: "",
@@ -593,8 +605,9 @@ function bindSettings() {
   syncDependent();
 }
 
-/** A fixed list (window mode and size, anisotropic, AA, upscaling). */
-function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa" | "upscale" | "resScale" | "aspect" | "buttonIcons") {
+/** A fixed list (window mode and size, anisotropic, AA, upscaling, the
+ * light bar, gyro aim). */
+function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa" | "upscale" | "resScale" | "aspect" | "buttonIcons" | "padLight" | "gyro") {
   const el = $<HTMLSelectElement>(id);
   const sync = () => {
     el.value = String(settings[key]);
@@ -603,7 +616,7 @@ function bindSelect(id: string, key: "windowMode" | "windowSize" | "aniso" | "aa
   syncers.push(sync);
   sync();
   el.addEventListener("change", () => {
-    if (key === "aniso") settings.aniso = Number(el.value);
+    if (key === "aniso" || key === "gyro") settings[key] = Number(el.value);
     else settings[key] = el.value;
     syncAll();
     persist();
@@ -700,6 +713,8 @@ function syncDependent() {
   for (const id of ["mouse-sens", "mouse-invert", "mouse-invert-x", "mouse-dz", "mouse-capture"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
   $<HTMLInputElement>("rumble-strength").disabled = !settings.rumble;
   $<HTMLButtonElement>("rumble-test").disabled = !settings.rumble;
+  $<HTMLInputElement>("pad-light-hit").disabled = settings.padLight === "off";
+  $<HTMLInputElement>("gyro-always").disabled = !settings.gyro;
 }
 
 /** A half-second rumble at the chosen strength through the Gamepad API, so
