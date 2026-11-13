@@ -569,6 +569,33 @@
             <span class="opt-text"><span class="opt-label" data-i18n="settings.adaptive"></span><span class="hint" data-i18n="settings.adaptiveHint"></span></span>
             <span class="switch"><input id="adaptive-triggers" type="checkbox" /><i></i></span>
           </label>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="pad-light" data-i18n="settings.padLight">Barra de luz</label><span class="hint" data-i18n="settings.padLightHint"></span></span>
+            <select id="pad-light">
+              <option value="" data-i18n="settings.padLightGame">Azul elétrico do Cole</option>
+              <option value="ff1e1e" data-i18n="settings.padLightRed">Vermelho</option>
+              <option value="8000ff" data-i18n="settings.padLightPurple">Roxo</option>
+              <option value="ffffff" data-i18n="settings.padLightWhite">Branco</option>
+              <option value="off" data-i18n="settings.padLightOff">Desligada</option>
+            </select>
+          </div>
+          <label class="opt sub">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.padLightHit"></span></span>
+            <span class="switch"><input id="pad-light-hit" type="checkbox" /><i></i></span>
+          </label>
+          <div class="opt">
+            <span class="opt-text"><label class="opt-label" for="gyro" data-i18n="settings.gyro">Mira por giroscópio</label><span class="hint" data-i18n="settings.gyroHint"></span></span>
+            <select id="gyro">
+              <option value="0" data-i18n="settings.gyroOff">Desligada</option>
+              <option value="60" data-i18n="settings.gyroLow">Baixa</option>
+              <option value="100" data-i18n="settings.gyroMid">Média</option>
+              <option value="160" data-i18n="settings.gyroHigh">Alta</option>
+            </select>
+          </div>
+          <label class="opt sub">
+            <span class="opt-text"><span class="opt-label" data-i18n="settings.gyroAlways"></span><span class="hint" data-i18n="settings.gyroAlwaysHint"></span></span>
+            <span class="switch"><input id="gyro-always" type="checkbox" /><i></i></span>
+          </label>
         </section>
 
         <section class="section">
