@@ -1,0 +1,649 @@
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+index ccb48c5..6fc6e51 100644
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -58,6 +58,15 @@
+ #  import <MetalFX/MetalFX.h>
+ #  define GFX_HAVE_METALFX 1
+ #endif
++/* PS3_DOWNSCALE (supersampling): MetalPerformanceShaders' Lanczos filter. The
++ * header gives the class's interface only; the framework is opened and the
++ * class looked up by name when a frame first needs it, so nothing new is
++ * linked and a system without it presents as before. */
++#if !TARGET_OS_IPHONE && __has_include(<MetalPerformanceShaders/MetalPerformanceShaders.h>)
++#  import <MetalPerformanceShaders/MetalPerformanceShaders.h>
++#  include <dlfcn.h>
++#  define GFX_HAVE_MPS 1
++#endif
+ 
+ #include "../../include/ps3emu/log_first.h"   /* PS3_LOG_FIRST */
+ #include <unistd.h>
+@@ -141,8 +150,18 @@
+  *                        view's pixel size (fitted to the guest's aspect, so
+  *                        the layer still letterboxes) and the display buffer
+  *                        goes through a MetalFX spatial scaler to it. Off if
+- *                        MetalFX is missing or fails (one log line). */
+-static int   s_gfx_aniso;              /* 0 = off, else 2..16 */
++ *                        MetalFX is missing or fails (one log line).
++ *   PS3_DOWNSCALE=0      windowed, draw engine, PS3_RES_SCALE above 1 only:
++ *                        by default, when the view's pixel size (fitted to
++ *                        the picture's aspect) is smaller than the internal
++ *                        resolution, the drawable takes that size and the
++ *                        frame is reduced into it with a Lanczos filter
++ *                        (MetalPerformanceShaders), every rendered pixel
++ *                        weighed in: supersampling. 0 (or off) leaves the
++ *                        drawable at the internal size for the layer to
++ *                        shrink, sampling, as before. Off if MPS is missing
++ *                        or fails (one log line). */
++static int   s_gfx_aniso;             /* 0 = off, else 2..16 */
+ static int   s_gfx_fxaa;
+ static int   s_gfx_smaa;               /* PS3_AA=smaa (FXAA and SMAA are exclusive) */
+ static float s_gfx_sharpen;            /* 0 = off */
+@@ -164,6 +183,8 @@
+ static id<MTLTexture> s_gfx_lut_presets[GFX_LUT_N];
+ static int   s_gfx_upscale;            /* asked for (and windowed) */
+ static volatile int s_gfx_upscale_on;  /* still usable: main + render thread */
++static int   s_gfx_down;               /* PS3_DOWNSCALE asked for (and an internal resolution above 1) */
++static volatile int s_gfx_down_on;     /* still usable: main + render thread */
+ 
+ /* PS3_RES_SCALE=1|1.5|2|2.5|3|4 (or 720p, 1080p, 1440p, 4k): internal
+  * resolution. Draw engine only, read once at init. Every colour and depth
+@@ -426,6 +447,24 @@ static void gfx_lut_load(id<MTLDevice> dev)
+     if (cs) CGColorSpaceRelease(cs);
+     free(px);
+ }
++/* PS3_DOWNSCALE: 1 = reduce a picture larger than the window (the default),
++ * 0 = leave it to the layer (0, off). */
++static int gfx_downscale_from(const char* e)
++{
++    if (!e || !*e) return 1;
++    if (!strcmp(e, "0") || !strcasecmp(e, "off")) return 0;
++    if (strcmp(e, "1") && strcasecmp(e, "on") && strcasecmp(e, "lanczos"))
++        fprintf(stderr, "[RSX metal] PS3_DOWNSCALE=%s unknown (0, lanczos); on\n", e);
++    return 1;
++}
++/* After res_scale_load: only an internal resolution above native can be
++ * larger than the window for this to matter, and at 1 the path stays the old
++ * one exactly. */
++static void gfx_downscale_load(void)
++{
++    s_gfx_down = gfx_downscale_from(getenv("PS3_DOWNSCALE")) && s_res_scale > 1.0f;
++    __atomic_store_n(&s_gfx_down_on, s_gfx_down, __ATOMIC_RELEASE);
++}
+ static void gfx_options_load(void)
+ {
+     ps3_toggle_watch(PS3T_ANISO, gfx_option_changed);
+@@ -451,6 +490,7 @@ static void gfx_options_load(void)
+     if (e && !strcasecmp(e, "metalfx") && s_headless)
+         fprintf(stderr, "[RSX metal] PS3_UPSCALE=metalfx ignored headless\n");
+     __atomic_store_n(&s_gfx_upscale_on, s_gfx_upscale, __ATOMIC_RELEASE);
++    gfx_downscale_load();
+     if (s_gfx_aniso || s_gfx_fxaa || s_gfx_smaa || s_gfx_sharpen > 0.0f || s_gfx_upscale ||
+         s_gfx_vibrance != 0.0f || s_gfx_contrast != 1.0f || s_gfx_vignette > 0.0f || s_gfx_grain > 0.0f ||
+         s_gfx_shadows != 0.0f || s_gfx_midtones != 0.0f || s_gfx_highlights != 0.0f ||
+@@ -472,6 +512,30 @@ static void gfx_upscale_fail(const char* why)
+     fprintf(stderr, "[RSX metal] MetalFX upscaling unavailable (%s); presenting at the guest size\n", why);
+ }
+ 
++/* The Lanczos reduction gave up: say why once; the next pump puts the
++ * drawable back at the internal size, which the layer shrinks as before. */
++static void gfx_downscale_fail(const char* why)
++{
++    if (!__atomic_exchange_n(&s_gfx_down_on, 0, __ATOMIC_ACQ_REL)) return;
++    fprintf(stderr, "[RSX metal] supersampling (PS3_DOWNSCALE) unavailable (%s); the window shrinks the picture\n", why);
++}
++
++/* The drawable for a view of pw x ph pixels showing a bw x bh picture: the
++ * picture's own size, or that pixel size fitted to the picture's aspect when
++ * it is larger and MetalFX upscales (up) or smaller and the Lanczos reduction
++ * is on (down). Plain arithmetic, for wm_keep_drawable and the tests. */
++static void gfx_drawable_fit(double pw, double ph, u32 bw, u32 bh, int up, int down,
++                             double* ow, double* oh)
++{
++    *ow = (double)bw; *oh = (double)bh;
++    if ((!up && !down) || !(pw >= 1.0) || !(ph >= 1.0) || !bw || !bh) return;
++    double fw = floor(pw), fh = floor(ph);
++    if (fw * bh > fh * bw) fw = floor(fh * bw / bh + 0.5);   /* PS3_ASPECT: the wide image's shape */
++    else                   fh = floor(fw * bh / bw + 0.5);
++    if (up && fw > bw && fh > bh) { *ow = fw; *oh = fh; }
++    else if (down && fw < bw && fh < bh && fw >= 1.0 && fh >= 1.0) { *ow = fw; *oh = fh; }
++}
++
+ /* Each initialization owns its counters. A drawable callback retained by the
+  * compositor can outlive shutdown without writing into a later session. */
+ #if !TARGET_OS_IPHONE
+@@ -950,10 +1014,22 @@ static int create_depth(void)
+ 
+ static int create_offscreen(void)
+ {
++    u32 w = res_px_x(s_width), h = res_px(s_height);
++    /* PS3_DOWNSCALE_HEADLESS=<w>x<h> (diagnostic): the headless target is that
++     * size instead of the internal one, standing in for a window's drawable
++     * of that many pixels, so the present's reduction (PS3_DOWNSCALE) -- or
++     * the old path's sampling, with PS3_DOWNSCALE=0 -- can be dumped
++     * (PS3RECOMP_METAL_FRAME_DUMP_POST=1) without a window. */
++    { const char* e = getenv("PS3_DOWNSCALE_HEADLESS");
++      unsigned a = 0, b = 0;
++      if (s_headless && e && *e && s_res_scale > 1.0f) {
++          if (sscanf(e, "%ux%u", &a, &b) == 2 && a >= 16 && b >= 16 && a <= 16384 && b <= 16384) { w = a; h = b; }
++          else fprintf(stderr, "[RSX metal] PS3_DOWNSCALE_HEADLESS=%s: expected <width>x<height>\n", e);
++      } }
+     MTLTextureDescriptor* td =
+         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+-                                                           width:res_px_x(s_width)
+-                                                          height:res_px(s_height)
++                                                           width:w
++                                                          height:h
+                                                        mipmapped:NO];
+     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+     s_offscreen = [s_dev newTextureWithDescriptor:td];
+@@ -968,6 +1044,8 @@ static int create_offscreen(void)
+  * Letterbox: the drawable keeps the guest's resolution whatever the window's
+  * size, and the layer scales it to fit with its aspect ratio kept (black
+  * bars), which is what the compositor already did to it on a Retina screen.
++ * PS3_UPSCALE and PS3_DOWNSCALE size it to the view's pixels instead when the
++ * picture is smaller or larger than them (wm_keep_drawable).
+  *
+  * Fullscreen comes in two kinds: macOS's own (the window moves to a Space of
+  * its own, with the system's animation) and borderless (the window drops its
+@@ -1031,20 +1109,24 @@ static void mouse_capture(void)
+  * re-assert it in case AppKit resized it along with the view. With MetalFX
+  * upscaling it is the view's backing pixel size fitted to the guest's aspect
+  * instead (the layer still letterboxes whatever rounding is left), and the
+- * guest's size whenever that would not be larger. Main thread. */
++ * guest's size whenever that would not be larger. PS3_DOWNSCALE (on unless
++ * 0): the same fitted size whenever it is smaller than the internal
++ * resolution, so the present reduces the frame into it with a Lanczos filter
++ * rather than leaving the layer to sample it down. Main thread. */
+ static void wm_keep_drawable(void)
+ {
+     if (!s_layer) return;
+     /* PS3_RES_SCALE: the game's image is that much larger, and so is this. */
+     const u32 bw = res_px_x(s_width), bh = res_px(s_height);
+     CGSize want = CGSizeMake((CGFloat)bw, (CGFloat)bh);
+-    if (__atomic_load_n(&s_gfx_upscale_on, __ATOMIC_ACQUIRE) && s_window) {
++    const int up   = __atomic_load_n(&s_gfx_upscale_on, __ATOMIC_ACQUIRE);
++    const int down = __atomic_load_n(&s_gfx_down_on, __ATOMIC_ACQUIRE);
++    if ((up || down) && s_window) {
+         NSView* v = [s_window contentView];
+         const NSSize px = v ? [v convertSizeToBacking:[v bounds].size] : NSZeroSize;
+-        double fw = floor(px.width), fh = floor(px.height);
+-        if (fw * bh > fh * bw) fw = floor(fh * bw / bh + 0.5);   /* PS3_ASPECT: the wide image's shape */
+-        else                   fh = floor(fw * bh / bw + 0.5);
+-        if (fw > bw && fh > bh) want = CGSizeMake(fw, fh);
++        double fw, fh;
++        gfx_drawable_fit(px.width, px.height, bw, bh, up, down, &fw, &fh);
++        want = CGSizeMake(fw, fh);
+     }
+     if (!CGSizeEqualToSize(s_layer.drawableSize, want)) s_layer.drawableSize = want;
+ }
+@@ -3070,6 +3152,10 @@ static void release_surfaces(void)
+ static id                         s_gfx_fx_scaler;   /* id<MTLFXSpatialScaler> */
+ static id<MTLTexture>             s_gfx_fx_out;
+ static int                        s_gfx_fx_logged;
++/* PS3_DOWNSCALE: the Lanczos kernel (MPSImageLanczosScale) and its output. */
++static id                         s_gfx_ds_kernel;
++static id<MTLTexture>             s_gfx_ds_out;
++static const char*                s_gfx_ds_class = "MPSImageLanczosScale";   /* a test names a missing one */
+ /* PS3_AA=smaa: its library (third_party/smaa/smaa_msl.h), the three passes'
+  * pipelines, the two lookup textures and the per-size targets. */
+ static id<MTLLibrary>             s_smaa_lib;
+@@ -3082,6 +3168,7 @@ static void gfx_post_release(void)
+     s_smaa_lib = nil; s_smaa_edge_pso = s_smaa_weight_pso = s_smaa_blend_pso = nil;
+     s_smaa_area = s_smaa_search = s_smaa_edges = s_smaa_weights = s_smaa_out = nil;
+     s_gfx_fx_scaler = nil; s_gfx_fx_out = nil;
++    s_gfx_ds_kernel = nil; s_gfx_ds_out = nil;
+     for (int k = 0; k < GFX_LUT_N; k++) s_gfx_lut_presets[k] = nil;
+     if (s_gfx_lut != s_gfx_lut_file) { s_gfx_lut = s_gfx_lut_file; s_gfx_lut_size = s_gfx_lut_file_size; }
+     s_gfx_lut_preset_built = -1;
+@@ -6097,13 +6184,80 @@ static int smaa_pass(id<MTLCommandBuffer> cb, id<MTLTexture> dst, id<MTLRenderPi
+ #endif
+ }
+ 
++/* PS3_DOWNSCALE: src reduced with a Lanczos filter (MPSImageLanczosScale)
++ * into a private texture of ow x oh. Every source pixel is weighed into the
++ * result, which is what makes an internal resolution above the window's
++ * supersampling; a layer shrinking the drawable samples it instead (bilinear,
++ * no mipmaps: at 3x one source pixel in nine). The framework is opened and
++ * the class looked up the first time; nil when it cannot, and a failure that
++ * will not go away by itself turns the option off (gfx_downscale_fail). */
++static id<MTLTexture> gfx_downscale(id<MTLCommandBuffer> cb, id<MTLTexture> src,
++                                    NSUInteger ow, NSUInteger oh)
++{
++#if GFX_HAVE_MPS
++    static Class lanczos;
++    static int looked;
++    if (!looked) {
++        looked = 1;
++        dlopen("/System/Library/Frameworks/MetalPerformanceShaders.framework/MetalPerformanceShaders",
++               RTLD_LAZY | RTLD_LOCAL);
++        lanczos = NSClassFromString([NSString stringWithUTF8String:s_gfx_ds_class]);
++    }
++    if (!lanczos) { gfx_downscale_fail("MetalPerformanceShaders is not on this system"); return nil; }
++    if (!([src usage] & MTLTextureUsageShaderRead)) {
++        gfx_downscale_fail("the display buffer cannot be read by a shader");
++        return nil;
++    }
++    if (!s_gfx_ds_kernel) {
++        MPSImageLanczosScale* k = [[lanczos alloc] initWithDevice:s_dev];
++        if (!k) { gfx_downscale_fail("not supported on this GPU"); return nil; }
++        /* The default edge mode reads zeros past the picture: dark borders. */
++        k.edgeMode = MPSImageEdgeModeClamp;
++        s_gfx_ds_kernel = k;
++    }
++    if (!s_gfx_ds_out || [s_gfx_ds_out width] != ow || [s_gfx_ds_out height] != oh ||
++        [s_gfx_ds_out pixelFormat] != [src pixelFormat]) {
++        MTLTextureDescriptor* td =
++            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:[src pixelFormat] width:ow
++                                                              height:oh mipmapped:NO];
++        td.usage       = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
++        td.storageMode = MTLStorageModePrivate;
++        s_gfx_ds_out = [s_dev newTextureWithDescriptor:td];
++        if (!s_gfx_ds_out) { gfx_downscale_fail("no memory for its output"); return nil; }
++        static int n;
++        if (PS3_LOG_FIRST(n, 4))
++            fprintf(stderr, "[RSX metal] supersampling: %lux%lu reduced to %lux%lu (Lanczos)\n",
++                    (unsigned long)[src width], (unsigned long)[src height],
++                    (unsigned long)ow, (unsigned long)oh);
++    }
++    [(MPSImageLanczosScale*)s_gfx_ds_kernel encodeToCommandBuffer:cb sourceTexture:src
++                                               destinationTexture:s_gfx_ds_out];
++    return s_gfx_ds_out;
++#else
++    (void)cb; (void)src; (void)ow; (void)oh;
++    gfx_downscale_fail("built without MetalPerformanceShaders");
++    return nil;
++#endif
++}
++
+ /* Put a surface on the drawable. A straight blit would need matching formats
+  * and sizes; a full-screen sample needs neither, and the guest's surfaces are
+  * routinely a different size from the window.
+  *
+- * With the graphics options: FXAA at the guest's size, then MetalFX up to the
+- * drawable's, then this pass (sharpening + gamma). Each one that is off or
+- * fails is skipped and the next one takes what came before it. */
++ * With the graphics options: FXAA/SMAA at the internal size, then MetalFX up
++ * to the drawable's or the Lanczos reduction down to it (PS3_DOWNSCALE), then
++ * this pass (sharpening, gamma and the colour effects) at the drawable's
++ * size, then the in-game menu over that. Each one that is off or fails is
++ * skipped and the next one takes what came before it.
++ *
++ * The reduction comes after the anti-aliasing (FXAA/SMAA look for edges a
++ * pixel wide: the internal size's) and before this pass: sharpening works on
++ * the pixels the window shows (sharpened at 3x and then averaged it would
++ * all but vanish), and gamma, the LUT and the tone curve are per pixel, so
++ * they cost a ninth at 3x, and film grain stays one grain per window pixel
++ * instead of being averaged away. With PS3_FRAMEGEN both pictures of a frame
++ * (the interpolated one and the real one the pacer shows) come through here,
++ * so both are reduced alike. */
+ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+                                 id<MTLTexture> dst)
+ {
+@@ -6114,6 +6268,12 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+     }
+     if (s_gfx_fxaa) { id<MTLTexture> t = gfx_fxaa(cb, src); if (t) src = t; }
+     else if (s_gfx_smaa) { id<MTLTexture> t = gfx_smaa(cb, src); if (t) src = t; }
++    /* PS3_DOWNSCALE: a drawable smaller than the picture both ways. */
++    if (__atomic_load_n(&s_gfx_down_on, __ATOMIC_ACQUIRE) &&
++        [dst width] < [src width] && [dst height] < [src height]) {
++        id<MTLTexture> t = gfx_downscale(cb, src, [dst width], [dst height]);
++        if (t) src = t;
++    }
+     const int scaling = ([src width] != [dst width] || [src height] != [dst height]);
+     if (scaling && __atomic_load_n(&s_gfx_upscale_on, __ATOMIC_ACQUIRE) &&
+         [dst width] > [src width] && [dst height] > [src height]) {
+@@ -6142,10 +6302,10 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+     if (!e) return;
+     [e setRenderPipelineState:s_eng_blit_pso];
+     [e setFragmentTexture:src atIndex:0];
+-    /* Point sampling whenever nothing scales (and without PS3_UPSCALE, as it
+-     * always was); bilinear when the upscale option has the drawable larger
+-     * and MetalFX did not fill it. */
+-    const int lin = s_gfx_upscale &&
++    /* Point sampling whenever nothing scales (and without PS3_UPSCALE or
++     * PS3_DOWNSCALE, as it always was); bilinear when one of them has the
++     * drawable at the view's size and MetalFX or Lanczos did not fill it. */
++    const int lin = (s_gfx_upscale || s_gfx_down) &&
+                     ([src width] != [dst width] || [src height] != [dst height]);
+     [e setFragmentSamplerState:lin ? s_eng_linear_sampler : s_eng_point_sampler atIndex:0];
+     /* The video out's gamma (cellVideoOutSetGamma, the title's brightness
+@@ -7013,6 +7173,7 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+             rsx_set_backend(&s_backend_vtable);
+             /* The post passes live in the engine's present. */
+             if (s_gfx_upscale) gfx_upscale_fail("the vtable path has no post passes");
++            s_gfx_down = 0; __atomic_store_n(&s_gfx_down_on, 0, __ATOMIC_RELEASE);   /* nor a reduction */
+             s_gfx_upscale = 0;
+         }
+         ps3_overlay_init((__bridge void*)s_dev, s_headless);
+diff --git a/libs/video/rsx_metal_framegen.h b/libs/video/rsx_metal_framegen.h
+index 4d55c73..39467bf 100644
+--- a/libs/video/rsx_metal_framegen.h
++++ b/libs/video/rsx_metal_framegen.h
+@@ -11,8 +11,9 @@
+  * the present is the old path, untouched.
+  *
+  * What the interpolator is given, all at the guest surface's size (so it runs
+- * before the present chain: FXAA, PS3_UPSCALE, sharpening and gamma apply to
+- * the interpolated picture and to the real one alike):
++ * before the present chain: FXAA, PS3_UPSCALE or PS3_DOWNSCALE's reduction,
++ * sharpening and gamma apply to the interpolated picture and to the real one
++ * alike):
+  *
+  *   colour    the frame's 3D picture: a copy of the display surface taken
+  *             where the title's 2D overlay starts (framegen_scene, the draw
+diff --git a/libs/video/tests/test_metal_downscale.m b/libs/video/tests/test_metal_downscale.m
+new file mode 100644
+index 0000000..13afbe1
+--- /dev/null
++++ b/libs/video/tests/test_metal_downscale.m
+@@ -0,0 +1,283 @@
++/* PS3_DOWNSCALE: the present's supersampling reduction on a real Metal device,
++ * with no window (python3 tools/test_metal_downscale.py builds and runs it).
++ *
++ *   fit       the drawable sizing (gfx_drawable_fit) and the option's parsing
++ *   reduce    a one-pixel checkerboard -- the finest detail a picture holds,
++ *             the kind that shimmers on edges -- through eng_blit_to_display
++ *             into a drawable three (and one and a half) times smaller must
++ *             come out an even grey, every source pixel weighed in; the layer
++ *             shrinking the drawable samples instead (bilinear: at 3x one
++ *             source pixel in nine, black or white). A flat picture keeps its
++ *             value up to the borders, and two reductions in one command
++ *             buffer (PS3_FRAMEGEN's two pictures) each get their own result
++ *   old       PS3_DOWNSCALE=0, or an internal resolution of 1, or a drawable
++ *             as large as the picture: the old present, pixel for pixel
++ *   fallback  MetalPerformanceShaders missing: one line, the option off, the
++ *             frame still presented (sampled)
++ *   unreadable a display buffer a shader may not read turns it off; without a
++ *             window the drawable stays the internal size (both checks after
++ *             the inFAMOUS 1 port's test of the same path) */
++#include "../rsx_metal_backend.m"
++#include <assert.h>
++
++/* What eng_blit_to_display (and the window code the file carries) reaches
++ * outside it. The menu stays closed. */
++float cellAvconfExt_display_gamma(void) { return 1.0f; }
++volatile int g_ps3_overlay_active;
++void ps3_overlay_render(void* cb, void* dst) { (void)cb; (void)dst; assert(!"menu closed"); }
++volatile uint32_t g_pad_mouse_buttons;
++
++static id<MTLTexture> tex(NSUInteger w, NSUInteger h, MTLTextureUsage usage)
++{
++    MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
++                                                                                  width:w height:h mipmapped:NO];
++    td.usage = usage;
++    td.storageMode = MTLStorageModeShared;
++    id<MTLTexture> t = [s_dev newTextureWithDescriptor:td];
++    assert(t);
++    return t;
++}
++
++enum { PAT_CHECKER, PAT_FLAT, PAT_RAMP };
++static id<MTLTexture> picture(NSUInteger w, NSUInteger h, int pat)
++{
++    id<MTLTexture> t = tex(w, h, MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget);
++    uint8_t* px = malloc(w * h * 4);
++    for (NSUInteger y = 0; y < h; y++)
++        for (NSUInteger x = 0; x < w; x++) {
++            uint8_t* p = px + (y * w + x) * 4;
++            const uint8_t v = pat == PAT_CHECKER ? (((x ^ y) & 1) ? 255 : 0)
++                            : pat == PAT_FLAT    ? 200
++                            : (uint8_t)(x * 255 / (w - 1));
++            p[0] = p[1] = p[2] = v; p[3] = 255;
++        }
++    [t replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:px bytesPerRow:w * 4];
++    free(px);
++    return t;
++}
++
++static id<MTLTexture> drawable(NSUInteger w, NSUInteger h)
++{
++    return tex(w, h, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
++}
++
++static uint8_t* pixels(id<MTLTexture> t)
++{
++    uint8_t* px = malloc([t width] * [t height] * 4);
++    [t getBytes:px bytesPerRow:[t width] * 4 fromRegion:MTLRegionMake2D(0, 0, [t width], [t height]) mipmapLevel:0];
++    return px;
++}
++
++static void present(id<MTLTexture> src, id<MTLTexture> dst)
++{
++    id<MTLCommandBuffer> cb = [s_queue commandBuffer];
++    eng_blit_to_display(cb, src, dst);
++    [cb commit];
++    [cb waitUntilCompleted];
++    assert(cb.status == MTLCommandBufferStatusCompleted);
++}
++
++/* The green channel's range away from the borders (m pixels in). */
++static void range(id<MTLTexture> t, int m, int* lo, int* hi)
++{
++    uint8_t* px = pixels(t);
++    const int w = (int)[t width], h = (int)[t height];
++    *lo = 255; *hi = 0;
++    for (int y = m; y < h - m; y++)
++        for (int x = m; x < w - m; x++) {
++            const int v = px[(y * w + x) * 4 + 1];
++            if (v < *lo) *lo = v;
++            if (v > *hi) *hi = v;
++        }
++    free(px);
++}
++
++static void set_down(const char* env, float scale)
++{
++    if (env) setenv("PS3_DOWNSCALE", env, 1); else unsetenv("PS3_DOWNSCALE");
++    s_res_scale = scale;
++    gfx_downscale_load();
++}
++
++static void check_fit(void)
++{
++    double w, h;
++    /* this Mac's 1280x720-point window on a Retina screen: 2560x1440 pixels */
++    gfx_drawable_fit(2560, 1440, 3840, 2160, 0, 1, &w, &h); assert(w == 2560 && h == 1440);   /* x3 */
++    gfx_drawable_fit(2560, 1440, 3200, 1800, 0, 1, &w, &h); assert(w == 2560 && h == 1440);   /* x2.5 */
++    gfx_drawable_fit(2560, 1440, 2560, 1440, 0, 1, &w, &h); assert(w == 2560 && h == 1440);   /* x2: as large */
++    gfx_drawable_fit(2560, 1440, 1920, 1080, 0, 1, &w, &h); assert(w == 1920 && h == 1080);   /* x1.5: smaller */
++    /* fullscreen on its 3024x1964 pixels: fitted 3024x1701 */
++    gfx_drawable_fit(3024, 1964, 3840, 2160, 0, 1, &w, &h); assert(w == 3024 && h == 1701);
++    gfx_drawable_fit(3024, 1964, 2560, 1440, 0, 1, &w, &h); assert(w == 2560 && h == 1440);
++    /* PS3_ASPECT=21:9 at x3 (5040x2160) in the 16:9 window: the wide shape */
++    gfx_drawable_fit(2560, 1440, 5040, 2160, 0, 1, &w, &h); assert(w == 2560 && h == 1097);
++    /* off, or MetalFX up only: the picture's size; MetalFX as it was */
++    gfx_drawable_fit(2560, 1440, 3840, 2160, 0, 0, &w, &h); assert(w == 3840 && h == 2160);
++    gfx_drawable_fit(2560, 1440, 3840, 2160, 1, 0, &w, &h); assert(w == 3840 && h == 2160);
++    gfx_drawable_fit(2560, 1440, 1280, 720, 1, 1, &w, &h);  assert(w == 2560 && h == 1440);
++    gfx_drawable_fit(0, 0, 3840, 2160, 1, 1, &w, &h);       assert(w == 3840 && h == 2160);   /* no view yet */
++    assert(gfx_downscale_from(NULL) == 1 && gfx_downscale_from("") == 1);
++    assert(gfx_downscale_from("1") == 1 && gfx_downscale_from("lanczos") == 1 && gfx_downscale_from("on") == 1);
++    assert(gfx_downscale_from("0") == 0 && gfx_downscale_from("off") == 0 && gfx_downscale_from("OFF") == 0);
++    set_down(NULL, 3.0f);  assert(s_gfx_down && s_gfx_down_on);
++    set_down("0", 3.0f);   assert(!s_gfx_down && !s_gfx_down_on);
++    set_down(NULL, 1.0f);  assert(!s_gfx_down && !s_gfx_down_on);   /* native: the old path */
++    set_down(NULL, 1.5f);  assert(s_gfx_down);
++    puts("[downscale] fit and parsing passed");
++}
++
++static void check_reduce(void)
++{
++    set_down(NULL, 3.0f);
++    id<MTLTexture> src = picture(192, 108, PAT_CHECKER), dst = drawable(64, 36);
++    present(src, dst);
++    if (!s_gfx_down_on) { puts("[downscale] MetalPerformanceShaders not available here; fallback taken"); return; }
++    assert(s_gfx_ds_out && [s_gfx_ds_out width] == 64 && [s_gfx_ds_out height] == 36 &&
++           [s_gfx_ds_out storageMode] == MTLStorageModePrivate);
++    int lo, hi;
++    range(dst, 0, &lo, &hi);
++    printf("[downscale] checkerboard 192x108 -> 64x36 (x3): %d..%d, borders included\n", lo, hi);
++    assert(lo >= 120 && hi <= 135);           /* an even grey; sampling gives 0 and 255 */
++
++    /* the same sizes keep the output */
++    id<MTLTexture> again = s_gfx_ds_out;
++    present(src, dst);
++    assert(s_gfx_ds_out == again);
++
++    /* x1.5, the 3840x2160 picture in this Mac's 2560x1440-pixel window */
++    id<MTLTexture> src15 = picture(384, 216, PAT_CHECKER), dst15 = drawable(256, 144);
++    present(src15, dst15);
++    range(dst15, 0, &lo, &hi);
++    printf("[downscale] checkerboard 384x216 -> 256x144 (x1.5): %d..%d\n", lo, hi);
++    assert(lo >= 110 && hi <= 145);
++    { /* what the layer did with it: bilinear, the same sizes */
++      id<MTLTexture> lin = drawable(256, 144);
++      id<MTLCommandBuffer> cb = [s_queue commandBuffer];
++      id<MTLRenderPipelineState> ps = s_eng_blit_pso;
++      MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
++      rp.colorAttachments[0].texture = lin; rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
++      rp.colorAttachments[0].storeAction = MTLStoreActionStore;
++      id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
++      [e setRenderPipelineState:ps];
++      [e setFragmentTexture:src15 atIndex:0];
++      [e setFragmentSamplerState:s_eng_linear_sampler atIndex:0];
++      const struct { float gamma, sharp, px[2], vib, con, vig, grain, time, lsz, lamt, pad,
++                     csh, cmid, chi, cla; } p = { 1.0f, 0.0f, { 1.0f / 256, 1.0f / 144 }, 0.0f, 1.0f };
++      [e setFragmentBytes:&p length:sizeof p atIndex:0];
++      [e setFragmentTexture:src15 atIndex:1];
++      [e setFragmentSamplerState:s_eng_linear_sampler atIndex:1];
++      [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++      [e endEncoding];
++      [cb commit]; [cb waitUntilCompleted];
++      int blo, bhi; range(lin, 0, &blo, &bhi);
++      printf("[downscale] the same with the layer's bilinear sampling: %d..%d\n", blo, bhi);
++      assert(bhi - blo > 2 * (hi - lo)); }
++
++    /* a flat picture stays flat up to the borders (the edge mode clamps) */
++    id<MTLTexture> flat = picture(192, 108, PAT_FLAT);
++    present(flat, dst);
++    range(dst, 0, &lo, &hi);
++    assert(lo >= 199 && hi <= 201);
++
++    /* PS3_FRAMEGEN: two pictures reduced in one command buffer, each into its
++     * own target, share the kernel's output in turn and must not mix */
++    id<MTLTexture> ramp = picture(192, 108, PAT_RAMP), d1 = drawable(64, 36), d2 = drawable(64, 36);
++    id<MTLCommandBuffer> cb = [s_queue commandBuffer];
++    eng_blit_to_display(cb, src, d1);
++    eng_blit_to_display(cb, ramp, d2);
++    [cb commit]; [cb waitUntilCompleted];
++    assert(cb.status == MTLCommandBufferStatusCompleted);
++    range(d1, 0, &lo, &hi);
++    assert(lo >= 120 && hi <= 135);
++    uint8_t* px = pixels(d2);
++    for (int y = 0; y < 36; y++)
++        for (int x = 1; x < 64; x++) assert(px[(y * 64 + x) * 4 + 1] >= px[(y * 64 + x - 1) * 4 + 1]);
++    assert(px[1] < 10 && px[63 * 4 + 1] > 245);
++    free(px);
++    puts("[downscale] reduce passed");
++}
++
++/* The old present for a 3x smaller drawable: the point sampler takes the
++ * pixel under each centre, (3x+1, 3y+1). */
++static void check_old(void)
++{
++    id<MTLTexture> src = picture(192, 108, PAT_CHECKER);
++    const char* envs[] = { "0", "off" };
++    for (int k = 0; k < 3; k++) {
++        if (k < 2) set_down(envs[k], 3.0f); else set_down(NULL, 1.0f);   /* or native */
++        assert(!s_gfx_down_on);
++        id<MTLTexture> dst = drawable(64, 36);
++        present(src, dst);
++        uint8_t* px = pixels(dst);
++        for (int y = 0; y < 36; y++)
++            for (int x = 0; x < 64; x++) {
++                const uint8_t want = (((3 * x + 1) ^ (3 * y + 1)) & 1) ? 255 : 0;
++                assert(px[(y * 64 + x) * 4 + 1] == want && px[(y * 64 + x) * 4 + 3] == 255);
++            }
++        free(px);
++        assert(!s_gfx_ds_out);                 /* the kernel never ran */
++    }
++    /* on, but the drawable as large as the picture: the same bytes as off */
++    id<MTLTexture> ramp = picture(192, 108, PAT_RAMP), a = drawable(192, 108), b = drawable(192, 108);
++    set_down("0", 3.0f);  present(ramp, a);
++    set_down(NULL, 3.0f); present(ramp, b);
++    assert(s_gfx_down_on && !s_gfx_ds_out);
++    uint8_t* pa = pixels(a), *pb = pixels(b);
++    assert(!memcmp(pa, pb, 192 * 108 * 4));
++    free(pa); free(pb);
++    puts("[downscale] old path passed");
++}
++
++static void check_fallback(void)
++{
++    s_gfx_ds_class = "PS3NoSuchLanczosScale";
++    set_down(NULL, 3.0f);
++    id<MTLTexture> src = picture(192, 108, PAT_FLAT), dst = drawable(64, 36);
++    present(src, dst);
++    assert(!s_gfx_down_on && !s_gfx_ds_kernel && !s_gfx_ds_out);
++    int lo, hi;
++    range(dst, 0, &lo, &hi);
++    assert(lo == 200 && hi == 200);           /* still presented, sampled */
++    present(src, dst);                        /* and the line is said once */
++    puts("[downscale] fallback passed");
++}
++
++/* A display buffer a shader may not read: the reduction gives up for good,
++ * and with no window (or after giving up) the drawable is the internal size. */
++static void check_unreadable(void)
++{
++    set_down(NULL, 3.0f);
++    res_axes_update();
++    s_width = 64; s_height = 36;
++    s_layer = [CAMetalLayer layer];
++    wm_keep_drawable();                       /* no window: the picture's size */
++    assert(s_layer.drawableSize.width == 192 && s_layer.drawableSize.height == 108);
++    id<MTLTexture> bad = tex(192, 108, MTLTextureUsageRenderTarget);
++    id<MTLCommandBuffer> cb = [s_queue commandBuffer];
++    assert(gfx_downscale(cb, bad, 64, 36) == nil);
++    [cb commit]; [cb waitUntilCompleted];
++    assert(!s_gfx_down_on && !s_gfx_ds_out);
++    wm_keep_drawable();
++    assert(s_layer.drawableSize.width == 192 && s_layer.drawableSize.height == 108);
++    s_layer = nil;
++    puts("[downscale] unreadable source passed");
++}
++
++int main(int argc, char** argv)
++{
++    @autoreleasepool {
++        assert(argc == 2);
++        s_dev = MTLCreateSystemDefaultDevice();
++        if (!s_dev) { puts("[downscale] no Metal device; skipped"); return 0; }
++        s_queue = [s_dev newCommandQueue];
++        assert(s_queue && eng_init(NULL, 0, 0) == 0);
++        if      (!strcmp(argv[1], "fit"))      check_fit();
++        else if (!strcmp(argv[1], "reduce"))   check_reduce();
++        else if (!strcmp(argv[1], "old"))      check_old();
++        else if (!strcmp(argv[1], "fallback")) check_fallback();
++        else if (!strcmp(argv[1], "unreadable")) check_unreadable();
++        else return 2;
++    }
++    return 0;
++}
+diff --git a/tools/test_metal_downscale.py b/tools/test_metal_downscale.py
+new file mode 100755
+index 0000000..62ba578
+--- /dev/null
++++ b/tools/test_metal_downscale.py
+@@ -0,0 +1,20 @@
++#!/usr/bin/env python3
++"""PS3_DOWNSCALE: the present's Lanczos reduction on a real macOS Metal device."""
++import pathlib
++import platform
++import subprocess
++import tempfile
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++if platform.system() != "Darwin":
++    print("SKIP: Metal requires macOS")
++    raise SystemExit(0)
++with tempfile.TemporaryDirectory(prefix="metal-downscale-") as tmp:
++    binary = pathlib.Path(tmp) / "test"
++    subprocess.run(["clang", "-fobjc-arc", "-Iinclude", "-Ilibs/video",
++                    "libs/video/tests/test_metal_downscale.m",
++                    "libs/video/rsx_texture_layout.c", "-Wl,-dead_strip",
++                    "-framework", "Metal", "-framework", "Cocoa",
++                    "-framework", "QuartzCore", "-weak_framework", "MetalFX", "-o", str(binary)],
++                   cwd=ROOT, check=True, timeout=120)
++    for mode in ("fit", "reduce", "old", "fallback", "unreadable"):
++        subprocess.run([str(binary), mode], check=True, timeout=30)
