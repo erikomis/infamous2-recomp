@@ -111,6 +111,7 @@ PUP_EXTRACT = os.path.join(HERE, 'pup_extract.py')
 PORT_FILES = ('CMakeLists.txt', 'main.cpp', 'stubs.cpp', 'gpu_light.c', 'gpu_ssao.c',
               'ssao_gpu.c', 'ssao_gpu.h', 'edge_watch.c', 'game_clock.c', 'game_patches.cpp', 'run.sh', 'config.toml',
               'heartbeat.c',       # the low-health heartbeat on the controller
+              'mesh_trim.c',       # Edge mesh trimming off at scaled resolutions
               'macos_host.m',      # App Nap off, thread QoS (macOS)
               'Info.plist.in',     # the macOS app bundle's Info.plist (Game Mode)
               'window_icon.png')   # the Dock icon run.sh points the game at
