@@ -855,7 +855,7 @@ index 0000000..5cf4233
 +
 +#endif
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index d2f8c67..89f3e64 100644
+index d2f8c67..d063d62 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -13,13 +13,16 @@
@@ -875,7 +875,7 @@ index d2f8c67..89f3e64 100644
  
  /* Event-queue push/lookup (runtime/syscalls/sys_event.c). Forward-declared
   * rather than including sys_event.h to avoid pulling PPU context/syscall
-@@ -160,10 +163,118 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+@@ -160,13 +163,126 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
   * Host audio output backend
   * -----------------------------------------------------------------------*/
  
@@ -994,7 +994,15 @@ index d2f8c67..89f3e64 100644
  static int audio_backend_init(void)
  {
      if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
-@@ -181,11 +292,18 @@ static int audio_backend_init(void)
++        /* SDL's own SIGINT/SIGTERM handlers only queue an SDL_QUIT event,
++         * which nothing here reads, so with them a TERM (the launcher's Stop,
++         * a test harness) left the game running. With sdl2-compat over SDL3
++         * the audio subsystem installs them too; keep the default actions. */
++        SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+         if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
+             printf("[cellAudio] SDL audio init failed: %s\n", SDL_GetError());
+             return -1;
+@@ -181,11 +297,18 @@ static int audio_backend_init(void)
      want.samples  = CELL_AUDIO_BLOCK_SAMPLES;
      want.callback = NULL; /* We'll use SDL_QueueAudio */
  
@@ -1014,7 +1022,7 @@ index d2f8c67..89f3e64 100644
  
      SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */
      return 0;
-@@ -373,7 +491,7 @@ static int audio_backend_room(void)
+@@ -373,7 +496,7 @@ static int audio_backend_room(void)
      if (FAILED(hr)) {
          /* Device gone (AUDCLNT_E_DEVICE_INVALIDATED on a default-device
           * change, sleep, ...): pace on the clock rather than spin. */
@@ -1023,7 +1031,7 @@ index d2f8c67..89f3e64 100644
              fprintf(stderr, "[cellAudio] GetCurrentPadding failed 0x%08lX -- clock pacing%c", (unsigned long)hr, 10);
          return -1;
      }
-@@ -416,7 +534,12 @@ static inline float ld_be_f32(const float* p)
+@@ -416,7 +539,12 @@ static inline float ld_be_f32(const float* p)
   *   PS3_AUDIO_MUTE=1  silence the HOST output only; the title still sees a
   *                     working device and every mix/pacing path runs as normal
   *                     (unlike PS3_NO_AUDIO, which changes what the guest does).
@@ -1037,7 +1045,7 @@ index d2f8c67..89f3e64 100644
  static void audio_submit_mix(void)
  {
      { static FILE* _wf = (FILE*)-1;
-@@ -424,6 +547,9 @@ static void audio_submit_mix(void)
+@@ -424,6 +552,9 @@ static void audio_submit_mix(void)
        if (_wf) { fwrite(s_mix_buffer, sizeof(float), CELL_AUDIO_BLOCK_SAMPLES * 2, _wf); fflush(_wf); } }
      { static int mute = -1; if (mute < 0) mute = getenv("PS3_AUDIO_MUTE") ? 1 : 0;
        if (mute) memset(s_mix_buffer, 0, sizeof(s_mix_buffer)); }
@@ -1047,7 +1055,7 @@ index d2f8c67..89f3e64 100644
      audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
  }
  
-@@ -1101,7 +1227,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
+@@ -1101,7 +1232,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
      vm_write32(cfg + 24, port->buf_size);                                   /* portSize */
      vm_write32(cfg + 28, (u32)port->port_addr);                             /* portAddr */
  
@@ -1519,7 +1527,7 @@ index d403baf..76c5505 100644
 +
  #endif /* PS3RECOMP_CELL_GEM_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 621d53e..f47dfbc 100644
+index 621d53e..c320887 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -8,8 +8,17 @@
@@ -2411,7 +2419,7 @@ index 621d53e..f47dfbc 100644
  
          /* Pressure: SDL has digital buttons, so 0 or 255 */
          s_host_state[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
-@@ -357,35 +1108,35 @@ static void pad_poll_sdl2(void)
+@@ -357,35 +1108,36 @@ static void pad_poll_sdl2(void)
          s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
          s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
      }
@@ -2423,6 +2431,7 @@ index 621d53e..f47dfbc 100644
 +    if (pad_sdl_off()) return;
      if (!s_sdl_inited) {
          if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
++            SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");   /* see cellAudio.c: TERM must end the game */
              SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
          }
          s_sdl_inited = 1;
@@ -2459,7 +2468,7 @@ index 621d53e..f47dfbc 100644
  }
  
  #endif /* PAD_BACKEND_SDL2 */
-@@ -490,34 +1241,224 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
+@@ -490,34 +1242,224 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
  }
  
  /* Keyboard pad (macOS window): the Metal window records key state by
@@ -2708,7 +2717,7 @@ index 621d53e..f47dfbc 100644
      /* PS3_PAD_FILE: its buttons are held in addition to the keys; an
       * off-centre file axis wins over the keyboard's. */
      { u16 fb; int flx, fly, frx, fry;
-@@ -528,10 +1469,71 @@ static void pad_poll_keys(void)
+@@ -528,10 +1470,71 @@ static void pad_poll_keys(void)
        if (frx != 128) rx = frx;
        if (fry != 128) ry = fry; }
      PadHostState* hs = &s_host_state[0];
@@ -2780,7 +2789,7 @@ index 621d53e..f47dfbc 100644
  static void pad_poll_backend(void)
  {
      /* Benign race: two threads may poll in the same tick. That costs one extra
-@@ -539,6 +1541,7 @@ static void pad_poll_backend(void)
+@@ -539,6 +1542,7 @@ static void pad_poll_backend(void)
      static unsigned long long s_last_ms = 0;
      unsigned long long now = pad_now_ms();
      if (s_last_ms && now - s_last_ms < PAD_POLL_INTERVAL_MS) return;
@@ -2788,7 +2797,7 @@ index 621d53e..f47dfbc 100644
      s_last_ms = now;
      /* A real pad streams reports at roughly this rate whether or not anything
       * changed, and libpad buffers them; a fresh sweep is a fresh report for
-@@ -553,9 +1556,21 @@ static void pad_poll_backend(void)
+@@ -553,9 +1557,21 @@ static void pad_poll_backend(void)
  #ifdef _WIN32
      if (!s_host_state[0].connected) pad_poll_keyboard();
  #endif
@@ -2813,7 +2822,7 @@ index 621d53e..f47dfbc 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -581,10 +1596,19 @@ s32 cellPadInit(u32 max_connect)
+@@ -581,10 +1597,19 @@ s32 cellPadInit(u32 max_connect)
      memset(s_port_setting, 0, sizeof(s_port_setting));
      memset(s_host_state, 0, sizeof(s_host_state));
  
@@ -2833,7 +2842,7 @@ index 621d53e..f47dfbc 100644
  
      return CELL_OK;
  }
-@@ -596,7 +1620,9 @@ s32 cellPadEnd(void)
+@@ -596,7 +1621,9 @@ s32 cellPadEnd(void)
      if (!s_pad_initialized)
          return CELL_PAD_ERROR_NOT_OPENED;
  
@@ -2843,7 +2852,7 @@ index 621d53e..f47dfbc 100644
  
      s_pad_initialized = 0;
      s_max_connect = 0;
-@@ -730,21 +1756,40 @@ skip_inject: ;
+@@ -730,21 +1757,40 @@ skip_inject: ;
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
       * (DIGITAL2 << 8) | DIGITAL1: START 0x0008, UP 0x0010, DOWN 0x0040,
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
@@ -2887,7 +2896,7 @@ index 621d53e..f47dfbc 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
-@@ -752,24 +1797,47 @@ skip_inject: ;
+@@ -752,24 +1798,47 @@ skip_inject: ;
        }
        if (s_sc && port_no == 0) {
            double now = (double)(GetTickCount64() - t0) / 1000.0;
@@ -2940,7 +2949,7 @@ index 621d53e..f47dfbc 100644
        } }
  
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
-@@ -817,20 +1885,32 @@ skip_inject: ;
+@@ -817,20 +1886,32 @@ skip_inject: ;
       * started -- which can leave the subject of the demo off-screen or too far
       * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
      { static int s_st = -1;
@@ -2983,7 +2992,7 @@ index 621d53e..f47dfbc 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
-@@ -995,7 +2075,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -995,7 +2076,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
                    (s_host_state[i].connected || i == 0));
          vm_write16(gaddr + 0x00C + i * 2, on ? 0x054C : 0);   /* vendor: Sony  */
          vm_write16(gaddr + 0x10A + i * 2, on ? 0x0268 : 0);   /* product: DS3  */
@@ -2992,7 +3001,7 @@ index 621d53e..f47dfbc 100644
      }
      return CELL_OK;
  }
-@@ -1022,7 +2102,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -1022,7 +2103,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
           * boot flows that block until a controller is connected can proceed even
           * with no physical device attached. */
          if (s_host_state[i].connected || i == 0) {
@@ -3001,7 +3010,7 @@ index 621d53e..f47dfbc 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -1032,7 +2112,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -1032,7 +2113,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
              info->device_type[i]       = CELL_PAD_DEV_TYPE_STANDARD;
              connected++;
          } else {
@@ -3010,7 +3019,7 @@ index 621d53e..f47dfbc 100644
          }
      }
      info->now_connect = connected;
-@@ -1077,7 +2157,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1077,7 +2158,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
          /* Same virtual-pad-on-port-0 rule as cellPadGetInfo2, so both views of
           * the ports agree (a game that cross-checks them must see one truth). */
          if ((i < PAD_MAX_HOST_PORTS && s_host_state[i].connected) || i == 0) {
@@ -3019,7 +3028,7 @@ index 621d53e..f47dfbc 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -1089,7 +2169,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1089,7 +2170,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
              info->pclass_profile[i]    = 0;
              connected++;
          } else {
@@ -3028,7 +3037,7 @@ index 621d53e..f47dfbc 100644
          }
      }
      info->now_connect = connected;
-@@ -1099,7 +2179,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1099,7 +2180,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
            vm_write32((unsigned long long)ea + _o, *(u32*)((char*)info + _o)); }
  
      { static int _n = 0;
@@ -3037,7 +3046,7 @@ index 621d53e..f47dfbc 100644
            printf("[cellPad] PeriphGetInfo(max=%u now=%u) -> STANDARD class\n",
                   info->max_connect, connected); }
      return CELL_OK;
-@@ -1175,6 +2255,24 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
+@@ -1175,6 +2256,24 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
      return CELL_OK;
  }
  
@@ -3062,7 +3071,7 @@ index 621d53e..f47dfbc 100644
  s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  {
      if (!s_pad_initialized)
-@@ -1185,28 +2283,50 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1185,28 +2284,50 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  
      param = GUEST_PTR(param, CellPadActParam*);
  
@@ -4123,10 +4132,10 @@ index 0000000..0294920
 +}
 diff --git a/libs/input/tests/test_pad_hotplug.c b/libs/input/tests/test_pad_hotplug.c
 new file mode 100644
-index 0000000..f5483e4
+index 0000000..5b59835
 --- /dev/null
 +++ b/libs/input/tests/test_pad_hotplug.c
-@@ -0,0 +1,292 @@
+@@ -0,0 +1,293 @@
 +/* cellPad's SDL controller hot-plug: a controller switched off and on again
 + * (a DualSense over Bluetooth comes back with a new instance id) is opened
 + * again without a restart, into the port it had; a new one goes into a free
@@ -4255,6 +4264,7 @@ index 0000000..f5483e4
 +Uint32 SDL_WasInit(Uint32 flags) { (void)flags; return flags; }
 +int SDL_InitSubSystem(Uint32 flags) { (void)flags; return 0; }
 +const char* SDL_GetError(void) { return "fake"; }
++SDL_bool SDL_SetHint(const char* name, const char* value) { (void)name; (void)value; return SDL_TRUE; }
 +/* The DualSense extras: the player lights are recorded; no light bar or gyro
 + * here (PS3_PAD_LIGHT / PS3_PAD_GYRO unset). */
 +void SDL_GameControllerSetPlayerIndex(SDL_GameController* gc, int i) { ((FakePad*)gc)->player = i + 1; }
