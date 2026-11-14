@@ -7151,7 +7151,7 @@ index 0000000..f8ee047
 +    puts("PS3_GAMEDATA_ROOT moves the save root and the listing follows it");
 +}
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 73b7e71..56fb0ac 100644
+index 73b7e71..c709f45 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -9,13 +9,18 @@
@@ -7796,7 +7796,7 @@ index 73b7e71..56fb0ac 100644
      }
      s_ref_q[t % GCM_REF_QLEN] = v;
      s_ref_qtail = t + 1;
-@@ -1469,17 +1856,116 @@ void cellGcm_ref_on_poll(void)
+@@ -1469,17 +1856,135 @@ void cellGcm_ref_on_poll(void)
      ReleaseSRWLockExclusive(&s_ref_pub_lock);
      if (dry && s_gcm_kick_ev)
          SetEvent(s_gcm_kick_ev);       /* dry: ask the present thread to walk */
@@ -7865,6 +7865,10 @@ index 73b7e71..56fb0ac 100644
 +    }
  }
  
++#if defined(__APPLE__)
++extern void* objc_autoreleasePoolPush(void) __attribute__((weak_import));
++extern void  objc_autoreleasePoolPop(void* pool) __attribute__((weak_import));
++#endif
  void cellGcm_rsx_process_fifo(void)
  {
 +    const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
@@ -7879,7 +7883,22 @@ index 73b7e71..56fb0ac 100644
 +    if (long_dbg) clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu0);
 +#endif
      AcquireSRWLockExclusive(&s_gcm_fifo_lock);
++#if defined(__APPLE__)
++    /* The Metal backend autoreleases what it gets from Metal (command
++     * buffers, encoders, pass descriptors, which retain the textures and
++     * buffers they use), and the threads that drain have no pool of their
++     * own that ever empties: everything a drain autoreleased stayed alive
++     * for good, ~50-100 MB/s of GPU memory in play, until swap and the disk
++     * filled and the Mac froze. One pool per drain, pushed and popped here,
++     * so it is balanced whichever thread drains (the RSX thread or a guest
++     * thread pumping the FIFO). Weak: tools that link this file without the
++     * Objective-C runtime just skip it. */
++    void* drain_pool = objc_autoreleasePoolPush ? objc_autoreleasePoolPush() : NULL;
++#endif
      gcm_rsx_process_fifo_unlocked();
++#if defined(__APPLE__)
++    if (drain_pool) objc_autoreleasePoolPop(drain_pool);
++#endif
      ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
 +    s_drain_end_ms = ps3_ms_now();
 +#if !defined(_WIN32)
@@ -7913,7 +7932,7 @@ index 73b7e71..56fb0ac 100644
      { static unsigned _n = 0; static unsigned long long _t0 = 0;
        extern unsigned long long ps3_ms_now(void);
        _n++;
-@@ -1608,7 +2094,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1608,7 +2113,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
              static u32 last_bad; static int n;
              if (s_fifo_getoff != last_bad || n < 4) {
                  last_bad = s_fifo_getoff;
@@ -7922,7 +7941,7 @@ index 73b7e71..56fb0ac 100644
                      fprintf(stderr, "[cellGcmSys] FIFO get=0x%08X has no IO "
                              "mapping -- resyncing to put=0x%08X\n",
                              s_fifo_getoff, put);
-@@ -1626,6 +2112,24 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1626,6 +2131,24 @@ static void gcm_rsx_process_fifo_unlocked(void)
          s_tr_w[s_tr_i % GCM_TRACE_N] = w;
          s_tr_i++;
          u32 type = w >> 29;
@@ -7947,7 +7966,7 @@ index 73b7e71..56fb0ac 100644
  
          if ((w & 0xFFFF0000u) == 0xFEAD0000u) {
              /* lv1 driver flip: statically-linked libgcm cellGcmSetFlip writes
-@@ -1647,6 +2151,9 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1647,6 +2170,9 @@ static void gcm_rsx_process_fifo_unlocked(void)
                if (dbg && (flips <= 8ull || (flips % 200ull) == 0))
                    fprintf(stderr, "[flipword] %llu FIFO flip words decoded%c",
                            flips, 10); }
@@ -7957,7 +7976,7 @@ index 73b7e71..56fb0ac 100644
              if ((w & 0xFFFFFF00u) == GCM_FLIP_MARKER) {
                  /* Queued by _cellGcmSetFlipCommand, which already did the
                   * guest-visible half of the request. */
-@@ -1665,17 +2172,20 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1665,17 +2191,20 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * "Command Buffer Overflow" forever. Past the threshold keep
               * draining -- the intermediate presents are frames we are too far
               * behind to show anyway. No-op for a title that is keeping up. */
@@ -7984,7 +8003,7 @@ index 73b7e71..56fb0ac 100644
                if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("JUMP", tgt, w); gcm_fifo_dump_around(s_fifo_getoff); gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put); break; }
                /* A JUMP to its own address is the "park the RSX here" idiom:
                 * the title leaves it at the write head so the GPU stops if it
-@@ -1690,8 +2200,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1690,8 +2219,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
                     * park standing -- it only patches a park when it reuses that
                     * block. Waiting for a patch that will not come freezes the
                     * FIFO for the rest of the run, so follow the write head. */
@@ -8021,7 +8040,7 @@ index 73b7e71..56fb0ac 100644
                    break;
                }
                s_fifo_getoff = tgt; }
-@@ -1754,8 +2290,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1754,8 +2309,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
                      u32 m = (type == 0) ? method + i * 4 : method;
                      u32 v = vm_read32(dea);
                      u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
@@ -8045,7 +8064,7 @@ index 73b7e71..56fb0ac 100644
                      if (m == 0x64u)      s_sema_offset = v;
                      else if (m == 0x6Cu) vm_write32(la, v);
                      else if (m == 0x68u && vm_read32(la) != v) {
-@@ -1763,12 +2312,39 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1763,12 +2331,39 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * the hardware does. Off by default: a title whose label nothing
               * ever writes would wedge the drain permanently, and RELEASE on
               * its own is the half that unblocks a waiting guest. */
@@ -8089,7 +8108,7 @@ index 73b7e71..56fb0ac 100644
                  s_fifo_getoff += 4 + count * 4;
                  continue;
              }
-@@ -1840,7 +2416,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1840,7 +2435,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                    { static u32 vw = 1;
                      if (vw == 1) { const char* e = getenv("GCM_VAL_WATCH"); vw = e ? (u32)strtoul(e, 0, 16) : 0; }
                      if (vw && dw == vw) {
@@ -8098,7 +8117,7 @@ index 73b7e71..56fb0ac 100644
                              printf("[valwatch] subch=%u method=0x%04X = 0x%08X get=0x%X%c", subch, m, vw, s_fifo_getoff, 10);
                      } }
                    /* ...and surface offsets (colour 0x210/0x218/0x288/0x28C, zeta 0x214) and texture 1 offset */
-@@ -1895,7 +2471,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1895,7 +2490,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
                  } else if (mfull == 0xE920u || mfull == 0xE924u) {
                      cellGcmSetFlipCommand(dw & 7u);
                  } else if (subch == 0 || (subch == 1 && !s1_2d)) {
@@ -8115,7 +8134,7 @@ index 73b7e71..56fb0ac 100644
                      /* NV406E_SET_REFERENCE: queue the fence value for PACED
                       * publication (gcm_ref_publish below) instead of letting a
                       * later fence in the same batch overwrite it. */
-@@ -1906,7 +2490,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1906,7 +2509,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                       * tells the title every queried object is occluded. */
                      if (m == 0x1800) {
                          const u32 v = dw, idx = (v & 0xFFFFFFu) / 16u;
@@ -8124,7 +8143,7 @@ index 73b7e71..56fb0ac 100644
                          if (idx < CELL_GCM_MAX_REPORT_COUNT) {
                              s_report_data[idx].timestamp = get_timestamp_ns();
                              s_report_data[idx].value = (v >> 24) == 1u ? 0xFFFFu : 0u;
-@@ -1916,10 +2500,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1916,10 +2519,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
                      gcm_2d_method(subch, m, dw);
                  }
              }
@@ -8137,7 +8156,7 @@ index 73b7e71..56fb0ac 100644
              fprintf(stderr, "[FIFOUW] unknown word 0x%08X at getoff 0x%X\n", w, s_fifo_getoff); }
          s_fifo_getoff += 4;                    /* unknown word: skip */
      }
-@@ -1955,7 +2540,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1955,7 +2559,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
        if (passes && budget <= 0 && s_fifo_getoff != put) {
            if (++burned >= passes) {
                static int n = 0;
@@ -8146,7 +8165,7 @@ index 73b7e71..56fb0ac 100644
                    fprintf(stderr, "[cellGcmSys] FIFO walker circling (get=0x%08X, "
                            "put=0x%08X, full budget burned x%d) -- following the "
                            "write head\n", s_fifo_getoff, put, burned);
-@@ -1964,8 +2549,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1964,8 +2568,22 @@ static void gcm_rsx_process_fifo_unlocked(void)
            }
        } else burned = 0; }
  
@@ -8170,7 +8189,7 @@ index 73b7e71..56fb0ac 100644
            if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
                               gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
        } else { stuck = 0; last = s_fifo_getoff; } }
-@@ -1974,6 +2573,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -1974,6 +2592,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
       * per tick (gcm_ref_push/gcm_ref_publish_one above) so every SET_REFERENCE
       * value stays observable to equality-waiters. The wrap recycle path polls
       * the drained EA. */
@@ -8179,7 +8198,7 @@ index 73b7e71..56fb0ac 100644
      if (getenv("GCM_DRAINDBG")) {
          static int n2 = 0;
          if (n2++ % 60 == 0)
-@@ -2057,7 +2658,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2057,7 +2677,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                  s_fifo_getoff = io_begin;                          /* get */
                  put = io_begin;
                  static int n = 0;
@@ -8188,7 +8207,7 @@ index 73b7e71..56fb0ac 100644
                      fprintf(stderr, "[cellGcmSys] recycled the title's own ring "
                              "(ctx=0x%08X begin=0x%08X end=0x%08X) -- its callback "
                              "does not%c", ctx, begin, end, 10);
-@@ -2139,7 +2740,7 @@ void cellGcm_fifo_recycle(u32 ctx_ea)
+@@ -2139,7 +2759,7 @@ void cellGcm_fifo_recycle(u32 ctx_ea)
      while (g_gcm_fifo_drained_ea != begin && spins < 2000) { Sleep(1); spins++; }
      if (spins >= 2000) {
          static int warned = 0;
@@ -8197,7 +8216,7 @@ index 73b7e71..56fb0ac 100644
              printf("[cellGcmSys] fifo recycle: drain stalled (drained=0x%08X begin=0x%08X)\n",
                     g_gcm_fifo_drained_ea, begin);
      }
-@@ -2247,7 +2848,7 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -2247,7 +2867,7 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
            }
        } }
  
@@ -8206,7 +8225,7 @@ index 73b7e71..56fb0ac 100644
          fprintf(stderr, "[FLIP] SetFlipCommand(buf=%u) set=%d\n",
                  bufferId, bufferId < CELL_GCM_MAX_DISPLAY_BUFFER_NUM ? s_display_buffer_set[bufferId] : -1); }
      if (bufferId >= CELL_GCM_MAX_DISPLAY_BUFFER_NUM)
-@@ -2260,14 +2861,27 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -2260,14 +2880,27 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
      /* in_fifo: the flip sits in the command stream as a GCM_FLIP_MARKER, and
       * the drain does this half when it reaches it (see the 0xFEAD case). */
      if (!in_fifo) {
@@ -8234,7 +8253,7 @@ index 73b7e71..56fb0ac 100644
  
      /* Invoke via OPD resolution, not a raw call into guest code.
       *
-@@ -2310,9 +2924,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
+@@ -2310,9 +2943,19 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
       * while the guest may be between advancing current and flushing: put
       * then lands on begin, the guest's closing fence is never executed, and
       * it spins on `ref` for good. Safe when the walker has left the head of
@@ -8256,7 +8275,7 @@ index 73b7e71..56fb0ac 100644
          s_fifo_getoff >= io_begin + GCM_RECYCLE_MARGIN) {
          vm_write32(cur + 4, 0x20000000u | io_begin);   /* JUMP -> begin */
          vm_write32(ctx + 8, begin);
-@@ -2571,7 +3195,7 @@ s32 cellGcmAddressToOffset(u32 address, u32* offset)
+@@ -2571,7 +3214,7 @@ s32 cellGcmAddressToOffset(u32 address, u32* offset)
      printf("[cellGcmSys] WARNING: AddressToOffset failed for 0x%08X\n", address);
      vm_write32(off_ea, 0);
      { static int _d = -1; if (_d < 0) _d = getenv("A2O_FAILDBG") ? 1 : 0;
@@ -8265,7 +8284,7 @@ index 73b7e71..56fb0ac 100644
            fprintf(stderr, "[A2O] FAILED ea=0x%08X (not in local or IO space)%c",
                    address, 10); } }
      return CELL_GCM_ERROR_FAILURE;
-@@ -2818,7 +3442,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
+@@ -2818,7 +3461,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
   * walker fills it). Unregistered, every call returned a faked 0. */
  u32 cellGcmGetReport(u32 type, u32 index)
  {
@@ -8274,7 +8293,7 @@ index 73b7e71..56fb0ac 100644
        if (__atomic_fetch_add(&n, 1, __ATOMIC_RELAXED) < 8 || (n % 2000) == 0) printf("[cellGcmSys] GetReport(type=%u, index=%u) -> %u%c", type, index,
                            index < CELL_GCM_MAX_REPORT_COUNT ? s_report_data[index].value : 0u, 10); }
      if (index >= CELL_GCM_MAX_REPORT_COUNT) return 0;
-@@ -2960,7 +3584,7 @@ u32 cellGcmGetTiledPitchSize(u32 size)
+@@ -2960,7 +3603,7 @@ u32 cellGcmGetTiledPitchSize(u32 size)
              if (s_valid_pitches[i] >= size) { r = s_valid_pitches[i]; break; }
          }
      }
@@ -17441,7 +17460,7 @@ index aee795c..5845a3f 100644
  
  /* The clear colour most recently set via NV4097_SET_COLOR_CLEAR_VALUE, in the
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index 98db285..cfd9a20 100644
+index 98db285..46df30c 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -48,11 +48,40 @@
@@ -20465,13 +20484,13 @@ index 98db285..cfd9a20 100644
      r->topology     = topo_to_metal(topology);
      r->vb_off       = vb_off;
 +    r->vb_buf       = 0;
-     r->stride       = stride;
-     r->vertex_count = vertex_count;
-     r->ib_off       = ib_off;
++    r->stride       = stride;
++    r->vertex_count = vertex_count;
++    r->ib_off       = ib_off;
 +    r->ib_buf       = 0;
-     r->index_count  = indices ? index_count : 0;
- }
- 
++    r->index_count  = indices ? index_count : 0;
++}
++
 +static u32 eng_vbuf_create(void* user, const void* data, u32 bytes)
 +{
 +    (void)user;
@@ -20510,13 +20529,13 @@ index 98db285..cfd9a20 100644
 +    r->topology     = topo_to_metal(topology);
 +    r->vb_off       = 0;
 +    r->vb_buf       = vbuf;
-+    r->stride       = stride;
-+    r->vertex_count = vertex_count;
-+    r->ib_off       = ib_off;
+     r->stride       = stride;
+     r->vertex_count = vertex_count;
+     r->ib_off       = ib_off;
 +    r->ib_buf       = 0;
-+    r->index_count  = indices ? index_count : 0;
-+}
-+
+     r->index_count  = indices ? index_count : 0;
+ }
+ 
 +/* draw_vbuf with the indices in a persistent buffer too: nothing staged. */
 +static void eng_draw_vbuf_ib(void* user, rsx_topology topology, u32 vbuf,
 +                             u32 vertex_count, u32 stride, u32 ibuf, u32 index_count)
@@ -21904,7 +21923,7 @@ index 98db285..cfd9a20 100644
 +        fprintf(stderr, "[rsx engine/metal] dropped %u record(s) (cap %d)\n",
 +                s_eng_dropped, ENG_MAX_RECORDS);
 +        s_eng_dropped = 0;
-+    }
+     }
 +    s_eng_rec_count  = 0;
 +    s_eng_stage_used = 0;
 +    s_eng_slot = -1;                      /* the next submission stages into the next slot */
@@ -21935,7 +21954,7 @@ index 98db285..cfd9a20 100644
 +        });
 +        eng_submission_done_here();
 +        return;
-     }
++    }
 +    eng_enc_join();
 +    if (!eng_encode_commit_body(present_dst, s_eng_rec, s_eng_rec_count, s_eng_slot,
 +                                s_eng_stage_used, s_eng_bars_next, 0, fgj))
@@ -22045,7 +22064,7 @@ index 98db285..cfd9a20 100644
          free(px);
      }
      fprintf(stderr, "[rsx engine/metal] dumped render targets for frame %u to %s\n", frame, dir);
-@@ -3670,18 +7092,76 @@ static void eng_present(void* user, u32 surface)
+@@ -3670,49 +7092,201 @@ static void eng_present(void* user, u32 surface)
      id<MTLTexture> src = eng_obj(surface);
      if (!src) { eng_encode_and_commit(nil); return; }
      const u32 nrec = s_eng_rec_count;
@@ -22124,10 +22143,48 @@ index 98db285..cfd9a20 100644
      if ([t storageMode] != MTLStorageModePrivate) {
          [t getBytes:out bytesPerRow:out_pitch
           fromRegion:MTLRegionMake2D(x, y, w, h) mipmapLevel:0];
-@@ -3705,14 +7185,101 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
-         memcpy((u8*)out + (size_t)row * out_pitch, src + (size_t)row * w * bpp, (size_t)w * bpp);
- }
- 
+         return;
+     }
+     /* A private target has no CPU view: blit it into a shared buffer on the
+-     * same queue (ordered after everything already committed) and wait. */
+-    const u32 bpp = (u32)(out_pitch / w);
+-    id<MTLBuffer> buf = [s_dev newBufferWithLength:(NSUInteger)w * h * bpp
+-                                           options:MTLResourceStorageModeShared];
+-    id<MTLCommandBuffer> cb = [s_queue commandBuffer];
+-    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+-    [b copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(x, y, 0)
+-            sourceSize:MTLSizeMake(w, h, 1) toBuffer:buf destinationOffset:0
+-     destinationBytesPerRow:(NSUInteger)w * bpp destinationBytesPerImage:(NSUInteger)w * h * bpp];
+-    [b endEncoding];
+-    [cb commit];
+-    [cb waitUntilCompleted];
+-    const u8* src = (const u8*)[buf contents];
+-    for (u32 row = 0; row < h; row++)
+-        memcpy((u8*)out + (size_t)row * out_pitch, src + (size_t)row * w * bpp, (size_t)w * bpp);
++     * same queue (ordered after everything already committed) and wait.
++     * The command buffer and its encoder come back autoreleased, and this
++     * runs on the RSX thread, which has no pool of its own that ever drains:
++     * without this pool every readback kept its command buffer -- and the
++     * staging buffer the command buffer retains -- alive for good, a leak of
++     * ~100 MB/s in play that filled swap and froze the Mac. */
++    @autoreleasepool {
++        const u32 bpp = (u32)(out_pitch / w);
++        id<MTLBuffer> buf = [s_dev newBufferWithLength:(NSUInteger)w * h * bpp
++                                               options:MTLResourceStorageModeShared];
++        id<MTLCommandBuffer> cb = [s_queue commandBuffer];
++        id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
++        [b copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(x, y, 0)
++                sourceSize:MTLSizeMake(w, h, 1) toBuffer:buf destinationOffset:0
++         destinationBytesPerRow:(NSUInteger)w * bpp destinationBytesPerImage:(NSUInteger)w * h * bpp];
++        [b endEncoding];
++        [cb commit];
++        [cb waitUntilCompleted];
++        const u8* src = (const u8*)[buf contents];
++        for (u32 row = 0; row < h; row++)
++            memcpy((u8*)out + (size_t)row * out_pitch, src + (size_t)row * w * bpp, (size_t)w * bpp);
++    }
++}
++
 +/* ---- image files for texture packs (rsx_draw_engine.c, PS3_MODS) --------
 + * The samples exactly as the PNG holds them: no colour management, straight
 + * alpha, so what PS3_MODS_DUMP writes reads back byte for byte. */
@@ -22206,9 +22263,9 @@ index 98db285..cfd9a20 100644
 +            fprintf(stderr, "[mods] cannot write %s\n", dst.UTF8String);
 +    } });
 +    return 1;
-+}
+ }
 +#endif
-+
+ 
  static const rsx_draw_backend s_engine_backend = {
      .user                 = NULL,
 +#if !TARGET_OS_IPHONE
@@ -22226,7 +22283,7 @@ index 98db285..cfd9a20 100644
      .color_target_create  = eng_color_target_create,
      .color_target_release = eng_obj_release,
      .surface_view         = eng_surface_view,
-@@ -3721,6 +7288,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3721,6 +7295,8 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .depth_snapshot       = eng_depth_snapshot,
      .color_snapshot       = eng_color_snapshot,
      .depth_snapshot_rgba8 = eng_depth_snapshot_rgba8,
@@ -22235,7 +22292,7 @@ index 98db285..cfd9a20 100644
      .pipeline_create      = eng_pipeline_create,
      .pipeline_release     = eng_pipeline_release,
      .bind_targets         = eng_bind_targets,
-@@ -3733,7 +7302,16 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -3733,7 +7309,16 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      .set_viewport         = eng_set_viewport,
      .set_scissor          = eng_set_scissor,
      .set_stencil_ref      = eng_set_stencil_ref,
@@ -22252,7 +22309,7 @@ index 98db285..cfd9a20 100644
      .clear_color          = eng_clear_color,
      .clear_depth_stencil  = eng_clear_depth_stencil,
      .present              = eng_present,
-@@ -3750,12 +7328,17 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -3750,12 +7335,17 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
  
          const char* hl = getenv("PS3RECOMP_METAL_HEADLESS");
          s_headless = (hl && *hl && *hl != '0');
@@ -22270,7 +22327,7 @@ index 98db285..cfd9a20 100644
          s_queue = [s_dev newCommandQueue];
          if (!s_queue) {
              fprintf(stderr, "[RSX metal] could not create command queue\n");
-@@ -3822,9 +7405,23 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -3822,9 +7412,23 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
          if (rsx_draw_engine_enabled() &&
              rsx_draw_engine_init(s_width, s_height) == 0) {
              s_eng_active = 1;
@@ -22294,7 +22351,7 @@ index 98db285..cfd9a20 100644
          fprintf(stderr, "[RSX metal] %s on %s (%ux%u), guest shaders %s, %s path\n",
                  s_headless ? "headless" : "windowed",
                  [[s_dev name] UTF8String], s_width, s_height,
-@@ -3837,6 +7434,7 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -3837,6 +7441,7 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
  void rsx_metal_backend_shutdown(void)
  {
      @autoreleasepool {
@@ -22302,7 +22359,7 @@ index 98db285..cfd9a20 100644
          if (s_ready) rsx_set_backend(NULL);
          if (s_eng_active) rsx_draw_engine_shutdown();
          rsx_draw_engine_set_backend(NULL);
-@@ -3853,6 +7451,12 @@ void rsx_metal_backend_shutdown(void)
+@@ -3853,6 +7458,12 @@ void rsx_metal_backend_shutdown(void)
              s_inflight = nil;
          }
  #if !TARGET_OS_IPHONE
@@ -22315,7 +22372,7 @@ index 98db285..cfd9a20 100644
          if (s_window) { [s_window close]; s_window = nil; }
  #endif
          free(s_verts); s_verts = NULL;
-@@ -3886,25 +7490,180 @@ static int pump_messages_impl(void)
+@@ -3886,25 +7497,180 @@ static int pump_messages_impl(void)
                                                  inMode:NSDefaultRunLoopMode
                                                 dequeue:YES];
              if (!ev) break;
@@ -22500,7 +22557,7 @@ index 98db285..cfd9a20 100644
      }
  #endif
      return s_closed ? -1 : 0;
-@@ -3992,6 +7751,7 @@ void rsx_metal_backend_present(void)
+@@ -3992,6 +7758,7 @@ void rsx_metal_backend_present(void)
  
          id<MTLCommandBuffer> cb = [s_queue commandBuffer];
          id<MTLRenderCommandEncoder> enc = begin_pass(cb, target, &first.rt, &first, &ps);
@@ -22508,7 +22565,7 @@ index 98db285..cfd9a20 100644
          for (; enc && r < s_rec_count; r++) {
              const MtlRecord* rec = &s_records[r];
              if (rec->kind == MTL_REC_CLEAR) {
-@@ -4010,8 +7770,9 @@ void rsx_metal_backend_present(void)
+@@ -4010,8 +7777,9 @@ void rsx_metal_backend_present(void)
              encode_draw(enc, &rec->u.draw, &ps);
          }
          if (enc) [enc endEncoding];
@@ -22519,7 +22576,7 @@ index 98db285..cfd9a20 100644
  
          if (s_headless) {
              /* The readback below must see a completed frame. */
-@@ -4019,8 +7780,8 @@ void rsx_metal_backend_present(void)
+@@ -4019,8 +7787,8 @@ void rsx_metal_backend_present(void)
              [cb waitUntilCompleted];
          } else {
              dispatch_semaphore_t sem = s_inflight;
@@ -22530,7 +22587,7 @@ index 98db285..cfd9a20 100644
                  dispatch_semaphore_signal(sem);
              }];
              [cb commit];        /* no wait: the CPU goes on to the next frame */
-@@ -4068,3 +7829,121 @@ u32 rsx_metal_backend_guest_draws(void)
+@@ -4068,3 +7836,121 @@ u32 rsx_metal_backend_guest_draws(void)
  {
      return s_eng_active ? rsx_draw_engine_guest_draws() : s_last_guest_draws;
  }
@@ -107459,10 +107516,10 @@ index ab59cbe..cf8907c 100644
                  # right after another branch (fallthrough entry)
                  while k > 0 and seg[k].addr not in targets and not _ends_block(seg[k - 1]):
 diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
-index 00b771d..ab59117 100644
+index 00b771d..4157878 100644
 --- a/tools/spu_lifter.py
 +++ b/tools/spu_lifter.py
-@@ -493,13 +493,225 @@ def compute_link_returns(insns, bounds) -> set:
+@@ -493,14 +493,229 @@ def compute_link_returns(insns, bounds) -> set:
      return returns
  
  
@@ -107687,9 +107744,13 @@ index 00b771d..ab59117 100644
 +        # ctx->code_base (spu_overlay_register_region_reloc).
 +        self.reloc = reloc
          self.functions: list[LiftedFunction] = []
++        # --insn-guard: LS address -> C predicate; the instruction there runs
++        # only while the predicate is 0, i.e. it becomes a nop when it says 1.
++        self.insn_guard: dict[int, str] = {}
          self.call_targets: set[int] = set()
          self.branch_targets: set[int] = set()
-@@ -532,9 +744,14 @@ class SPULifter:
+         self.unsupported: dict[str, int] = {}
+@@ -532,9 +747,14 @@ class SPULifter:
  
      # ------------------------------------------------------------------ #
      def lift_function(self, insns: list[SPUInstruction],
@@ -107705,7 +107766,7 @@ index 00b771d..ab59117 100644
  
          internal: set[int] = set()
          for insn in insns:
-@@ -545,9 +762,13 @@ class SPULifter:
+@@ -545,12 +765,18 @@ class SPULifter:
                  internal.add(tgt)
  
          last_insn = None
@@ -107719,7 +107780,12 @@ index 00b771d..ab59117 100644
              if insn.addr in internal:
                  func.body_lines.append(f"loc_{insn.addr:08X}:")
              c = self._translate(insn, func)
-@@ -565,15 +786,20 @@ class SPULifter:
++            if c and insn.addr in self.insn_guard:
++                c = f"if (!{self.insn_guard[insn.addr]}(ctx)) {{ {c} }}   /* --insn-guard */"
+             if c:
+                 if self.trace:
+                     func.body_lines.append(f"    spu_trace_pc(ctx, 0x{insn.addr:X});")
+@@ -565,15 +791,20 @@ class SPULifter:
          # conditional branch whose not-taken path continues), execution proceeds
          # into the next sequential function. Emit a tail-call so the chain isn't
          # truncated (this was silently dropping execution mid-job).
@@ -107747,7 +107813,7 @@ index 00b771d..ab59117 100644
  
          # Infinite no-op self-loop (the SPU `br .` halt idiom): a function whose
          # whole body is nops + an unconditional branch back into itself does
-@@ -593,9 +819,51 @@ class SPULifter:
+@@ -593,9 +824,51 @@ class SPULifter:
                      "    spu_halt(ctx); return;",
                  ]
  
@@ -107799,7 +107865,7 @@ index 00b771d..ab59117 100644
      @staticmethod
      def _branch_target(insn: SPUInstruction):
          """The literal target of a direct branch, or None if it has none.
-@@ -633,6 +901,7 @@ class SPULifter:
+@@ -633,6 +906,7 @@ class SPULifter:
          mn = insn.mnemonic
          ops = _ops(insn.operands)
          addr = insn.addr
@@ -107807,7 +107873,7 @@ index 00b771d..ab59117 100644
  
          def rt(): return _reg(ops[0])
          def ra(): return _reg(ops[1])
-@@ -754,7 +1023,8 @@ class SPULifter:
+@@ -754,7 +1028,8 @@ class SPULifter:
              "cwx": "spu_cwx", "cdx": "spu_cdx",
          }
          if mn in rr_bin:
@@ -107817,7 +107883,7 @@ index 00b771d..ab59117 100644
  
          # ---- unary (register) ----
          rr_un = {
-@@ -829,10 +1099,12 @@ class SPULifter:
+@@ -829,10 +1104,12 @@ class SPULifter:
              return f"{g(rt())} = spu_selb({g(ra())}, {g(rb())}, {g(rc)});"
          if mn == "shufb":
              rc = _reg(ops[3])
@@ -107832,7 +107898,7 @@ index 00b771d..ab59117 100644
          # sfx: extended subtract — RT is also a source (carry-in = low bit of old RT).
          if mn == "sfx":
              return f"{g(rt())} = spu_sfx({g(ra())}, {g(rb())}, {g(rt())});"
-@@ -850,19 +1122,23 @@ class SPULifter:
+@@ -850,19 +1127,23 @@ class SPULifter:
          if mn == "lqd":
              disp, base = _disp_base(ops[1])
              if disp is not None:
@@ -107862,7 +107928,7 @@ index 00b771d..ab59117 100644
  
          # ---- channel ops ----
          if mn == "rdch":
-@@ -878,6 +1154,9 @@ class SPULifter:
+@@ -878,6 +1159,9 @@ class SPULifter:
          # ---- branches ----
          if mn in ("br", "bra"):
              tgt = self._branch_target(insn)
@@ -107872,7 +107938,7 @@ index 00b771d..ab59117 100644
              # SELF-LOOP TRAP: `br .` (target == this instruction) is an infinite
              # hang on real SPU -- a deliberate trap, no forward progress. Emitting
              # `goto loc_self` busy-spins the host thread forever; stop the SPU
-@@ -892,7 +1171,14 @@ class SPULifter:
+@@ -892,7 +1176,14 @@ class SPULifter:
              tgt = self._branch_target(insn)
              # Link register: preferred word only, other slots ZERO (real HW /
              # RPCS3 v128::from32r) -- splatting corrupts full-quadword link use.
@@ -107888,7 +107954,7 @@ index 00b771d..ab59117 100644
              # SELF-LOOP TRAP: `brsl rX, .` (target == this instruction) is an
              # infinite loop on real SPU (re-sets the link each pass, never
              # advances) -- a trap, NOT a call. Emitting a host call recurses
-@@ -917,6 +1203,11 @@ class SPULifter:
+@@ -917,6 +1208,11 @@ class SPULifter:
                  # `bi $r0` returns via host return) + SPU_DRAIN (drains the
                  # callee's own tail-chains so they don't grow the caller frame)
                  # + image save/restore (adopt-on-serve cannot leak upward).
@@ -107900,7 +107966,7 @@ index 00b771d..ab59117 100644
                  return (f"{link} {{ int32_t _si = (int32_t)ctx->image_id; "
                          f"ctx->host_depth++; {self.prefix}spu_func_{tgt:08X}(ctx); "
                          f"spu_drain_call(ctx, 0x{addr + 4:X}); ctx->host_depth--; spu_img_restore(ctx, _si); }}")
-@@ -928,12 +1219,14 @@ class SPULifter:
+@@ -928,12 +1224,14 @@ class SPULifter:
                  return (f'/* TODO spu: {mn} {insn.operands} */ '
                          f'spu_unsupported(0x{insn.addr:X}, "{mn}");')
              if func.start_addr <= tgt < func.end_addr:
@@ -107917,7 +107983,7 @@ index 00b771d..ab59117 100644
          # Interrupt enable/disable bits on the bi family (bie/bid, irete/iretd,
          # bisle(d)...): bit 0x40000 = E (enable), 0x80000 = D (disable), taking
          # effect when the branch is TAKEN. The WWS jobmanager's poll loop runs
-@@ -980,17 +1273,19 @@ class SPULifter:
+@@ -980,17 +1278,19 @@ class SPULifter:
              # SPU_DRAIN + image save/restore) so the callee's tail-chains drain
              # here and its `bi $r0` returns via host return.
              # read the target BEFORE writing the link: rt may be the same register as ra
@@ -107942,7 +108008,7 @@ index 00b771d..ab59117 100644
                      f"if ((ctx->event_status & ctx->event_mask) != 0) {{ "
                      f"{_ied}ctx->pc = _tg; "
                      f"g_spu_trampoline_fn = spu_indirect_branch; return; }} }}")
-@@ -1040,12 +1335,13 @@ class SPULifter:
+@@ -1040,12 +1340,13 @@ class SPULifter:
          if tgt is None:
              return "/* TODO spu: unresolved branch */;"
          if func.start_addr <= tgt < func.end_addr:
@@ -107959,7 +108025,16 @@ index 00b771d..ab59117 100644
  
      # ------------------------------------------------------------------ #
      def emit_header(self) -> str:
-@@ -1070,7 +1366,8 @@ class SPULifter:
+@@ -1056,6 +1357,8 @@ class SPULifter:
+         for t in sorted(self.call_targets | self.branch_targets):
+             if t not in defined:
+                 lines.append(f"void {self.prefix}spu_func_{t:08X}(spu_context* ctx); /* external */")
++        for sym in sorted(set(self.insn_guard.values())):
++            lines.append(f"int {sym}(spu_context* ctx);   /* --insn-guard: 1 = skip the instruction */")
+         lines.append("")
+         lines.append("/* Runtime glue (runtime/spu/spu_channels.c) */")
+         lines.append("void spu_register_function(uint32_t addr, void (*fn)(spu_context*));")
+@@ -1070,7 +1373,8 @@ class SPULifter:
          weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
          for f in self.functions:
              lines.append(f"void {weak}{f.name}(spu_context* ctx) {{")
@@ -107969,7 +108044,7 @@ index 00b771d..ab59117 100644
                  lines.append(b if b.endswith(":") else f"    {b}")
              lines.append("}")
              lines.append("")
-@@ -1089,7 +1386,7 @@ class SPULifter:
+@@ -1089,7 +1393,7 @@ class SPULifter:
              lines.append(" * branches that escape a function's range). */")
              for t in externs:
                  lines.append(f"void {self.prefix}spu_func_{t:08X}(spu_context* ctx) {{")
@@ -107978,7 +108053,7 @@ index 00b771d..ab59117 100644
                               f"g_spu_trampoline_fn = spu_indirect_branch; return;")
                  lines.append("}")
              lines.append("")
-@@ -1133,6 +1430,15 @@ def main() -> None:
+@@ -1133,6 +1437,15 @@ def main() -> None:
                          "targets + STT_FUNC symbols). When set, .text is "
                          "read from this ELF and the positional <input> arg "
                          "is ignored.")
@@ -107994,7 +108069,23 @@ index 00b771d..ab59117 100644
      p.add_argument("--trace", action="store_true",
                     help="Emit spu_trace_pc/spu_trace_rt around each instruction "
                          "for §3 diff-vs-RPCS3 validation. Output goes to stderr "
-@@ -1297,7 +1603,9 @@ def main() -> None:
+@@ -1184,6 +1497,15 @@ def main() -> None:
+                         "dispatch table at 0x1BD8, `br` into a fallthrough chain, "
+                         "dispatched blocks later -- classified as a return, which "
+                         "silently skipped every job-command handler).")
++    p.add_argument("--insn-guard", default="",
++                   help="Comma-separated ADDR=SYMBOL pairs: the instruction at LS "
++                        "ADDR is emitted as `if (!SYMBOL(ctx)) { ... }`, so a port "
++                        "can turn one instruction into a nop at run time -- what a "
++                        "patch to the image's bytes would do, which a lifted image "
++                        "never sees. The port defines int SYMBOL(spu_context*). "
++                        "E.g. inFAMOUS 2's Edge geometry job: 0xA7C0=<fn> skips the "
++                        "branch into the triangle culling (RPCS3's 'Disable Mesh "
++                        "Trimming') while the targets are scaled.")
+     args = p.parse_args()
+ 
+     if args.auto_functions:
+@@ -1297,7 +1619,23 @@ def main() -> None:
  
      insns = disassemble_spu(data, base)
  
@@ -108002,10 +108093,24 @@ index 00b771d..ab59117 100644
 +    lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix, reloc=args.relocatable,
 +                       reg_locals=True if args.reg_locals else None,
 +                       lean_float=False if args.no_lean_float else None)
++    for item in (x.strip() for x in args.insn_guard.split(",")):
++        if not item:
++            continue
++        a, _, sym = item.partition("=")
++        if not sym.strip().isidentifier():
++            p.error(f"--insn-guard {item!r}: expected ADDR=SYMBOL")
++        lifter.insn_guard[int(a, 0)] = sym.strip()
++    if lifter.insn_guard:
++        known = {i.addr for i in insns}
++        for a in sorted(lifter.insn_guard):
++            if a not in known:
++                p.error(f"--insn-guard 0x{a:X}: no instruction there")
++        sys.stderr.write("[spu_lifter] insn guard at: %s\n" % ", ".join(
++            "0x%X=%s" % (a, lifter.insn_guard[a]) for a in sorted(lifter.insn_guard)))
      lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
      if lifter.bi_r0_jump:
          print(f"  {len(lifter.bi_r0_jump)} `bi $r0` computed-jump site(s) "
-@@ -1320,16 +1628,29 @@ def main() -> None:
+@@ -1320,16 +1658,29 @@ def main() -> None:
                f"{', '.join(f'0x{a:X}' for a in sorted(lifter.link_return))}")
      lifter.func_starts = {s for s, e in bounds}  # for fall-through tail-call chaining
      groups = {}
@@ -108348,6 +108453,129 @@ index 0000000..9f11861
 +    r = subprocess.run([str(exe)], timeout=10)
 +    print('PASS' if r.returncode == 0 else 'FAIL')
 +    raise SystemExit(r.returncode)
+diff --git a/tools/test_spu_insn_guard.py b/tools/test_spu_insn_guard.py
+new file mode 100644
+index 0000000..649315e
+--- /dev/null
++++ b/tools/test_spu_insn_guard.py
+@@ -0,0 +1,117 @@
++#!/usr/bin/env python3
++"""spu_lifter --insn-guard: one instruction becomes a nop while a port predicate says so.
++
++A patch to an SPU image's bytes (RPCS3's "Disable Mesh Trimming" for inFAMOUS 2
++nops a `brnz` of the Edge geometry job) never reaches a lifted image, so the
++lifter can guard an instruction instead: `if (!PRED(ctx)) { <instruction> }`.
++
++Checks: the guarded line wraps exactly the unguarded translation, nothing else
++in the function changes, the header declares the predicate, the CLI rejects an
++address with no instruction; then a compiled run of a tiny function (il, brnz
++over an il, il) must take the branch while the predicate returns 0 -- the
++original program -- and fall through, as the nop'ed program does, when it
++returns 1.
++"""
++import os
++import shutil
++import struct
++import subprocess
++import sys
++import tempfile
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++sys.path.insert(0, HERE)
++import spu_lifter  # noqa: E402
++
++BASE = 0x100
++WORDS = [
++    (0x081 << 23) | (1 << 7) | 4,    # 0x100 il   r4, 1
++    (0x042 << 23) | (3 << 7) | 4,    # 0x104 brnz r4, 0x110
++    (0x081 << 23) | (7 << 7) | 6,    # 0x108 il   r6, 7     (skipped by the branch)
++    0x40200000,                      # 0x10C nop
++    (0x081 << 23) | (2 << 7) | 5,    # 0x110 il   r5, 2
++]
++DATA = b"".join(struct.pack(">I", w) for w in WORDS)
++
++
++def lift(guard):
++    lf = spu_lifter.SPULifter(prefix="t_", reg_locals=False)
++    lf.insn_guard = dict(guard)
++    lf.func_starts = set()
++    insns = spu_lifter.disassemble_spu(DATA, BASE)
++    f = lf.lift_function(insns, BASE, BASE + len(DATA))
++    return f.body_lines, lf.emit_header()
++
++
++def structural():
++    plain, plain_h = lift({})
++    guarded, guarded_h = lift({0x104: "pred"})
++    assert len(plain) == len(guarded), (plain, guarded)
++    diff = [(a, b) for a, b in zip(plain, guarded) if a != b]
++    assert len(diff) == 1, diff
++    a, b = diff[0]
++    assert "goto loc_00000110" in a, a
++    assert b.startswith("    if (!pred(ctx)) { " + a.strip() + " }"), b
++    assert "int pred(spu_context* ctx);" in guarded_h and "pred" not in plain_h
++    print("PASS: --insn-guard structure")
++
++
++def cli():
++    with tempfile.TemporaryDirectory() as tmp:
++        blob = os.path.join(tmp, "m.bin")
++        with open(blob, "wb") as f:
++            f.write(DATA)
++        base = [sys.executable, os.path.join(HERE, "spu_lifter.py"), blob, "--base", hex(BASE), "-o", tmp]
++        bad = subprocess.run(base + ["--insn-guard", "0x102=pred"], capture_output=True, text=True)
++        assert bad.returncode != 0 and "no instruction there" in bad.stderr, bad.stderr
++        bad = subprocess.run(base + ["--insn-guard", "0x104"], capture_output=True, text=True)
++        assert bad.returncode != 0 and "ADDR=SYMBOL" in bad.stderr, bad.stderr
++    print("PASS: --insn-guard arguments")
++
++
++PRELUDE = r"""
++#include <stdint.h>
++#include <stdio.h>
++typedef union { uint32_t _u32[4]; } u128;
++typedef struct { u128 gpr[128]; uint32_t pc; } spu_context;
++static u128 spu_il(int32_t v) { u128 r = { { (uint32_t)v, (uint32_t)v, (uint32_t)v, (uint32_t)v } }; return r; }
++static int g_skip;
++int pred(spu_context* ctx) { (void)ctx; return g_skip; }
++"""
++
++MAIN = r"""
++int main(void) {
++    for (g_skip = 0; g_skip < 2; g_skip++) {
++        static spu_context c;
++        c = (spu_context){0};
++        f(&c);
++        printf("%u %u\n", c.gpr[6]._u32[0], c.gpr[5]._u32[0]);
++    }
++    return 0;
++}
++"""
++
++
++def semantic():
++    cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("clang") or shutil.which("gcc")
++    if not cc:
++        print("SKIP: no C compiler for the semantic check")
++        return
++    body, _ = lift({0x104: "pred"})
++    src = PRELUDE + "void f(spu_context* ctx) {\n" + "\n".join(body) + "\n}\n" + MAIN
++    with tempfile.TemporaryDirectory() as tmp:
++        c = os.path.join(tmp, "g.c")
++        with open(c, "w") as f:
++            f.write(src)
++        exe = os.path.join(tmp, "g")
++        subprocess.run([cc, "-O2", "-w", c, "-o", exe], check=True)
++        out = subprocess.run([exe], check=True, capture_output=True, text=True).stdout.split("\n")
++    # predicate 0: brnz taken, r6 never set; predicate 1: the branch is a nop, r6 = 7
++    assert out[0] == "0 2" and out[1] == "7 2", out
++    print("PASS: --insn-guard semantics")
++
++
++if __name__ == "__main__":
++    structural()
++    cli()
++    semantic()
 diff --git a/tools/test_spu_reg_locals.py b/tools/test_spu_reg_locals.py
 new file mode 100644
 index 0000000..a0686e3
