@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""relift_jobmod.py MODULE [--extra 0xADDR,...] [--jobmods DIR] [--out DIR]
+"""relift_jobmod.py MODULE [--extra 0xADDR,...] [--insn-guard 0xADDR=SYMBOL,...] [--jobmods DIR] [--out DIR]
 
 Re-lift one WWS job module (spu/jobmods/<MODULE>.bin -> spu/<MODULE>/) the way
 tools/lift_jobmods.py does, with extra function entries. The registration TU
@@ -9,6 +9,10 @@ picks up the new chunks.
 Use it when a job keeps landing on an address the lift has no entry for:
 `[rejoin] ... (from 0xADDR)` with SPU_REJOIN_DBG, or `branched into unlifted
 LS 0xADDR`. The address is an LS address (the module loads at 0x4000).
+
+--insn-guard 0xADDR=SYMBOL (spu_lifter.py): the instruction at ADDR runs only
+while the port's int SYMBOL(spu_context*) returns 0. rebuild.py lifts the Edge
+geometry job with one (JOBMOD_GUARD, mesh_trim.c).
 """
 import argparse, os, struct, subprocess, sys
 
@@ -20,6 +24,7 @@ import lift_jobmods as lj   # noqa: E402  (wrap, manual_link_targets, switch_tab
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument('module', help='jobmod_<sha>_e<entry>, with or without .bin')
 ap.add_argument('--extra', default='', help='comma-separated extra LS entry addresses')
+ap.add_argument('--insn-guard', default='', help='comma-separated ADDR=SYMBOL (spu_lifter.py --insn-guard)')
 ap.add_argument('--jobmods', default=os.path.join(here, '..', 'spu', 'jobmods'))
 ap.add_argument('--out', default=os.path.join(here, '..', 'spu'))
 a = ap.parse_args()
@@ -50,6 +55,8 @@ cmd = [sys.executable, os.path.join(toolkit, 'tools', 'spu_lifter.py'), '--auto-
        '--base', hex(base), '--symbol-prefix', name + '_', '-o', outsub,
        '--source-name', 'spu_recomp.c', '--header-name', 'spu_recomp.h',
        '--extra-funcs', ','.join(sorted(set(extras)))]
+if a.insn_guard:
+    cmd += ['--insn-guard', a.insn_guard]
 if name in lj.CODE_END:
     cmd += ['--code-end', hex(lj.CODE_END[name])]
 print(' '.join(os.path.basename(c) if c.endswith('.py') else c for c in cmd[1:]))

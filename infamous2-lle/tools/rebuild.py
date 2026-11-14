@@ -138,6 +138,12 @@ def game_executable(port):
 SPU_IMAGE_EXTRA = ('0x9C84', '0x9DB8')                       # spu_0000_at_007FA100
 JOBMOD_EXTRA = (('jobmod_ab654d30fd90_efe70', ('0x15280', '0x155EC')),
                 ('jobmod_cbb4b5c85d75_e59f8', ('0x6C44', '0x6C64')))
+# instructions the port decides about at run time (spu_lifter.py --insn-guard):
+# the Edge geometry job's branch into its triangle culling, skipped while the
+# targets are scaled (mesh_trim.c; RPCS3's "Disable Mesh Trimming")
+# (module, ((LS address, word expected there, predicate), ...)); a module or a
+# word that is not there is lifted as it is, with a warning
+JOBMOD_GUARD = (('jobmod_d0d15ec83992_ea2a0', ((0xA7C0, 0x21000984, 'infamous2_edge_skip_trim'),)),)
 
 GB = 1024 ** 3
 WORK_BYTES = int(1.5 * GB)      # toolkit, venv, lifts, objects, executable
@@ -1165,6 +1171,23 @@ class Rebuild:
         # "branched into unlifted LS"), added by hand to the dev build
         for mod, extra in JOBMOD_EXTRA:
             self.run('jobs', [self.py, os.path.join(tools, 'relift_jobmod.py'), mod, '--extra', ','.join(extra),
+                              '--jobmods', 'spu/jobmods', '--out', 'spu'], cwd=self.port)
+        try:
+            with open(self.T('spu_lifter.py')) as f:
+                guard_ok = '--insn-guard' in f.read()
+        except OSError:
+            guard_ok = False
+        if not guard_ok:
+            emit('WARN', 'jobs', 'the toolkit\'s spu_lifter.py has no --insn-guard; Edge geometry lifted without it')
+        for mod, guards in JOBMOD_GUARD if guard_ok else ():
+            binp = os.path.join(self.port, 'spu', 'jobmods', mod + '.bin')
+            raw = open(binp, 'rb').read() if os.path.isfile(binp) else b''
+            ok = [f'0x{a:X}={fn}' for a, word, fn in guards
+                  if len(raw) >= a - 0x4000 + 4 and int.from_bytes(raw[a - 0x4000:a - 0x4000 + 4], 'big') == word]
+            if len(ok) != len(guards):
+                emit('WARN', 'jobs', f'{mod}: not the expected code; lifted without its run-time guards')
+                continue
+            self.run('jobs', [self.py, os.path.join(tools, 'relift_jobmod.py'), mod, '--insn-guard', ','.join(ok),
                               '--jobmods', 'spu/jobmods', '--out', 'spu'], cwd=self.port)
         emit('PROGRESS', 'jobs', self.idx('jobs'), 'data modules (DA7ABA5E)')
         self.run('jobs', [self.py, os.path.join(tools, 'lift_datamods.py'), self.elf,
