@@ -201,6 +201,7 @@ add_executable(${PROJECT_NAME}
     gpu_light.c
     gpu_ssao.c
     edge_watch.c
+    mesh_trim.c
     game_clock.c
     heartbeat.c
     game_patches.cpp
