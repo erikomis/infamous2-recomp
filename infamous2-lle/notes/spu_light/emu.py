@@ -1,6 +1,6 @@
 import struct, subprocess, os, numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
-JOB = '~/Desktop/recomp-infamous-2/infamous2-lle/spu/jobmods/jobmod_c6e7383dc013_e5400.bin'
+JOB = os.path.join(HERE, '..', '..', 'spu', 'jobmods', 'jobmod_c6e7383dc013_e5400.bin')
 class LS:
     def __init__(self):
         self.b = bytearray(256*1024)
