@@ -88,8 +88,8 @@ its `.rap` licence).
 > Packages/Raps/Edats*, the update's `.pkg`); RPCS3's game list then shows
 > the game as 01.03.
 
-1. Download `infamous2-recomp_0.2.21_aarch64.dmg` from the
-   [v0.2.21 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.21)
+1. Download `infamous2-recomp_0.2.22_aarch64.dmg` from the
+   [v0.2.22 release](https://github.com/erikomis/infamous2-recomp/releases/tag/v0.2.22)
    (the [releases page](https://github.com/erikomis/infamous2-recomp/releases) lists any newer one)
    and drag the app to Applications. It is not notarized: the first time,
    right-click > Open (or System Settings > Privacy & Security > Open Anyway).
