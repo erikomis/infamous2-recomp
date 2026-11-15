@@ -218,7 +218,7 @@ impl Default for Settings {
             mouse_capture: true,
             window_mode: "windowed".into(),
             window_size: String::new(),
-            game_icon: false,
+            game_icon: true,
             display: String::new(),
             vsync: true,
             frame_gen: false,
@@ -816,8 +816,16 @@ fn launch_env(s: &Settings, inst: &InstallInfo, input: &InputEnv) -> Vec<(String
     if valid_window_size(&s.window_size) {
         set("PS3_WINDOW_SIZE", s.window_size.clone());
     }
+    // On (the default): the copy's own ICON0.PNG, as every recomp shows its
+    // game in the Dock. Off: the port's placeholder, named here because
+    // run.sh's own default is the copy's icon too.
     if s.game_icon {
         set("PS3_WINDOW_ICON", "game".into());
+    } else {
+        let placeholder = Path::new(&inst.port_dir).join("window_icon.png");
+        if placeholder.is_file() {
+            set("PS3_WINDOW_ICON", placeholder.to_string_lossy().into_owned());
+        }
     }
     if !s.display.trim().is_empty() {
         set("PS3_DISPLAY", s.display.trim().to_string());
@@ -2869,6 +2877,10 @@ mod tests {
         assert!(!env.contains_key("PS3_VOICE_LANG") && !env.contains_key("PS3_TEXT_LANG"));
         assert!(!env.contains_key("PS3RECOMP_ENG_GPU_LIGHT")); // run.sh default stays
         assert!(!env.contains_key("PS3_DISPLAY_GAMMA"));
+        assert_eq!(env.get("PS3_WINDOW_ICON").map(String::as_str), Some("game")); // the copy's icon by default
+        s.game_icon = false; // off and no placeholder in this install: run.sh decides
+        let env: BTreeMap<_, _> = launch_env(&s, &inst, &none).into_iter().collect();
+        assert!(!env.contains_key("PS3_WINDOW_ICON"));
         s.gpu_light = false;
         s.skip_occlusion_volumes = true;
         s.gamma_override = true;

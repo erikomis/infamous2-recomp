@@ -200,10 +200,17 @@ export PS3RECOMP_ENG_GPU_SSAO="${PS3RECOMP_ENG_GPU_SSAO-0F800000}"
 # It resizes freely and the image stays 16:9, letterboxed. Cmd+F or
 # Option+Return toggles fullscreen, Cmd+Ctrl+F macOS fullscreen; a click in
 # the game captures the mouse, Esc or Cmd releases it.
-# The Dock icon is the launcher's original placeholder (no Sony art);
-# PS3_WINDOW_ICON=game uses the player's own PS3_GAME/ICON0.PNG instead,
-# =<file> any image, =none the system's generic icon.
-export PS3_WINDOW_ICON="${PS3_WINDOW_ICON-$here/window_icon.png}"
+# The Dock icon is the player's own PS3_GAME/ICON0.PNG (read from the copy,
+# nothing ships; centred on a square), or the launcher's original placeholder
+# when the copy has none. PS3_WINDOW_ICON=<file> any image, =none the system's
+# generic icon.
+if [ -z "${PS3_WINDOW_ICON+set}" ]; then
+    if [ -f "$vfs/PS3_GAME/ICON0.PNG" ]; then
+        export PS3_WINDOW_ICON=game
+    else
+        export PS3_WINDOW_ICON="$here/window_icon.png"
+    fi
+fi
 
 # macOS builds an app bundle (CMakeLists.txt): run the executable inside it,
 # directly, so the process has the bundle's identity -- that is what makes
