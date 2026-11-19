@@ -75,6 +75,10 @@ running on the Mac. See [CREDITS.md](CREDITS.md).
 
 Details and next steps in [ROADMAP.md](ROADMAP.md).
 
+Project metadata for directories and tools lives in [`.recomp.json`](.recomp.json),
+following the [recomp.board specification](https://recomp.fyi/spec). Keep it
+updated when the project status, supported game version or target platforms change.
+
 ## Download and play
 
 You need an Apple-silicon Mac and your own copy of inFAMOUS 2 (the PSN

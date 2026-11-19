@@ -76,6 +76,10 @@ firmware em LLE e as correções que fizeram o primeiro jogo rodar no Mac. Veja
 
 Detalhes e próximos passos em [ROADMAP.pt-BR.md](ROADMAP.pt-BR.md).
 
+Os metadados do projeto para catálogos e ferramentas ficam em [`.recomp.json`](.recomp.json),
+conforme a [especificação do recomp.board](https://recomp.fyi/spec). Mantenha o arquivo
+atualizado quando mudar o estado do projeto, a versão do jogo suportada ou as plataformas de destino.
+
 ## Baixar e jogar
 
 Você precisa de um Mac com Apple silicon e da sua própria cópia do inFAMOUS 2
